@@ -202,7 +202,7 @@ function HostAdvance({ label, to, go }: { label: string; to: PlayerScreen; go: (
 }
 
 // ─── SCREEN 1 — JOIN GAME ─────────────────────────────────────────────────────
-function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
+export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
   const [code, setCode] = useState('')
   const [invalid, setInvalid] = useState(false)
 
@@ -1575,6 +1575,37 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
     case 'reconnecting':   return <Reconnecting go={go} />
     case 'game-ended':     return <GameEnded go={go} />
   }
+}
+
+
+export function PlayerFlow() {
+  const [screen, setScreen] = useState<PlayerScreen>('join')
+
+  function go(nextScreen: PlayerScreen) {
+    setScreen(nextScreen)
+  }
+
+  return (
+    <main
+      style={{
+        minHeight: '100dvh',
+        background: C.ground,
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          maxWidth: 430,
+          minHeight: '100dvh',
+          margin: '0 auto',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        {renderScreen(screen, go)}
+      </div>
+    </main>
+  )
 }
 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
