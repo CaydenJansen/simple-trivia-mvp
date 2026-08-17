@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { supabase } from "@/lib/supabase/client";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -206,10 +207,32 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
   const [code, setCode] = useState('')
   const [invalid, setInvalid] = useState(false)
 
-  function handleJoin() {
-    if (code === '000000') { setInvalid(true); return }
-    go('team-setup')
+async function handleJoin() {
+  setInvalid(false);
+
+  const { data: game, error } = await supabase
+    .from("games")
+    .select("id, code, title, status")
+    .eq("code", code)
+    .eq("status", "lobby")
+    .maybeSingle();
+
+  if (error) {
+    console.error("Error finding game:", error);
+    setInvalid(true);
+    return;
   }
+
+  if (!game) {
+    setInvalid(true);
+    return;
+  }
+
+  localStorage.setItem("simple-trivia-game-id", game.id);
+  localStorage.setItem("simple-trivia-game-code", game.code);
+
+  go("team-setup");
+}
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -290,10 +313,41 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   const [pinMode, setPinMode] = useState<PinMode>('none')
   const [taken, setTaken] = useState(false)
 
-  function handleJoin() {
-    if (name.trim().toLowerCase() === 'taken') { setTaken(true); return }
-    go('waiting')
+async function handleJoin() {
+  setTaken(false);
+
+  const gameId = localStorage.getItem("simple-trivia-game-id");
+
+  if (!gameId) {
+    go("join");
+    return;
   }
+
+  const { data: team, error } = await supabase
+    .from("teams")
+    .insert({
+      game_id: gameId,
+      name: name.trim(),
+      score: 0,
+    })
+    .select("id, name, score")
+    .single();
+
+  if (error) {
+    console.error("Error creating team:", error);
+
+    if (error.code === "23505") {
+      setTaken(true);
+    }
+
+    return;
+  }
+
+  localStorage.setItem("simple-trivia-team-id", team.id);
+  localStorage.setItem("simple-trivia-team-name", team.name);
+
+  go("waiting");
+}
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
