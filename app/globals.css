@@ -1,6 +1,32 @@
 @import "tailwindcss";
 
 @theme inline {
+  /* Brand */
+  --color-violet: #7C3AED;
+  --color-violet-hover: #6D28D9;
+  --color-violet-mist: #F5F3FF;
+  --color-violet-pale: #EDE9FE;
+
+  /* Light surfaces */
+  --color-ground: #F6F5FC;
+  --color-panel: #FFFFFF;
+  --color-line: #E8E5F4;
+  --color-ink: #18171F;
+  --color-sub: #6B6880;
+
+  /* State */
+  --color-go: #059669;
+  --color-stop: #DC2626;
+  --color-caution: #D97706;
+
+  /* Live host mode */
+  --color-live-bg: #0C0B18;
+  --color-live-surface: #14122A;
+  --color-live-panel: #1C1A35;
+  --color-live-line: #2A2848;
+  --color-live-text: #EEE9FF;
+  --color-live-dim: #7E7AA0;
+
   --color-background: #F6F5FC;
   --color-foreground: #18171F;
 }
@@ -20,4 +46,33 @@ body {
 body {
   background: #F6F5FC;
   color: #18171F;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D5D1EA;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #B8B3D8;
+}
+
+input[type="range"] {
+  accent-color: #7C3AED;
+}
+
+textarea,
+input,
+select,
+button {
+  font-family: inherit;
 }
