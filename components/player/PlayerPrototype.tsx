@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -252,6 +252,7 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
         answer_text: answerText,
         is_correct: null,
         points_awarded: 0,
+        grading_json: null,
       }, { onConflict: 'game_id,team_id,question_key' })
 
     if (error) {
@@ -268,6 +269,15 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
   return { submit, submitting, submitError }
 }
 
+type PlayerReviewStatus = 'correct' | 'incorrect' | 'review'
+
+type PlayerReviewItem = {
+  label?: string
+  submitted: string
+  expected?: string
+  status: PlayerReviewStatus
+}
+
 type PlayerSnapshot = {
   teamName: string
   score: number
@@ -279,12 +289,240 @@ type PlayerSnapshot = {
   correctAnswer: string
   roundLabel: string
   questionLabel: string
+  questionType: PlayerScreen | null
+  reviewItems: PlayerReviewItem[]
+  missingAnswers: string[]
+}
+
+function playerReviewItemsFromJson(value: unknown): PlayerReviewItem[] {
+  if (!value || typeof value !== 'object') return []
+  const items = (value as { items?: unknown }).items
+  if (!Array.isArray(items)) return []
+
+  return items
+    .filter(item => item && typeof item === 'object')
+    .map((item, index) => {
+      const raw = item as Record<string, unknown>
+      const status: PlayerReviewStatus = raw.status === 'correct' || raw.status === 'review'
+        ? raw.status
+        : 'incorrect'
+
+      return {
+        label: raw.label === undefined ? String(index + 1) : String(raw.label),
+        submitted: raw.submitted === undefined ? '' : String(raw.submitted),
+        expected: raw.expected === undefined ? undefined : String(raw.expected),
+        status,
+      }
+    })
+}
+
+function playerMissingAnswersFromJson(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return []
+  const missing = (value as { missing?: unknown }).missing
+  return Array.isArray(missing) ? missing.map(item => String(item)) : []
+}
+
+function isCompoundResultType(questionType: PlayerScreen | null) {
+  return questionType === 'multi-answer' || questionType === 'multi-part' || questionType === 'ranking'
+}
+
+function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
+  const items = snapshot.reviewItems
+  if (!isCompoundResultType(snapshot.questionType) || items.length === 0) return null
+
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 18, width: '100%', overflow: 'hidden' }}>
+      <div style={{ padding: '13px 16px', borderBottom: `1px solid ${C.line}` }}>
+        <p style={{ color: C.sub, fontSize: 12, fontWeight: 800, letterSpacing: '0.06em' }}>
+          {playerResponseLabel(snapshot.questionType)}
+        </p>
+      </div>
+
+      <div>
+        {items.map((item, index) => {
+          const correct = item.status === 'correct'
+          const review = item.status === 'review'
+          const label = snapshot.questionType === 'multi-part'
+            ? (item.label ?? String.fromCharCode(65 + index))
+            : snapshot.questionType === 'ranking'
+              ? (item.label ?? String(index + 1))
+              : null
+
+          return (
+            <div
+              key={`${label ?? 'answer'}-${index}`}
+              style={{
+                borderBottom: index === items.length - 1 ? 'none' : `1px solid ${C.line}`,
+                background: review ? C.cautionMist : 'transparent',
+                padding: '14px 16px',
+                display: 'grid',
+                gridTemplateColumns: label ? '28px minmax(0, 1fr) 30px' : 'minmax(0, 1fr) 30px',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
+              {label && (
+                <span
+                  style={{
+                    background: snapshot.questionType === 'multi-part' ? C.violetPale : C.ground,
+                    color: snapshot.questionType === 'multi-part' ? C.violet : C.sub,
+                    borderRadius: 999,
+                    width: 26,
+                    height: 26,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 11,
+                    fontWeight: 900,
+                  }}
+                >
+                  {label}
+                </span>
+              )}
+
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    style={{
+                      color: correct ? C.go : C.ink,
+                      fontSize: 16,
+                      fontWeight: 800,
+                    }}
+                    className="truncate"
+                  >
+                    {item.submitted || 'No answer'}
+                  </span>
+                  {snapshot.questionType !== 'multi-answer' && !correct && item.expected && (
+                    <>
+                      <span style={{ color: C.sub, fontSize: 12 }} className="shrink-0">→</span>
+                      <span
+                        style={{ color: C.go, fontSize: 14, fontWeight: 800 }}
+                        className="truncate"
+                        title={`Correct answer: ${item.expected}`}
+                      >
+                        {item.expected}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  background: correct ? C.goMist : review ? C.cautionMist : C.stopMist,
+                  border: `1px solid ${correct ? C.goBorder : review ? C.cautionBorder : C.stopBorder}`,
+                  color: correct ? C.go : review ? C.caution : C.stop,
+                  borderRadius: 999,
+                  width: 28,
+                  height: 28,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 16,
+                  fontWeight: 900,
+                }}
+              >
+                {correct ? '✓' : review ? '?' : '×'}
+              </div>
+            </div>
+          )
+        })}
+
+        {snapshot.questionType === 'multi-answer' && snapshot.missingAnswers.length > 0 && (
+          <div
+            style={{
+              borderTop: `1px solid ${C.line}`,
+              background: C.goMist,
+              padding: '13px 16px',
+            }}
+          >
+            <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.06em', marginBottom: 5 }}>
+              {snapshot.missingAnswers.length === 1 ? 'MISSING CORRECT ANSWER' : 'MISSING CORRECT ANSWERS'}
+            </p>
+            <div className="flex flex-col gap-1">
+              {snapshot.missingAnswers.map((answer) => (
+                <span key={answer} style={{ color: C.go, fontSize: 15, fontWeight: 800 }}>
+                  {answer}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PlayerSimpleAnswerResult({ snapshot }: { snapshot: PlayerSnapshot }) {
+  const correct = snapshot.pointsAwarded > 0 && snapshot.pointsAwarded >= snapshot.pointsMax
+  const hasCorrection = !correct && snapshot.correctAnswer && snapshot.correctAnswer !== '—'
+
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 18, width: '100%', overflow: 'hidden' }}>
+      <div style={{ padding: '13px 16px', borderBottom: `1px solid ${C.line}` }}>
+        <p style={{ color: C.sub, fontSize: 12, fontWeight: 800, letterSpacing: '0.06em' }}>
+          {playerResponseLabel(snapshot.questionType)}
+        </p>
+      </div>
+
+      <div
+        style={{
+          padding: '15px 16px',
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr) 30px',
+          alignItems: 'center',
+          gap: 10,
+        }}
+      >
+        <div className="min-w-0 flex items-center gap-2">
+          <span
+            style={{ color: correct ? C.go : C.ink, fontSize: 17, fontWeight: 800 }}
+            className="truncate"
+          >
+            {snapshot.answer || 'No answer'}
+          </span>
+
+          {hasCorrection && (
+            <>
+              <span style={{ color: C.sub, fontSize: 12 }} className="shrink-0">→</span>
+              <span
+                style={{ color: C.go, fontSize: 15, fontWeight: 800 }}
+                className="truncate"
+                title={`Correct answer: ${snapshot.correctAnswer}`}
+              >
+                {snapshot.correctAnswer}
+              </span>
+            </>
+          )}
+        </div>
+
+        <div
+          style={{
+            background: correct ? C.goMist : C.stopMist,
+            border: `1px solid ${correct ? C.goBorder : C.stopBorder}`,
+            color: correct ? C.go : C.stop,
+            borderRadius: 999,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 16,
+            fontWeight: 900,
+          }}
+        >
+          {correct ? '✓' : '×'}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function usePlayerSnapshot(): PlayerSnapshot {
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>({
     teamName: '', score: 0, answer: '', isCorrect: null, pointsAwarded: 0, pointsMax: 1,
-    prompt: '', correctAnswer: '—', roundLabel: '', questionLabel: '',
+    prompt: '', correctAnswer: '—', roundLabel: '', questionLabel: '', questionType: null,
+    reviewItems: [], missingAnswers: [],
   })
 
   useEffect(() => {
@@ -302,7 +540,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
       if (!active) return
 
       let question: LiveQuestionDefinition | null = null
-      let submission: { answer_text: string; is_correct: boolean | null; points_awarded: number } | null = null
+      let submission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
 
       if (game?.current_question_key) {
         const [{ data: questionRow }, { data: submissionRow }] = await Promise.all([
@@ -314,7 +552,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
             .maybeSingle(),
           supabase
             .from('submissions')
-            .select('answer_text, is_correct, points_awarded')
+            .select('answer_text, is_correct, points_awarded, grading_json')
             .eq('game_id', gameId)
             .eq('team_id', teamId)
             .eq('question_key', game.current_question_key)
@@ -325,6 +563,10 @@ function usePlayerSnapshot(): PlayerSnapshot {
       }
 
       if (!active) return
+
+      const reviewItems = playerReviewItemsFromJson(submission?.grading_json)
+      const missingAnswers = playerMissingAnswersFromJson(submission?.grading_json)
+
       setSnapshot({
         teamName: team?.name ?? fallbackName,
         score: team?.score ?? 0,
@@ -336,6 +578,9 @@ function usePlayerSnapshot(): PlayerSnapshot {
         correctAnswer: correctAnswerLabel(question),
         roundLabel: question ? `Round ${question.round_number}` : '',
         questionLabel: question ? `Question ${question.round_position} of ${question.round_question_count}` : '',
+        questionType: question?.question_type ?? null,
+        reviewItems,
+        missingAnswers,
       })
     }
 
@@ -351,6 +596,12 @@ function usePlayerSnapshot(): PlayerSnapshot {
   }, [])
 
   return snapshot
+}
+
+function playerResponseLabel(questionType: PlayerScreen | null) {
+  if (questionType === 'ranking') return 'YOUR ORDER'
+  if (questionType === 'multi-answer' || questionType === 'multi-part') return 'YOUR ANSWERS'
+  return 'YOUR ANSWER'
 }
 
 function useLiveLeaderboard() {
@@ -579,7 +830,6 @@ async function handleJoin() {
     .from("games")
     .select("id, code, title, status")
     .eq("code", code)
-    .eq("status", "lobby")
     .maybeSingle();
 
   if (error) {
@@ -1144,8 +1394,8 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         <p style={{ color: C.sub, fontSize: 14, marginBottom: 24 }}>1 point per correct answer</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {answers.map((answer, i) => <div key={i}>
-            <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Answer {i + 1}</label>
-            <input value={answer} onChange={e => setA(i, e.target.value)} placeholder="Type your answer…"
+            <input value={answer} onChange={e => setA(i, e.target.value)} placeholder="Type an answer…"
+              aria-label={`Answer ${i + 1}`}
               style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 17, outline: 'none', width: '100%', padding: '13px 16px', fontFamily: 'inherit' }} />
           </div>)}
         </div>
@@ -1193,49 +1443,188 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
 }
 
 // ─── SCREEN 10 — RANKING ──────────────────────────────────────────────────────
+
 function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
   const [items, setItems] = useState<string[]>(['Jupiter', 'Saturn', 'Uranus', 'Neptune'])
+  const [justMoved, setJustMoved] = useState<string | null>(null)
+  const [justDisplaced, setJustDisplaced] = useState<string | null>(null)
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'ranking')
+
+  const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const snapshots = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
     const next = Array.isArray(question?.options) ? question.options.map(String) : []
     if (next.length) setItems(next)
-  }, [question?.question_key])
+  }, [question?.question_key, question?.options])
 
   function move(i: number, dir: -1 | 1) {
     const j = i + dir
     if (j < 0 || j >= items.length) return
+
+    snapshots.current = new Map()
+
+    ;[items[i], items[j]].forEach(name => {
+      const el = cardRefs.current.get(name)
+      if (el) snapshots.current.set(name, el.getBoundingClientRect().top)
+    })
+
+    const mover = items[i]
+    const displaced = items[j]
+
     setItems(current => {
       const next = [...current]
       ;[next[i], next[j]] = [next[j], next[i]]
       return next
     })
+
+    setJustMoved(mover)
+    setJustDisplaced(displaced)
+
+    window.setTimeout(() => {
+      setJustMoved(null)
+      setJustDisplaced(null)
+    }, 420)
   }
+
+  useLayoutEffect(() => {
+    if (snapshots.current.size === 0) return
+
+    snapshots.current.forEach((oldTop, name) => {
+      const el = cardRefs.current.get(name)
+      if (!el) return
+
+      const newTop = el.getBoundingClientRect().top
+      const delta = oldTop - newTop
+      if (delta === 0) return
+
+      el.style.transition = 'none'
+      el.style.transform = `translateY(${delta}px)`
+      el.getBoundingClientRect()
+      el.style.transition = 'transform 0.38s cubic-bezier(0.34, 1.56, 0.64, 1)'
+      el.style.transform = 'translateY(0px)'
+    })
+
+    snapshots.current = new Map()
+  })
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
-      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score}
+      <TopBar
+        team={snapshot.teamName || 'Your Team'}
+        score={snapshot.score}
         round={question ? `Round ${question.round_number}` : ''}
-        question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
+        question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''}
+      />
+
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <h2 style={{ color: C.ink, fontSize: 23, lineHeight: 1.3, fontWeight: 900, marginBottom: 6 }}>{question?.prompt ?? 'Loading question…'}</h2>
+        <h2 style={{ color: C.ink, fontSize: 23, lineHeight: 1.3, fontWeight: 900, marginBottom: 6 }}>
+          {question?.prompt ?? 'Loading question…'}
+        </h2>
         <p style={{ color: C.sub, fontSize: 14, marginBottom: 24 }}>Tap the arrows to put them in order.</p>
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {items.map((item, i) => <div key={item} style={{ background: C.panel, border: `2px solid ${C.line}`, borderRadius: 16, display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px' }}>
-            <span style={{ background: C.violet, color: '#fff', borderRadius: 10, width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{i + 1}</span>
-            <span style={{ color: C.ink, fontWeight: 600, fontSize: 17, flex: 1 }}>{item}</span>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {[{ dir: -1 as const, icon: '▲', disabled: i === 0 }, { dir: 1 as const, icon: '▼', disabled: i === items.length - 1 }].map(({ dir, icon, disabled }) =>
-                <button key={icon} onClick={() => move(i, dir)} disabled={disabled}
-                  style={{ background: disabled ? C.ground : C.violetPale, color: disabled ? C.sub : C.violet, border: 'none', borderRadius: 8, width: 34, height: 28, cursor: disabled ? 'default' : 'pointer' }}>{icon}</button>)}
-            </div>
-          </div>)}
+          {items.map((item, i) => {
+            const isActive = justMoved === item
+            const isNudged = justDisplaced === item
+
+            return (
+              <div
+                key={item}
+                ref={el => {
+                  if (el) cardRefs.current.set(item, el)
+                  else cardRefs.current.delete(item)
+                }}
+                style={{
+                  background: isActive ? C.violetPale : C.panel,
+                  border: `2px solid ${isActive ? C.violet : isNudged ? '#C4BFEE' : C.line}`,
+                  borderRadius: 16,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '14px 16px',
+                  boxShadow: isActive ? '0 6px 20px rgba(124,58,237,0.18)' : 'none',
+                  transition: 'background 0.22s ease, border-color 0.22s ease, box-shadow 0.3s ease',
+                  position: 'relative',
+                  zIndex: isActive ? 1 : 0,
+                }}
+              >
+                <span
+                  key={`${item}-${i}`}
+                  className="rank-badge-changed"
+                  style={{
+                    background: C.violet,
+                    color: '#fff',
+                    borderRadius: 10,
+                    width: 32,
+                    height: 32,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 800,
+                    fontSize: 14,
+                    flexShrink: 0,
+                  }}
+                >
+                  {i + 1}
+                </span>
+
+                <span
+                  style={{
+                    color: isActive ? C.violet : C.ink,
+                    fontWeight: isActive ? 700 : 600,
+                    fontSize: 17,
+                    flex: 1,
+                    transition: 'color 0.22s ease',
+                  }}
+                >
+                  {item}
+                </span>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {([
+                    { dir: -1 as const, icon: '▲', disabled: i === 0 },
+                    { dir: 1 as const, icon: '▼', disabled: i === items.length - 1 },
+                  ] as const).map(({ dir, icon, disabled }) => (
+                    <button
+                      key={icon}
+                      onClick={() => move(i, dir)}
+                      disabled={disabled}
+                      style={{
+                        background: disabled ? C.ground : isActive ? C.violet : C.violetPale,
+                        color: disabled ? C.sub : isActive ? '#fff' : C.violet,
+                        border: 'none',
+                        borderRadius: 8,
+                        width: 34,
+                        height: 28,
+                        fontSize: 12,
+                        cursor: disabled ? 'default' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: 'background 0.2s ease, color 0.2s ease',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      {icon}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
         </div>
+
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
-      <StickyBottom><Btn onClick={() => void submit(items)} disabled={submitting}>{submitting ? 'Submitting…' : 'Lock In Order'}</Btn></StickyBottom>
+
+      <StickyBottom>
+        <Btn onClick={() => void submit(items)} disabled={submitting}>
+          {submitting ? 'Submitting…' : 'Lock In Order'}
+        </Btn>
+      </StickyBottom>
     </div>
   )
 }
@@ -1252,7 +1641,7 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
           <div style={{ background: C.violetPale, borderRadius: 999, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 26 }}>🔒</span></div>
           <h1 style={{ color: C.ink, fontSize: 28 }} className="font-black">Answer locked in</h1>
           <div style={{ background: C.ground, borderRadius: 16, border: `1px solid ${C.line}`, width: '100%', padding: '16px 20px' }}>
-            <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Your answer</p>
+            <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>{playerResponseLabel(snapshot.questionType)}</p>
             <p style={{ color: C.ink, fontSize: 18, fontWeight: 800 }}>{snapshot.answer || 'Submitted'}</p>
           </div>
           <WaitMsg msg="Waiting for the host…" />
@@ -1292,11 +1681,21 @@ function Correct({ go }: { go: (s: PlayerScreen) => void }) {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
           <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 26, color: C.go }}>✓</span></div>
           <h1 style={{ color: C.go, fontSize: 38 }} className="font-black">Correct!</h1>
-          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 20, width: '100%', overflow: 'hidden' }}>
-            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.line}` }}><p style={{ color: C.sub, fontSize: 12, fontWeight: 700 }}>YOUR ANSWER</p><p style={{ color: C.ink, fontSize: 18, fontWeight: 700 }}>{snapshot.answer}</p></div>
-            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.line}` }}><p style={{ color: C.sub, fontSize: 12, fontWeight: 700 }}>CORRECT ANSWER</p><p style={{ color: C.go, fontSize: 18, fontWeight: 700 }}>{snapshot.correctAnswer}</p></div>
-            <div style={{ background: C.goMist, padding: '14px 20px', textAlign: 'center' }}><p style={{ color: C.go, fontSize: 24, fontWeight: 900 }}>+{snapshot.pointsAwarded} {snapshot.pointsAwarded === 1 ? 'point' : 'points'}</p></div>
-          </div>
+          {isCompoundResultType(snapshot.questionType) && snapshot.reviewItems.length > 0 ? (
+            <PlayerAnswerBreakdown snapshot={snapshot} />
+          ) : (
+            <PlayerSimpleAnswerResult snapshot={snapshot} />
+          )}
+          {!isCompoundResultType(snapshot.questionType) && (
+            <div style={{ background: C.goMist, border: `1px solid ${C.goBorder}`, borderRadius: 14, width: '100%', padding: '12px 20px', textAlign: 'center' }}>
+              <p style={{ color: C.go, fontSize: 22, fontWeight: 900 }}>+{snapshot.pointsAwarded} {snapshot.pointsAwarded === 1 ? 'point' : 'points'}</p>
+            </div>
+          )}
+          {isCompoundResultType(snapshot.questionType) && snapshot.reviewItems.length > 0 && (
+            <div style={{ background: C.goMist, border: `1px solid ${C.goBorder}`, borderRadius: 14, width: '100%', padding: '12px 20px', textAlign: 'center' }}>
+              <p style={{ color: C.go, fontSize: 22, fontWeight: 900 }}>+{snapshot.pointsAwarded} {snapshot.pointsAwarded === 1 ? 'point' : 'points'}</p>
+            </div>
+          )}
           <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>
           <WaitMsg msg="Waiting for the next question…" />
         </div>
@@ -1316,10 +1715,11 @@ function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
           <div style={{ background: C.stopMist, borderRadius: 999, border: `2px solid ${C.stopBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 28, color: C.stop }}>×</span></div>
           <h1 style={{ color: C.ink, fontSize: 36 }} className="font-black">Not quite</h1>
-          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 20, width: '100%', overflow: 'hidden' }}>
-            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.line}` }}><p style={{ color: C.sub, fontSize: 12, fontWeight: 700 }}>YOUR ANSWER</p><p style={{ color: C.ink, fontSize: 18, fontWeight: 700 }}>{snapshot.answer || 'No answer'}</p></div>
-            <div style={{ padding: '14px 20px' }}><p style={{ color: C.sub, fontSize: 12, fontWeight: 700 }}>CORRECT ANSWER</p><p style={{ color: C.go, fontSize: 18, fontWeight: 700 }}>{snapshot.correctAnswer}</p></div>
-          </div>
+          {isCompoundResultType(snapshot.questionType) && snapshot.reviewItems.length > 0 ? (
+            <PlayerAnswerBreakdown snapshot={snapshot} />
+          ) : (
+            <PlayerSimpleAnswerResult snapshot={snapshot} />
+          )}
           <div style={{ background: C.ground, borderRadius: 14, border: `1px solid ${C.line}`, width: '100%', padding: '12px 20px', textAlign: 'center' }}><p style={{ color: C.ink, fontSize: 22, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Your score</p></div>
           <WaitMsg msg="Waiting for the next question…" />
         </div>
@@ -1590,10 +1990,11 @@ function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
           <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.go, fontWeight: 900 }}>½</div>
           <h1 style={{ color: C.ink, fontSize: 30 }} className="font-black">{snapshot.pointsAwarded} of {snapshot.pointsMax} correct</h1>
           <p style={{ color: C.go, fontSize: 18, fontWeight: 800 }}>+{snapshot.pointsAwarded} points</p>
-          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16, width: '100%', padding: '16px 20px' }}>
-            <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, marginBottom: 5 }}>YOUR ANSWER</p><p style={{ color: C.ink, fontSize: 16, fontWeight: 700 }}>{snapshot.answer}</p>
-            <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, marginTop: 14, marginBottom: 5 }}>CORRECT ANSWER</p><p style={{ color: C.go, fontSize: 16, fontWeight: 700 }}>{snapshot.correctAnswer}</p>
-          </div>
+          {isCompoundResultType(snapshot.questionType) && snapshot.reviewItems.length > 0 ? (
+            <PlayerAnswerBreakdown snapshot={snapshot} />
+          ) : (
+            <PlayerSimpleAnswerResult snapshot={snapshot} />
+          )}
           <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>
           <WaitMsg msg="Waiting for the next question…" />
         </div>

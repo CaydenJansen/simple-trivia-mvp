@@ -1865,12 +1865,27 @@ type LiveTeam = {
   score: number
 }
 
+type ReviewStatus = 'correct' | 'incorrect' | 'review'
+
+type ReviewItem = {
+  label?: string
+  submitted: string
+  expected?: string
+  status: ReviewStatus
+}
+
+type SubmissionGrading = {
+  items: ReviewItem[]
+  missing?: string[]
+}
+
 type LiveSubmission = {
   id: string
   team_id: string
   answer_text: string
   is_correct: boolean | null
   points_awarded: number
+  grading_json: SubmissionGrading | null
 }
 
 type LiveQuestionDefinition = {
@@ -1911,6 +1926,38 @@ function questionOptions(value: unknown): { key?: string; label?: string; clue?:
   return Array.isArray(value) ? value.filter(item => item && typeof item === 'object') as { key?: string; label?: string; clue?: string }[] : []
 }
 
+type HostQuestionDetail = {
+  label: string
+  text: string
+}
+
+function hostQuestionDetails(question: LiveQuestionDefinition | null): HostQuestionDetail[] {
+  if (!question) return []
+
+  if (question.question_type === 'multi-part') {
+    return questionOptions(question.options).map((item, index) => ({
+      label: item.label ?? String.fromCharCode(65 + index),
+      text: item.clue ?? item.label ?? '',
+    })).filter(item => item.text)
+  }
+
+  if (question.question_type === 'multiple-choice') {
+    return questionOptions(question.options).map((item, index) => ({
+      label: item.key ?? String.fromCharCode(65 + index),
+      text: item.label ?? '',
+    })).filter(item => item.text)
+  }
+
+  if (question.question_type === 'ranking') {
+    return asStringArray(question.options).map((item, index) => ({
+      label: String(index + 1),
+      text: item,
+    }))
+  }
+
+  return []
+}
+
 function correctAnswerDisplay(question: LiveQuestionDefinition | null) {
   if (!question) return '—'
 
@@ -1944,54 +1991,261 @@ function submissionDisplay(question: LiveQuestionDefinition | null, answerText: 
   return String(parsed ?? '')
 }
 
-function scoreSubmission(question: LiveQuestionDefinition, answerText: string) {
+function isOneEditAway(a: string, b: string) {
+  if (!a || !b || a === b) return false
+  if (Math.abs(a.length - b.length) > 1) return false
+
+  let i = 0
+  let j = 0
+  let edits = 0
+
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i += 1
+      j += 1
+      continue
+    }
+
+    edits += 1
+    if (edits > 1) return false
+
+    if (a.length > b.length) i += 1
+    else if (b.length > a.length) j += 1
+    else {
+      i += 1
+      j += 1
+    }
+  }
+
+  if (i < a.length || j < b.length) edits += 1
+  return edits === 1
+}
+
+function reviewStatusForPair(submitted: string, expected: string): ReviewStatus {
+  const s = normaliseTriviaAnswer(submitted)
+  const e = normaliseTriviaAnswer(expected)
+
+  if (s && s === e) return 'correct'
+  if (s && e && isOneEditAway(s, e)) return 'review'
+  return 'incorrect'
+}
+
+function buildSubmissionGrading(question: LiveQuestionDefinition, answerText: string): SubmissionGrading {
   const parsed = parseStoredAnswer(answerText)
-  const max = Math.max(1, question.points_max || 1)
 
   if (question.question_type === 'single-answer' || question.question_type === 'image-question') {
-    const correct = normaliseTriviaAnswer(String(question.correct_answer ?? ''))
-    const submitted = normaliseTriviaAnswer(String(parsed ?? ''))
-    const points = submitted && submitted === correct ? 1 : 0
-    return { points, max }
+    const submitted = String(parsed ?? '')
+    const expected = String(question.correct_answer ?? '')
+    return { items: [{ submitted, expected, status: reviewStatusForPair(submitted, expected) }] }
   }
 
   if (question.question_type === 'multiple-choice') {
-    const points = String(parsed ?? '') === String(question.correct_answer ?? '') ? 1 : 0
-    return { points, max }
+    const submittedKey = String(parsed ?? '')
+    const expectedKey = String(question.correct_answer ?? '')
+    const submittedOption = questionOptions(question.options).find(option => option.key === submittedKey)
+    const expectedOption = questionOptions(question.options).find(option => option.key === expectedKey)
+    return {
+      items: [{
+        submitted: submittedOption?.label ?? submittedKey,
+        expected: expectedOption?.label ?? expectedKey,
+        status: submittedKey === expectedKey ? 'correct' : 'incorrect',
+      }],
+    }
   }
 
   if (question.question_type === 'multi-answer') {
-    const submitted = asStringArray(parsed).map(normaliseTriviaAnswer)
-    const correct = asStringArray(question.correct_answer).map(normaliseTriviaAnswer)
-    const remaining = [...submitted]
-    let points = 0
+    const submittedRaw = asStringArray(parsed).filter(value => normaliseTriviaAnswer(value))
+    const expectedRaw = asStringArray(question.correct_answer)
+    const remaining = expectedRaw.map(value => ({
+      value,
+      norm: normaliseTriviaAnswer(value),
+    }))
 
-    for (const expected of correct) {
-      const index = remaining.findIndex(value => value === expected)
-      if (index >= 0) {
-        points += 1
-        remaining.splice(index, 1)
+    const items: ReviewItem[] = submittedRaw.map((submitted) => {
+      const norm = normaliseTriviaAnswer(submitted)
+      const exactIndex = remaining.findIndex(candidate => norm && candidate.norm === norm)
+
+      if (exactIndex >= 0) {
+        const [match] = remaining.splice(exactIndex, 1)
+        return { submitted, expected: match.value, status: 'correct' }
       }
-    }
 
-    return { points: Math.min(points, max), max }
+      const nearIndex = remaining.findIndex(candidate => norm && isOneEditAway(norm, candidate.norm))
+      if (nearIndex >= 0) {
+        const [match] = remaining.splice(nearIndex, 1)
+        return { submitted, expected: match.value, status: 'review' }
+      }
+
+      return { submitted, status: 'incorrect' }
+    })
+
+    return {
+      items,
+      missing: remaining.map(candidate => candidate.value),
+    }
   }
 
-  if (question.question_type === 'multi-part' || question.question_type === 'ranking') {
-    const submitted = asStringArray(parsed).map(normaliseTriviaAnswer)
-    const correct = asStringArray(question.correct_answer).map(normaliseTriviaAnswer)
-    let points = 0
-
-    for (let i = 0; i < correct.length; i += 1) {
-      if (submitted[i] && submitted[i] === correct[i]) points += 1
+  if (question.question_type === 'multi-part') {
+    const submitted = asStringArray(parsed)
+    const expected = asStringArray(question.correct_answer)
+    return {
+      items: expected.map((expectedValue, index) => {
+        const submittedValue = submitted[index] ?? ''
+        return {
+          label: String.fromCharCode(65 + index),
+          submitted: submittedValue,
+          expected: expectedValue,
+          status: reviewStatusForPair(submittedValue, expectedValue),
+        }
+      }),
     }
-
-    return { points: Math.min(points, max), max }
   }
 
-  return { points: 0, max }
+  if (question.question_type === 'ranking') {
+    const submitted = asStringArray(parsed)
+    const expected = asStringArray(question.correct_answer)
+    return {
+      items: expected.map((expectedValue, index) => ({
+        label: String(index + 1),
+        submitted: submitted[index] ?? '',
+        expected: expectedValue,
+        status: normaliseTriviaAnswer(submitted[index] ?? '') === normaliseTriviaAnswer(expectedValue)
+          ? 'correct'
+          : 'incorrect',
+      })),
+    }
+  }
+
+  return { items: [] }
 }
 
+function multiAnswerMissing(question: LiveQuestionDefinition, grading: SubmissionGrading) {
+  if (question.question_type !== 'multi-answer') return []
+
+  const expected = asStringArray(question.correct_answer)
+  const remaining = expected.map(value => ({
+    value,
+    norm: normaliseTriviaAnswer(value),
+  }))
+
+  for (const item of grading.items) {
+    if (item.status !== 'correct' && item.status !== 'review') continue
+
+    const expectedNorm = item.expected ? normaliseTriviaAnswer(item.expected) : ''
+    let matchIndex = expectedNorm
+      ? remaining.findIndex(candidate => candidate.norm === expectedNorm)
+      : -1
+
+    if (matchIndex < 0 && item.status === 'correct') {
+      const submittedNorm = normaliseTriviaAnswer(item.submitted)
+      matchIndex = remaining.findIndex(candidate => submittedNorm && candidate.norm === submittedNorm)
+    }
+
+    if (matchIndex >= 0) remaining.splice(matchIndex, 1)
+  }
+
+  const resolvedOrPending = grading.items.filter(
+    item => item.status === 'correct' || item.status === 'review',
+  ).length
+  const target = Math.max(1, question.points_max || expected.length || 1)
+  const missingCount = Math.max(0, target - resolvedOrPending)
+
+  return remaining.slice(0, missingCount).map(candidate => candidate.value)
+}
+
+function storedSubmissionGrading(question: LiveQuestionDefinition, submission: LiveSubmission): SubmissionGrading {
+  const stored = submission.grading_json
+
+  if (stored && Array.isArray(stored.items)) {
+    const grading: SubmissionGrading = {
+      items: stored.items.map((item, index) => ({
+        label: item.label ?? String(index + 1),
+        submitted: String(item.submitted ?? ''),
+        expected: item.expected === undefined ? undefined : String(item.expected),
+        status: item.status === 'correct' || item.status === 'review' ? item.status : 'incorrect',
+      })),
+    }
+
+    if (question.question_type === 'multi-answer') {
+      grading.missing = multiAnswerMissing(question, grading)
+    }
+
+    return grading
+  }
+
+  const grading = buildSubmissionGrading(question, submission.answer_text)
+  if (question.question_type === 'multi-answer') {
+    grading.missing = multiAnswerMissing(question, grading)
+  }
+  return grading
+}
+
+function gradingPoints(grading: SubmissionGrading, max: number) {
+  return Math.min(
+    grading.items.filter(item => item.status === 'correct').length,
+    Math.max(1, max || 1),
+  )
+}
+
+function scoreSubmission(question: LiveQuestionDefinition, submission: LiveSubmission) {
+  const max = Math.max(1, question.points_max || 1)
+  const grading = storedSubmissionGrading(question, submission)
+  return { grading, points: gradingPoints(grading, max), max }
+}
+
+function ReviewBadge({
+  status,
+  onCorrect,
+  onIncorrect,
+  disabled = false,
+}: {
+  status: ReviewStatus
+  onCorrect: () => void
+  onIncorrect: () => void
+  disabled?: boolean
+}) {
+  if (status === 'review' && !disabled) {
+    return (
+      <div className="flex items-center gap-1 shrink-0">
+        <button
+          onClick={onCorrect}
+          style={{ background: C.go, color: 'white' }}
+          className="px-2 py-1 rounded-md text-[10px] font-extrabold hover:opacity-90"
+          title="Mark correct"
+        >
+          ✓
+        </button>
+        <button
+          onClick={onIncorrect}
+          style={{ background: C.stop, color: 'white' }}
+          className="px-2 py-1 rounded-md text-[10px] font-extrabold hover:opacity-90"
+          title="Mark incorrect"
+        >
+          ✕
+        </button>
+      </div>
+    )
+  }
+
+  const correct = status === 'correct'
+
+  return (
+    <button
+      onClick={correct ? onIncorrect : onCorrect}
+      disabled={disabled}
+      style={{
+        background: correct ? `${C.go}25` : `${C.stop}20`,
+        color: correct ? C.go : C.stop,
+        border: `1px solid ${correct ? `${C.go}45` : `${C.stop}40`}`,
+      }}
+      className="min-w-[78px] flex items-center justify-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-extrabold disabled:cursor-default hover:opacity-80 disabled:hover:opacity-100"
+      title={disabled ? undefined : correct ? 'Click to mark incorrect' : 'Click to mark correct'}
+    >
+      <span>{correct ? '✓' : '✕'}</span>
+      <span>{correct ? 'Correct' : 'Incorrect'}</span>
+    </button>
+  )
+}
 function LiveQuestion({ go }: { go: Go }) {
   const [phase, setPhase] = useState<'open' | 'closed' | 'revealed'>('open')
   const [gameScreen, setGameScreen] = useState('round-start')
@@ -2061,7 +2315,7 @@ function LiveQuestion({ go }: { go: Go }) {
       if (currentQuestion) {
         const { data: submissionRows, error: submissionError } = await supabase
           .from('submissions')
-          .select('id, team_id, answer_text, is_correct, points_awarded')
+          .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
           .eq('game_id', game.id)
           .eq('question_key', currentQuestion.question_key)
           .order('created_at', { ascending: true })
@@ -2153,8 +2407,59 @@ function LiveQuestion({ go }: { go: Go }) {
     setActionBusy(false)
   }
 
+  async function handleReopenAnswers() {
+    if (!liveGameId || actionBusy || phase !== 'closed') return
+    setActionBusy(true)
+    setLiveError(null)
+
+    const { error } = await supabase
+      .from('games')
+      .update({ answer_phase: 'open' })
+      .eq('id', liveGameId)
+
+    if (error) {
+      console.error('Could not reopen answers:', error)
+      setLiveError('Could not reopen answers. Please try again.')
+    } else {
+      setPhase('open')
+    }
+
+    setActionBusy(false)
+  }
+
+
+async function handleReviewItem(submissionId: string, itemIndex: number, status: 'correct' | 'incorrect') {
+  if (!question || phase === 'revealed') return
+
+  const submission = submissions.find(item => item.id === submissionId)
+  if (!submission) return
+
+  const current = storedSubmissionGrading(question, submission)
+  const next: SubmissionGrading = {
+    items: current.items.map((item, index) => index === itemIndex ? { ...item, status } : item),
+  }
+
+  if (question.question_type === 'multi-answer') {
+    next.missing = multiAnswerMissing(question, next)
+  }
+
+  setSubmissions(currentSubmissions => currentSubmissions.map(item =>
+    item.id === submissionId ? { ...item, grading_json: next } : item
+  ))
+
+  const { error } = await supabase
+    .from('submissions')
+    .update({ grading_json: next })
+    .eq('id', submissionId)
+
+  if (error) {
+    console.error('Could not update answer review:', error)
+    setLiveError('Could not save that answer review. Please try again.')
+  }
+}
+
   async function handleRevealAnswer() {
-    if (!liveGameId || !question || actionBusy) return
+    if (!liveGameId || !question || actionBusy || reviewCount > 0) return
     setActionBusy(true)
     setLiveError(null)
 
@@ -2163,7 +2468,7 @@ function LiveQuestion({ go }: { go: Go }) {
         supabase.from('teams').select('id, score').eq('game_id', liveGameId),
         supabase
           .from('submissions')
-          .select('id, team_id, answer_text, is_correct, points_awarded')
+          .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
           .eq('game_id', liveGameId)
           .eq('question_key', question.question_key),
       ])
@@ -2177,12 +2482,12 @@ function LiveQuestion({ go }: { go: Go }) {
       for (const submission of (freshSubmissions ?? []) as LiveSubmission[]) {
         if (submission.is_correct !== null) continue
 
-        const result = scoreSubmission(question, submission.answer_text)
+        const result = scoreSubmission(question, submission)
         const fullyCorrect = result.points === result.max
 
         const { error: markError } = await supabase
           .from('submissions')
-          .update({ is_correct: fullyCorrect, points_awarded: result.points })
+          .update({ is_correct: fullyCorrect, points_awarded: result.points, grading_json: result.grading })
           .eq('id', submission.id)
 
         if (markError) throw markError
@@ -2260,20 +2565,46 @@ function LiveQuestion({ go }: { go: Go }) {
     }
   }
 
-  const submissionByTeam = new Map(submissions.map(submission => [submission.team_id, submission]))
-  const answerRows = teams.map(team => ({ team, submission: submissionByTeam.get(team.id) ?? null }))
+  const submissionByTeam = new Map<string, LiveSubmission>(submissions.map(submission => [submission.team_id, submission] as const))
+  const answerRows = teams
+    .map((team, originalIndex) => {
+      const submission = submissionByTeam.get(team.id) ?? null
+      return {
+        team,
+        submission,
+        grading: submission && question ? storedSubmissionGrading(question, submission) : null,
+        originalIndex,
+      }
+    })
+    .sort((a, b) => {
+      const aNeedsReview = a.grading?.items.some(item => item.status === 'review') ?? false
+      const bNeedsReview = b.grading?.items.some(item => item.status === 'review') ?? false
+
+      const aPriority = aNeedsReview ? 0 : a.submission ? 1 : 2
+      const bPriority = bNeedsReview ? 0 : b.submission ? 1 : 2
+
+      return aPriority - bPriority || a.originalIndex - b.originalIndex
+    })
   const answeredCount = answerRows.filter(row => row.submission).length
+  const reviewCount = answerRows.reduce(
+    (total, row) => total + (row.grading?.items.filter(item => item.status === 'review').length ?? 0),
+    0,
+  )
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const totalRounds = Math.max(1, ...allQuestions.map(item => item.round_number))
   const nextQuestion = question ? allQuestions.find(item => item.position > question.position) ?? null : null
   const nextIsNewRound = !!question && !!nextQuestion && nextQuestion.round_number !== question.round_number
   const isFinalQuestion = !!question && !nextQuestion
   const correctDisplay = correctAnswerDisplay(question)
+  const questionDetails = hostQuestionDetails(question)
+  const compoundQuestion = question?.question_type === 'multi-answer'
+    || question?.question_type === 'multi-part'
+    || question?.question_type === 'ranking'
 
   return (
-    <div style={{ background: C.liveBg, color: C.liveText }} className="h-screen flex flex-col overflow-hidden">
+    <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
       <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }}
-        className="flex items-center px-6 gap-4 shrink-0">
+        className="flex items-center px-6 gap-4 shrink-0 sticky top-0 z-40">
         <div className="flex items-center gap-2 shrink-0">
           <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center">
             <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
@@ -2317,8 +2648,8 @@ function LiveQuestion({ go }: { go: Go }) {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1 flex flex-col px-7 py-6 overflow-y-auto gap-5 min-w-0">
+      <div className="flex flex-1 items-start min-h-0">
+        <div className="flex-1 flex flex-col px-7 py-6 gap-5 min-w-0 pb-12">
           <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-6 shrink-0">
             <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">
               {(question?.category ?? 'General')} · {question?.difficulty ?? '—'} · {question?.points_max ?? 1} pts max
@@ -2334,22 +2665,146 @@ function LiveQuestion({ go }: { go: Go }) {
               {question?.prompt ?? 'Loading question…'}
             </p>
 
+            {questionDetails.length > 0 && question?.question_type !== 'multi-part' && (
+              <div
+                style={{ background: `${C.livePanel}B8`, border: `1px solid ${C.liveLine}` }}
+                className="rounded-xl px-4 py-3.5 mb-5"
+              >
+                <p
+                  style={{ color: C.liveDim }}
+                  className="text-[10px] font-bold uppercase tracking-widest mb-2.5"
+                >
+                  {question?.question_type === 'ranking'
+                    ? 'Items to rank'
+                    : question?.question_type === 'multiple-choice'
+                      ? 'Answer options'
+                      : 'Question parts'}
+                </p>
+
+                <div className="space-y-2">
+                  {questionDetails.map((detail) => (
+                    <div key={`${detail.label}-${detail.text}`} className="flex items-start gap-3">
+                      <span
+                        style={{
+                          background: `${C.violet}25`,
+                          color: '#C4B5FD',
+                          border: `1px solid ${C.violet}35`,
+                        }}
+                        className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-extrabold shrink-0"
+                      >
+                        {detail.label}
+                      </span>
+                      <span style={{ color: C.liveText }} className="text-sm font-semibold leading-relaxed pt-0.5">
+                        {detail.text}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {phase !== 'revealed' ? (
               <div style={{ background: `${C.violet}12`, border: `1px dashed ${C.violet}50` }}
                 className="flex items-center gap-3 rounded-xl px-4 py-3 mb-3">
                 <div className="flex-1 min-w-0">
-                  <p style={{ color: `${C.violet}99` }} className="text-[10px] font-bold uppercase tracking-widest">Correct Answer · Host only</p>
-                  <p style={{ color: C.violet }} className="text-lg font-extrabold mt-0.5">{correctDisplay}</p>
+                  <p style={{ color: `${C.violet}99` }} className="text-[10px] font-bold uppercase tracking-widest">
+                    {question?.question_type === 'multi-part' ? 'Question parts + answers · Host only' : 'Correct Answer · Host only'}
+                  </p>
+                  {question?.question_type === 'multi-part' ? (
+                    <div className="mt-2 space-y-2.5">
+                      {questionDetails.map((detail, index) => {
+                        const answer = asStringArray(question.correct_answer)[index] ?? ''
+                        return (
+                          <div
+                            key={`${detail.label}-${detail.text}`}
+                            className="grid items-start gap-3"
+                            style={{ gridTemplateColumns: '26px minmax(0, 1fr) auto' }}
+                          >
+                            <span
+                              style={{
+                                background: `${C.violet}25`,
+                                color: '#C4B5FD',
+                                border: `1px solid ${C.violet}35`,
+                              }}
+                              className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-extrabold shrink-0"
+                            >
+                              {detail.label}
+                            </span>
+
+                            <span style={{ color: C.liveText }} className="text-sm font-semibold leading-relaxed pt-0.5">
+                              {detail.text}
+                            </span>
+
+                            <span style={{ color: C.violet }} className="text-sm font-extrabold whitespace-nowrap pt-0.5">
+                              → {answer}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : question?.question_type === 'multi-answer' ? (
+                    <div className="mt-1 space-y-1">
+                      {asStringArray(question.correct_answer).map((answer) => (
+                        <p key={answer} style={{ color: C.violet }} className="text-lg font-extrabold">
+                          {answer}
+                        </p>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ color: C.violet }} className="text-lg font-extrabold mt-0.5">{correctDisplay}</p>
+                  )}
                 </div>
-                <span style={{ color: `${C.violet}60`, border: `1px solid ${C.violet}30` }}
-                  className="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide shrink-0">Not revealed</span>
               </div>
             ) : (
               <div style={{ background: `${C.go}20`, border: `1.5px solid ${C.go}60` }}
                 className="flex items-center gap-3 rounded-xl px-4 py-3 mb-3">
                 <div className="flex-1 min-w-0">
-                  <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Correct Answer · Revealed to players</p>
-                  <p style={{ color: C.go }} className="text-xl font-extrabold mt-0.5">{correctDisplay}</p>
+                  <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">
+                    {question?.question_type === 'multi-part' ? 'Question parts + answers · Revealed to players' : 'Correct Answer · Revealed to players'}
+                  </p>
+                  {question?.question_type === 'multi-part' ? (
+                    <div className="mt-2 space-y-2.5">
+                      {questionDetails.map((detail, index) => {
+                        const answer = asStringArray(question.correct_answer)[index] ?? ''
+                        return (
+                          <div
+                            key={`${detail.label}-${detail.text}`}
+                            className="grid items-start gap-3"
+                            style={{ gridTemplateColumns: '26px minmax(0, 1fr) auto' }}
+                          >
+                            <span
+                              style={{
+                                background: `${C.violet}25`,
+                                color: '#C4B5FD',
+                                border: `1px solid ${C.violet}35`,
+                              }}
+                              className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-extrabold shrink-0"
+                            >
+                              {detail.label}
+                            </span>
+
+                            <span style={{ color: C.liveText }} className="text-sm font-semibold leading-relaxed pt-0.5">
+                              {detail.text}
+                            </span>
+
+                            <span style={{ color: C.go }} className="text-sm font-extrabold whitespace-nowrap pt-0.5">
+                              → {answer}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : question?.question_type === 'multi-answer' ? (
+                    <div className="mt-1 space-y-1">
+                      {asStringArray(question.correct_answer).map((answer) => (
+                        <p key={answer} style={{ color: C.go }} className="text-xl font-extrabold">
+                          {answer}
+                        </p>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ color: C.go }} className="text-xl font-extrabold mt-0.5">{correctDisplay}</p>
+                  )}
                 </div>
               </div>
             )}
@@ -2380,6 +2835,14 @@ function LiveQuestion({ go }: { go: Go }) {
           <div className="flex items-center justify-between shrink-0">
             <h3 style={{ color: C.liveText }} className="font-bold text-sm">Team Answers</h3>
             <div className="flex items-center gap-3">
+              {reviewCount > 0 && (
+                <span
+                  style={{ background: `${C.caution}25`, color: C.caution, border: `1px solid ${C.caution}45` }}
+                  className="px-2.5 py-1 rounded-lg text-xs font-bold"
+                >
+                  {reviewCount} need{reviewCount === 1 ? 's' : ''} review
+                </span>
+              )}
               <div style={{ background: C.liveLine }} className="h-1.5 w-32 rounded-full overflow-hidden">
                 <div style={{ width: `${teams.length ? (answeredCount / teams.length) * 100 : 0}%`, background: C.violet }} className="h-full rounded-full" />
               </div>
@@ -2388,45 +2851,259 @@ function LiveQuestion({ go }: { go: Go }) {
             </div>
           </div>
 
-          <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl overflow-hidden flex-1">
-            <div style={{ background: C.livePanel, borderBottom: `1px solid ${C.liveLine}`, color: C.liveDim, display: 'grid', gridTemplateColumns: '1fr 1.4fr 1fr' }}
-              className="text-[10px] font-bold uppercase tracking-widest px-4 py-2.5">
-              <span>Team</span><span className="text-center">Answer</span><span className="text-center">Status</span>
-            </div>
 
-            {answerRows.map(({ team, submission }) => {
-              const waiting = !submission
-              const points = submission?.points_awarded ?? 0
-              const max = question?.points_max ?? 1
-              return (
-                <div key={team.id} style={{ borderBottom: `1px solid ${C.liveLine}`, display: 'grid', gridTemplateColumns: '1fr 1.4fr 1fr', alignItems: 'center' }}
-                  className="last:border-0 px-4 py-3 gap-3">
-                  <span style={{ color: waiting ? `${C.liveText}45` : `${C.liveText}90` }} className="text-sm truncate font-medium">{team.name}</span>
-                  <span style={{ color: waiting ? C.liveDim : `${C.liveText}80` }} className="text-sm text-center italic truncate">
-                    {waiting ? 'Waiting…' : submissionDisplay(question, submission.answer_text)}
-                  </span>
-                  <div className="flex items-center justify-end gap-2">
-                    {waiting ? (
-                      <span style={{ color: C.liveDim }} className="text-xs">—</span>
-                    ) : phase !== 'revealed' ? (
-                      <span style={{ background: `${C.violet}22`, color: '#C4B5FD', border: `1px solid ${C.violet}45` }} className="px-2.5 py-1 rounded-lg text-xs font-bold">✓ Answered</span>
-                    ) : points === max ? (
-                      <span style={{ background: `${C.go}25`, color: C.go, border: `1px solid ${C.go}40` }} className="px-2.5 py-1 rounded-lg text-xs font-bold">Correct +{points}</span>
-                    ) : points > 0 ? (
-                      <span style={{ background: `${C.caution}25`, color: C.caution, border: `1px solid ${C.caution}40` }} className="px-2.5 py-1 rounded-lg text-xs font-bold">Partial +{points}</span>
-                    ) : (
-                      <span style={{ background: `${C.stop}20`, color: C.stop, border: `1px solid ${C.stop}35` }} className="px-2.5 py-1 rounded-lg text-xs font-bold">Incorrect</span>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-
-            {teams.length === 0 && <div className="px-4 py-8 text-center"><p style={{ color: C.liveDim }} className="text-sm">No teams are in this game yet.</p></div>}
-          </div>
+  <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl overflow-hidden shrink-0">
+    {!compoundQuestion ? (
+      <>
+        <div
+          style={{
+            background: C.livePanel,
+            borderBottom: `1px solid ${C.liveLine}`,
+            color: C.liveDim,
+            display: 'grid',
+            gridTemplateColumns: '1.1fr 1.5fr 150px',
+          }}
+          className="text-[10px] font-bold uppercase tracking-widest px-4 py-2.5 gap-4"
+        >
+          <span>Team</span>
+          <span>Their answer</span>
+          <span className="text-right">Status</span>
         </div>
 
-        <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 280 }} className="flex flex-col shrink-0">
+        {answerRows.map(({ team, submission, grading }) => {
+          const waiting = !submission
+          const item = grading?.items[0] ?? null
+          const needsReview = item?.status === 'review'
+          const submittedIsCorrect = item?.status === 'correct' || submission?.is_correct === true
+
+          return (
+            <div
+              key={team.id}
+              style={{
+                borderBottom: `1px solid ${needsReview ? `${C.caution}45` : C.liveLine}`,
+                background: needsReview ? `${C.caution}12` : 'transparent',
+                display: 'grid',
+                gridTemplateColumns: '1.1fr 1.5fr 150px',
+              }}
+              className="items-center px-4 py-3 gap-4 last:border-0"
+            >
+              <span
+                style={{ color: waiting ? `${C.liveText}45` : needsReview ? C.liveText : `${C.liveText}85` }}
+                className={`text-sm truncate ${needsReview ? 'font-bold' : 'font-medium'}`}
+              >
+                {team.name}
+              </span>
+
+              <div className="min-w-0 flex items-center gap-2">
+                <span
+                  style={{
+                    color: waiting
+                      ? C.liveDim
+                      : submittedIsCorrect
+                        ? C.go
+                        : `${C.liveText}85`,
+                  }}
+                  className={`text-sm italic truncate ${submittedIsCorrect ? 'font-extrabold' : 'font-semibold'}`}
+                >
+                  {waiting ? 'Waiting…' : item?.submitted || submissionDisplay(question, submission.answer_text)}
+                </span>
+                {!waiting && item?.expected && item.status !== 'correct' && (
+                  <>
+                    <span style={{ color: `${C.liveText}35` }} className="text-xs shrink-0">→</span>
+                    <span
+                      style={{ color: C.go }}
+                      className="text-xs font-bold truncate"
+                      title={`Correct answer: ${item.expected}`}
+                    >
+                      {item.expected}
+                    </span>
+                  </>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end">
+                {waiting || !item || !submission ? (
+                  <span style={{ color: C.liveDim }} className="text-xs">—</span>
+                ) : (
+                  <ReviewBadge
+                    status={item.status}
+                    disabled={phase === 'revealed'}
+                    onCorrect={() => { void handleReviewItem(submission.id, 0, 'correct') }}
+                    onIncorrect={() => { void handleReviewItem(submission.id, 0, 'incorrect') }}
+                  />
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </>
+    ) : (
+      <>
+        <div
+          style={{
+            background: C.livePanel,
+            borderBottom: `1px solid ${C.liveLine}`,
+            color: C.liveDim,
+            display: 'grid',
+            gridTemplateColumns: '1.05fr minmax(0, 2.2fr) 90px',
+          }}
+          className="text-[10px] font-bold uppercase tracking-widest px-4 py-2.5 gap-4"
+        >
+          <span>Team</span>
+          <span>{question?.question_type === 'ranking' ? 'Their order' : 'Their answers'}</span>
+          <span className="text-right">Score</span>
+        </div>
+
+        {answerRows.map(({ team, submission, grading }) => {
+          const waiting = !submission
+          const items = grading?.items ?? []
+          const hasReview = items.some(item => item.status === 'review')
+          const score = grading ? gradingPoints(grading, question?.points_max ?? 1) : 0
+          const max = question?.points_max ?? Math.max(1, items.length)
+
+          return (
+            <div
+              key={team.id}
+              style={{
+                borderBottom: `1px solid ${hasReview ? `${C.caution}45` : C.liveLine}`,
+                background: hasReview ? `${C.caution}12` : 'transparent',
+                display: 'grid',
+                gridTemplateColumns: '1.05fr minmax(0, 2.2fr) 90px',
+                alignItems: 'start',
+              }}
+              className="px-4 py-3 gap-4 last:border-0"
+            >
+              <span
+                style={{ color: waiting ? `${C.liveText}45` : hasReview ? C.liveText : `${C.liveText}85` }}
+                className={`text-sm truncate pt-1 ${hasReview ? 'font-bold' : 'font-medium'}`}
+              >
+                {team.name}
+              </span>
+
+              <div className="space-y-1.5 min-w-0">
+                {waiting ? (
+                  <span style={{ color: C.liveDim }} className="text-sm italic block pt-1">Waiting…</span>
+                ) : (
+                  items.map((item, itemIndex) => (
+                    <div
+                      key={`${submission?.id}-${itemIndex}`}
+                      className="grid items-center gap-2"
+                      style={{
+                        gridTemplateColumns: question?.question_type === 'multi-answer'
+                          ? 'minmax(0, 1fr) 84px'
+                          : '24px minmax(0, 1fr) 84px',
+                      }}
+                    >
+                      {question?.question_type !== 'multi-answer' && (
+                        <span
+                          style={{
+                            background: question?.question_type === 'multi-part' ? C.violetPale : 'transparent',
+                            color: question?.question_type === 'multi-part' ? C.violet : `${C.liveText}55`,
+                          }}
+                          className={`${question?.question_type === 'multi-part'
+                            ? 'w-5 h-5 rounded-full flex items-center justify-center'
+                            : 'text-right pr-1'} text-[10px] font-extrabold shrink-0`}
+                        >
+                          {item.label ?? itemIndex + 1}{question?.question_type === 'multi-part' ? '' : '.'}
+                        </span>
+                      )}
+
+                      <div className="min-w-0 flex items-center gap-2">
+                        <span
+                          style={{
+                            color: item.status === 'correct'
+                              ? C.go
+                              : `${C.liveText}85`,
+                          }}
+                          className="text-sm italic font-semibold truncate"
+                          title={item.submitted || 'No answer'}
+                        >
+                          {item.submitted || '—'}
+                        </span>
+
+                        {question?.question_type !== 'multi-answer' && item.status !== 'correct' && item.expected && (
+                          <>
+                            <span style={{ color: `${C.liveText}35` }} className="text-xs shrink-0">→</span>
+                            <span
+                              style={{ color: C.go }}
+                              className="text-xs font-bold truncate"
+                              title={`Correct answer: ${item.expected}`}
+                            >
+                              {item.expected}
+                            </span>
+                          </>
+                        )}
+
+                        {question?.question_type === 'multi-answer' && item.status === 'review' && item.expected && (
+                          <span
+                            style={{ color: C.caution }}
+                            className="text-xs font-bold truncate"
+                            title={`Possible match: ${item.expected}`}
+                          >
+                            possible: {item.expected}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex justify-end">
+                        {submission ? (
+                          <ReviewBadge
+                            status={item.status}
+                            disabled={phase === 'revealed'}
+                            onCorrect={() => { void handleReviewItem(submission.id, itemIndex, 'correct') }}
+                            onIncorrect={() => { void handleReviewItem(submission.id, itemIndex, 'incorrect') }}
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                {!waiting && question?.question_type === 'multi-answer' && grading && (grading.missing ?? []).length > 0 && (
+                  <div
+                    style={{ borderTop: `1px solid ${C.liveLine}` }}
+                    className="mt-2 pt-2 flex items-start gap-2 text-xs"
+                  >
+                    <span style={{ color: C.liveDim }} className="font-bold uppercase tracking-wide shrink-0">Missing</span>
+                    <div className="space-y-0.5">
+                      {(grading.missing ?? []).map((answer) => (
+                        <div key={answer} style={{ color: C.go }} className="font-bold">
+                          {answer}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="text-right pt-1">
+                {waiting ? (
+                  <span style={{ color: C.liveDim }} className="text-xs">—</span>
+                ) : (
+                  <span
+                    style={{ color: score === max ? C.go : score === 0 ? C.stop : C.caution }}
+                    className="text-sm font-extrabold tabular-nums"
+                  >
+                    {score}
+                    <span style={{ color: C.liveDim }} className="text-[10px] font-normal"> / {max}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </>
+    )}
+
+    {teams.length === 0 && (
+      <div className="px-4 py-8 text-center">
+        <p style={{ color: C.liveDim }} className="text-sm">No teams are in this game yet.</p>
+      </div>
+    )}
+  </div>
+</div>
+
+        <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 300 }} className="flex flex-col shrink-0 sticky top-[52px] h-[calc(100dvh-52px)]">
           <div className="flex-1 p-5 overflow-y-auto">
             <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">Leaderboard</p>
             <div className="space-y-1">
@@ -2453,21 +3130,59 @@ function LiveQuestion({ go }: { go: Go }) {
               </div>
             ) : phase === 'open' ? (
               <div className="space-y-3">
-                <p style={{ color: C.liveDim }} className="text-[11px] text-center font-semibold uppercase tracking-widest">Accepting answers…</p>
-                <button onClick={handleCloseAnswers} disabled={actionBusy}
-                  style={{ border: `2px solid ${C.liveLine}`, color: C.liveText, background: C.livePanel }}
-                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:border-violet hover:text-violet transition-all active:scale-[0.98] disabled:opacity-50">
+                <p style={{ color: C.caution }} className="text-[11px] text-center font-extrabold uppercase tracking-widest">
+                  Accepting answers · {answeredCount}/{teams.length} submitted
+                </p>
+                <button
+                  onClick={handleCloseAnswers}
+                  disabled={actionBusy}
+                  style={{
+                    background: '#F59E0B',
+                    color: '#17130A',
+                    border: '2px solid #FBBF24',
+                    boxShadow: '0 10px 34px rgba(245,158,11,0.32)',
+                  }}
+                  className="w-full py-6 rounded-2xl text-xl font-black hover:brightness-110 transition-all active:scale-[0.98] disabled:opacity-50"
+                >
                   {actionBusy ? 'Closing…' : 'Close Answers'}
+                  {!actionBusy && (
+                    <span className="block text-xs font-bold opacity-70 mt-1">Stop all new submissions</span>
+                  )}
                 </button>
               </div>
             ) : phase === 'closed' ? (
               <div className="space-y-3">
-                <p style={{ color: C.caution }} className="text-[11px] text-center font-semibold uppercase tracking-widest">Answers closed — ready to reveal</p>
-                <button onClick={handleRevealAnswer} disabled={actionBusy || !question}
-                  style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
-                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
-                  {actionBusy ? 'Revealing…' : 'Reveal Answer'}
-                  {!actionBusy && <span className="block text-sm font-semibold opacity-80 mt-0.5">& Apply Points</span>}
+                <button
+                  onClick={handleReopenAnswers}
+                  disabled={actionBusy}
+                  style={{
+                    background: 'transparent',
+                    color: C.liveText,
+                    border: `1px solid ${C.liveLine}`,
+                  }}
+                  className="w-full py-3 rounded-xl text-sm font-bold hover:bg-white/5 transition-all active:scale-[0.99] disabled:opacity-50"
+                >
+                  ← Reopen Answers
+                </button>
+
+                <p style={{ color: reviewCount > 0 ? C.caution : C.go }} className="text-[11px] text-center font-semibold uppercase tracking-widest">
+                  {reviewCount > 0
+                    ? `${reviewCount} answer${reviewCount === 1 ? '' : 's'} still need review`
+                    : 'Answers closed — ready to reveal'}
+                </p>
+                <button
+                  onClick={handleRevealAnswer}
+                  disabled={actionBusy || !question || reviewCount > 0}
+                  style={{
+                    background: reviewCount > 0 ? C.livePanel : C.violet,
+                    color: reviewCount > 0 ? C.liveDim : 'white',
+                    boxShadow: reviewCount > 0 ? 'none' : `0 8px 32px ${C.violet}60`,
+                    border: reviewCount > 0 ? `1px solid ${C.liveLine}` : 'none',
+                  }}
+                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {actionBusy ? 'Revealing…' : reviewCount > 0 ? 'Resolve Reviews First' : 'Reveal Answer'}
+                  {!actionBusy && reviewCount === 0 && <span className="block text-sm font-semibold opacity-80 mt-0.5">& Apply Points</span>}
                 </button>
               </div>
             ) : (
