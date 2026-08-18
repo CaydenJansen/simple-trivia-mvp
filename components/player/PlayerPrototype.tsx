@@ -45,6 +45,49 @@ function playerScreenFromGameState(value: string | null | undefined): PlayerScre
   return LIVE_PLAYER_SCREENS.has(value as PlayerScreen) ? value as PlayerScreen : null
 }
 
+type RemoteGameState = {
+  current_screen: string | null
+  answer_phase: string | null
+  current_question_key: string | null
+}
+
+async function resolveLivePlayerScreen(
+  gameId: string,
+  teamId: string,
+  gameState: RemoteGameState,
+): Promise<PlayerScreen | null> {
+  if (gameState.current_screen === 'lobby') return 'waiting'
+
+  if (gameState.current_screen === 'single-answer') {
+    const questionKey = gameState.current_question_key || 'q1'
+
+    const { data: submission, error } = await supabase
+      .from('submissions')
+      .select('id, is_correct')
+      .eq('game_id', gameId)
+      .eq('team_id', teamId)
+      .eq('question_key', questionKey)
+      .maybeSingle()
+
+    if (error) {
+      console.error('Could not check player submission:', error)
+    }
+
+    if (gameState.answer_phase === 'revealed') {
+      if (!submission) return 'no-answer'
+      return submission.is_correct ? 'correct' : 'incorrect'
+    }
+
+    if (gameState.answer_phase === 'closed') {
+      return submission ? 'submitted' : 'no-answer'
+    }
+
+    return submission ? 'submitted' : 'single-answer'
+  }
+
+  return playerScreenFromGameState(gameState.current_screen)
+}
+
 function useLivePlayerSync(
   screen: PlayerScreen,
   setScreen: React.Dispatch<React.SetStateAction<PlayerScreen>>,
@@ -61,8 +104,8 @@ function useLivePlayerSync(
 
     let active = true
 
-    const applyRemoteScreen = (currentScreen: string | null | undefined) => {
-      const next = playerScreenFromGameState(currentScreen)
+    async function applyGameState(gameState: RemoteGameState) {
+      const next = await resolveLivePlayerScreen(gameId, teamId, gameState)
       if (active && next) {
         setScreen(next)
       }
@@ -71,7 +114,7 @@ function useLivePlayerSync(
     async function loadGameState() {
       const { data, error } = await supabase
         .from('games')
-        .select('current_screen')
+        .select('current_screen, answer_phase, current_question_key')
         .eq('id', gameId)
         .maybeSingle()
 
@@ -80,7 +123,9 @@ function useLivePlayerSync(
         return
       }
 
-      applyRemoteScreen(data?.current_screen)
+      if (data) {
+        await applyGameState(data as RemoteGameState)
+      }
     }
 
     void loadGameState()
@@ -96,7 +141,7 @@ function useLivePlayerSync(
           filter: `id=eq.${gameId}`,
         },
         (payload) => {
-          applyRemoteScreen((payload.new as { current_screen?: string }).current_screen)
+          void applyGameState(payload.new as RemoteGameState)
         },
       )
       .subscribe()
@@ -106,6 +151,99 @@ function useLivePlayerSync(
       void supabase.removeChannel(channel)
     }
   }, [joined, setScreen])
+}
+
+type PlayerSnapshot = {
+  teamName: string
+  score: number
+  answer: string
+  isCorrect: boolean | null
+}
+
+function usePlayerSnapshot(): PlayerSnapshot {
+  const [snapshot, setSnapshot] = useState<PlayerSnapshot>({
+    teamName: '',
+    score: 0,
+    answer: '',
+    isCorrect: null,
+  })
+
+  useEffect(() => {
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    const teamId = localStorage.getItem('simple-trivia-team-id')
+    const fallbackName = localStorage.getItem('simple-trivia-team-name') ?? ''
+    const fallbackAnswer = localStorage.getItem('simple-trivia-last-answer') ?? ''
+
+    if (!gameId || !teamId) {
+      setSnapshot(current => ({
+        ...current,
+        teamName: fallbackName,
+        answer: fallbackAnswer,
+      }))
+      return
+    }
+
+    let active = true
+
+    async function loadSnapshot() {
+      const [{ data: team }, { data: submission }] = await Promise.all([
+        supabase
+          .from('teams')
+          .select('name, score')
+          .eq('id', teamId)
+          .maybeSingle(),
+        supabase
+          .from('submissions')
+          .select('answer_text, is_correct')
+          .eq('game_id', gameId)
+          .eq('team_id', teamId)
+          .eq('question_key', 'q1')
+          .maybeSingle(),
+      ])
+
+      if (!active) return
+
+      setSnapshot({
+        teamName: team?.name ?? fallbackName,
+        score: team?.score ?? 0,
+        answer: submission?.answer_text ?? fallbackAnswer,
+        isCorrect: submission?.is_correct ?? null,
+      })
+    }
+
+    void loadSnapshot()
+
+    const channel = supabase
+      .channel(`player-snapshot-${teamId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'teams',
+          filter: `id=eq.${teamId}`,
+        },
+        () => { void loadSnapshot() },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'submissions',
+          filter: `team_id=eq.${teamId}`,
+        },
+        () => { void loadSnapshot() },
+      )
+      .subscribe()
+
+    return () => {
+      active = false
+      void supabase.removeChannel(channel)
+    }
+  }, [])
+
+  return snapshot
 }
 
 // ─── PALETTE ──────────────────────────────────────────────────────────────────
@@ -773,9 +911,81 @@ function RoundStart({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 5 — SINGLE ANSWER ─────────────────────────────────────────────────
 function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const [answer, setAnswer] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const snapshot = usePlayerSnapshot()
+
+  async function handleSubmit() {
+    if (!answer.trim() || submitting) return
+
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    const teamId = localStorage.getItem('simple-trivia-team-id')
+
+    if (!gameId || !teamId) {
+      go('join')
+      return
+    }
+
+    setSubmitting(true)
+    setSubmitError(null)
+
+    const { data: game, error: gameError } = await supabase
+      .from('games')
+      .select('current_screen, answer_phase, current_question_key')
+      .eq('id', gameId)
+      .maybeSingle()
+
+    if (gameError || !game) {
+      console.error('Could not check answer state:', gameError)
+      setSubmitError('Could not submit your answer. Please try again.')
+      setSubmitting(false)
+      return
+    }
+
+    if (game.current_screen !== 'single-answer' || game.answer_phase !== 'open') {
+      setSubmitting(false)
+      go('no-answer')
+      return
+    }
+
+    const questionKey = game.current_question_key || 'q1'
+    const cleanAnswer = answer.trim()
+
+    const { error } = await supabase
+      .from('submissions')
+      .upsert(
+        {
+          game_id: gameId,
+          team_id: teamId,
+          question_key: questionKey,
+          answer_text: cleanAnswer,
+          is_correct: null,
+          points_awarded: 0,
+        },
+        {
+          onConflict: 'game_id,team_id,question_key',
+        },
+      )
+
+    if (error) {
+      console.error('Could not submit answer:', error)
+      setSubmitError('Could not submit your answer. Please try again.')
+      setSubmitting(false)
+      return
+    }
+
+    localStorage.setItem('simple-trivia-last-answer', cleanAnswer)
+    go('submitted')
+  }
+
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
-      <TopBar team="Trivia Newton John" score={14} round="Round 2 of 6" question="Question 3 of 5" />
+      <TopBar
+        team={snapshot.teamName || 'Your Team'}
+        score={snapshot.score}
+        round="Round 2 of 6"
+        question="Question 3 of 5"
+      />
 
       <div className="flex-1 overflow-y-auto px-5 py-6">
         <div style={{ background: C.violetPale, borderRadius: 8, display: 'inline-flex', padding: '4px 10px', marginBottom: 18 }}>
@@ -792,7 +1002,8 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         <textarea
           rows={3}
           value={answer}
-          onChange={e => setAnswer(e.target.value)}
+          onChange={e => { setAnswer(e.target.value); setSubmitError(null) }}
+          disabled={submitting}
           placeholder="Type your answer…"
           style={{
             border: `2px solid ${answer ? C.violet : C.line}`,
@@ -807,12 +1018,21 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
             resize: 'none',
             fontFamily: 'inherit',
             transition: 'border-color 0.14s',
+            opacity: submitting ? 0.7 : 1,
           }}
         />
+
+        {submitError && (
+          <div style={{ background: C.stopMist, border: `1px solid ${C.stopBorder}`, borderRadius: 12, padding: '10px 12px', marginTop: 12 }}>
+            <p style={{ color: C.stop, fontSize: 13, fontWeight: 600 }}>{submitError}</p>
+          </div>
+        )}
       </div>
 
       <StickyBottom>
-        <Btn onClick={() => go('submitted')} disabled={!answer.trim()}>Submit Answer</Btn>
+        <Btn onClick={handleSubmit} disabled={!answer.trim() || submitting}>
+          {submitting ? 'Submitting…' : 'Submit Answer'}
+        </Btn>
       </StickyBottom>
     </div>
   )
@@ -1130,12 +1350,18 @@ const DEMO_QUESTION = 'Which country has the longest coastline in the world?'
 
 // ─── SCREEN 11 — SUBMITTED ────────────────────────────────────────────────────
 function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
+  const snapshot = usePlayerSnapshot()
+
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
-      <TopBar team="Trivia Newton John" score={14} round="Round 2 of 6" question="Question 3 of 5" />
+      <TopBar
+        team={snapshot.teamName || 'Your Team'}
+        score={snapshot.score}
+        round="Round 2 of 6"
+        question="Question 3 of 5"
+      />
 
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        {/* Question retained for context */}
         <p style={{ color: C.sub, fontSize: 14, lineHeight: 1.5, marginBottom: 20 }}>{DEMO_QUESTION}</p>
 
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
@@ -1158,13 +1384,11 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
             <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
               Your answer
             </p>
-            <p style={{ color: C.ink, fontSize: 22, fontWeight: 800 }}>Canada</p>
+            <p style={{ color: C.ink, fontSize: 22, fontWeight: 800 }}>{snapshot.answer || 'Submitted'}</p>
           </div>
 
           <WaitMsg msg="Waiting for the host…" />
-          <p style={{ color: C.sub, fontSize: 14, marginTop: -8 }}>Your score: 14</p>
-
-          <HostAdvance label="host reveals answer" to="correct" go={go} />
+          <p style={{ color: C.sub, fontSize: 14, marginTop: -8 }}>Your score: {snapshot.score}</p>
         </div>
       </div>
     </div>
@@ -1173,9 +1397,11 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
 
 // ─── SCREEN 12 — NO ANSWER ────────────────────────────────────────────────────
 function NoAnswer({ go }: { go: (s: PlayerScreen) => void }) {
+  const snapshot = usePlayerSnapshot()
+
   return (
     <div className="flex flex-col items-center justify-center px-6 text-center" style={{ minHeight: '100%' }}>
-      <TopBar team="Trivia Newton John" score={14} />
+      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} />
 
       <div className="flex-1 flex flex-col items-center justify-center">
         <div style={{
@@ -1208,12 +1434,18 @@ function NoAnswer({ go }: { go: (s: PlayerScreen) => void }) {
 
 // ─── SCREEN 13 — CORRECT ──────────────────────────────────────────────────────
 function Correct({ go }: { go: (s: PlayerScreen) => void }) {
+  const snapshot = usePlayerSnapshot()
+
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
-      <TopBar team="Trivia Newton John" score={15} round="Round 2 of 6" question="Question 3 of 5" />
+      <TopBar
+        team={snapshot.teamName || 'Your Team'}
+        score={snapshot.score}
+        round="Round 2 of 6"
+        question="Question 3 of 5"
+      />
 
       <div className="flex-1 overflow-y-auto px-5 py-5">
-        {/* Question retained for context */}
         <p style={{ color: C.sub, fontSize: 14, lineHeight: 1.5, marginBottom: 20 }}>{DEMO_QUESTION}</p>
 
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
@@ -1235,7 +1467,7 @@ function Correct({ go }: { go: (s: PlayerScreen) => void }) {
           }}>
             <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.line}` }}>
               <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Your answer</p>
-              <p style={{ color: C.ink, fontSize: 18, fontWeight: 700 }}>Canada</p>
+              <p style={{ color: C.ink, fontSize: 18, fontWeight: 700 }}>{snapshot.answer || 'Canada'}</p>
             </div>
             <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.line}` }}>
               <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Correct answer</p>
@@ -1247,16 +1479,11 @@ function Correct({ go }: { go: (s: PlayerScreen) => void }) {
           </div>
 
           <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}>
-            <p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>15 points</p>
+            <p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p>
             <p style={{ color: C.sub, fontSize: 13 }}>Updated score</p>
           </div>
 
           <WaitMsg msg="Waiting for the next question…" />
-
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-            <HostAdvance label="next question" to="single-answer" go={go} />
-            <HostAdvance label="end of round" to="round-results" go={go} />
-          </div>
         </div>
       </div>
     </div>
@@ -1265,12 +1492,18 @@ function Correct({ go }: { go: (s: PlayerScreen) => void }) {
 
 // ─── SCREEN 14 — INCORRECT ────────────────────────────────────────────────────
 function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
+  const snapshot = usePlayerSnapshot()
+
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
-      <TopBar team="Trivia Newton John" score={14} round="Round 2 of 6" question="Question 3 of 5" />
+      <TopBar
+        team={snapshot.teamName || 'Your Team'}
+        score={snapshot.score}
+        round="Round 2 of 6"
+        question="Question 3 of 5"
+      />
 
       <div className="flex-1 overflow-y-auto px-5 py-5">
-        {/* Question retained for context */}
         <p style={{ color: C.sub, fontSize: 14, lineHeight: 1.5, marginBottom: 20 }}>{DEMO_QUESTION}</p>
 
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
@@ -1292,7 +1525,7 @@ function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
           }}>
             <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.line}` }}>
               <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Your answer</p>
-              <p style={{ color: C.ink, fontSize: 18, fontWeight: 700 }}>Russia</p>
+              <p style={{ color: C.ink, fontSize: 18, fontWeight: 700 }}>{snapshot.answer || '—'}</p>
             </div>
             <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.line}` }}>
               <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Correct answer</p>
@@ -1304,7 +1537,7 @@ function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
           </div>
 
           <div style={{ background: C.ground, borderRadius: 14, border: `1px solid ${C.line}`, width: '100%', padding: '12px 20px' }}>
-            <p style={{ color: C.ink, fontSize: 24, fontWeight: 800 }}>14 points</p>
+            <p style={{ color: C.ink, fontSize: 24, fontWeight: 800 }}>{snapshot.score} points</p>
             <p style={{ color: C.sub, fontSize: 13 }}>Your score</p>
           </div>
 

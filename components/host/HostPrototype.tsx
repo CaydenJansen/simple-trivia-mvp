@@ -12,7 +12,12 @@ type Go = (s: Screen) => void
 
 const LIVE_GAME_CODE = '728461'
 
-async function updateLiveGame(values: { status?: 'lobby' | 'live' | 'finished'; current_screen?: string }) {
+async function updateLiveGame(values: {
+  status?: 'lobby' | 'live' | 'finished'
+  current_screen?: string
+  answer_phase?: 'open' | 'closed' | 'revealed'
+  current_question_key?: string
+}) {
   const { error } = await supabase
     .from('games')
     .update(values)
@@ -1627,9 +1632,36 @@ function Lobby({ go }: { go: Go }) {
     setStartError(null)
 
     try {
+      const { data: game, error: gameError } = await supabase
+        .from('games')
+        .select('id')
+        .eq('code', LIVE_GAME_CODE)
+        .maybeSingle()
+
+      if (gameError || !game) {
+        throw gameError ?? new Error('Game not found')
+      }
+
+      const { error: clearError } = await supabase
+        .from('submissions')
+        .delete()
+        .eq('game_id', game.id)
+        .eq('question_key', 'q1')
+
+      if (clearError) throw clearError
+
+      const { error: scoreError } = await supabase
+        .from('teams')
+        .update({ score: 0 })
+        .eq('game_id', game.id)
+
+      if (scoreError) throw scoreError
+
       await updateLiveGame({
         status: 'live',
         current_screen: 'single-answer',
+        answer_phase: 'open',
+        current_question_key: 'q1',
       })
 
       go('live-question')
@@ -1816,18 +1848,231 @@ function Lobby({ go }: { go: Go }) {
 // ─── SCREEN 9: LIVE QUESTION ──────────────────────────────────────────────────
 // Dark operational mode — the host is on stage
 
+type LiveTeam = {
+  id: string
+  name: string
+  score: number
+}
+
+type LiveSubmission = {
+  id: string
+  team_id: string
+  answer_text: string
+  is_correct: boolean | null
+  points_awarded: number
+}
+
+const LIVE_QUESTION_KEY = 'q1'
+const LIVE_CORRECT_ANSWER = 'Canada'
+
+function normaliseTriviaAnswer(value: string) {
+  return value.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+}
+
 function LiveQuestion({ go }: { go: Go }) {
   const [phase, setPhase] = useState<'open' | 'closed' | 'revealed'>('open')
   const [emergency, setEmergency] = useState(false)
-  const answers = [
-    { team: 'Trivia Newton John', answer: 'Canada', status: 'correct' as const, waiting: false },
-    { team: 'Quizteama Aguilera', answer: 'Canada', status: 'correct' as const, waiting: false },
-    { team: 'Norfolk & Chance', answer: 'Cannada', status: 'review' as const, waiting: false },
-    { team: 'Risky Quizness', answer: 'Russia', status: 'incorrect' as const, waiting: false },
-    { team: 'The Know-It-Alls', answer: 'Canada', status: 'correct' as const, waiting: false },
-    { team: 'Quiz Khalifa', answer: '', status: 'incorrect' as const, waiting: true },
-    { team: 'I Am Smarticus', answer: '', status: 'incorrect' as const, waiting: true },
-  ]
+  const [liveGameId, setLiveGameId] = useState<string | null>(null)
+  const [teams, setTeams] = useState<LiveTeam[]>([])
+  const [submissions, setSubmissions] = useState<LiveSubmission[]>([])
+  const [liveError, setLiveError] = useState<string | null>(null)
+  const [actionBusy, setActionBusy] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    let channel: ReturnType<typeof supabase.channel> | null = null
+
+    async function loadLiveData() {
+      const { data: game, error: gameError } = await supabase
+        .from('games')
+        .select('id, answer_phase')
+        .eq('code', LIVE_GAME_CODE)
+        .maybeSingle()
+
+      if (!active) return
+
+      if (gameError || !game) {
+        console.error('Could not load live game:', gameError)
+        setLiveError('Could not load the live game.')
+        return
+      }
+
+      setLiveGameId(game.id)
+
+      if (game.answer_phase === 'open' || game.answer_phase === 'closed' || game.answer_phase === 'revealed') {
+        setPhase(game.answer_phase)
+      }
+
+      const [{ data: teamRows, error: teamError }, { data: submissionRows, error: submissionError }] = await Promise.all([
+        supabase
+          .from('teams')
+          .select('id, name, score')
+          .eq('game_id', game.id)
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('submissions')
+          .select('id, team_id, answer_text, is_correct, points_awarded')
+          .eq('game_id', game.id)
+          .eq('question_key', LIVE_QUESTION_KEY)
+          .order('created_at', { ascending: true }),
+      ])
+
+      if (!active) return
+
+      if (teamError || submissionError) {
+        console.error('Could not load live question data:', teamError ?? submissionError)
+        setLiveError('Could not load team answers.')
+        return
+      }
+
+      setTeams(teamRows ?? [])
+      setSubmissions(submissionRows ?? [])
+      setLiveError(null)
+
+      if (!channel) {
+        channel = supabase
+          .channel(`host-live-question-${game.id}`)
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'submissions',
+              filter: `game_id=eq.${game.id}`,
+            },
+            () => { void loadLiveData() },
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: 'UPDATE',
+              schema: 'public',
+              table: 'teams',
+              filter: `game_id=eq.${game.id}`,
+            },
+            () => { void loadLiveData() },
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: 'UPDATE',
+              schema: 'public',
+              table: 'games',
+              filter: `id=eq.${game.id}`,
+            },
+            () => { void loadLiveData() },
+          )
+          .subscribe()
+      }
+    }
+
+    void loadLiveData()
+
+    return () => {
+      active = false
+      if (channel) {
+        void supabase.removeChannel(channel)
+      }
+    }
+  }, [])
+
+  async function handleCloseAnswers() {
+    if (!liveGameId || actionBusy) return
+
+    setActionBusy(true)
+    setLiveError(null)
+
+    const { error } = await supabase
+      .from('games')
+      .update({ answer_phase: 'closed' })
+      .eq('id', liveGameId)
+
+    if (error) {
+      console.error('Could not close answers:', error)
+      setLiveError('Could not close answers. Please try again.')
+    } else {
+      setPhase('closed')
+    }
+
+    setActionBusy(false)
+  }
+
+  async function handleRevealAnswer() {
+    if (!liveGameId || actionBusy) return
+
+    setActionBusy(true)
+    setLiveError(null)
+
+    try {
+      const [{ data: freshTeams, error: teamError }, { data: freshSubmissions, error: submissionError }] = await Promise.all([
+        supabase
+          .from('teams')
+          .select('id, score')
+          .eq('game_id', liveGameId),
+        supabase
+          .from('submissions')
+          .select('id, team_id, answer_text, is_correct')
+          .eq('game_id', liveGameId)
+          .eq('question_key', LIVE_QUESTION_KEY),
+      ])
+
+      if (teamError || submissionError) {
+        throw teamError ?? submissionError
+      }
+
+      const scoreByTeam = new Map<string, number>(((freshTeams ?? []) as { id: string; score: number }[]).map(team => [team.id, team.score]))
+
+      for (const submission of (freshSubmissions ?? []) as { id: string; team_id: string; answer_text: string; is_correct: boolean | null }[]) {
+        if (submission.is_correct !== null) continue
+
+        const isCorrect =
+          normaliseTriviaAnswer(submission.answer_text) === normaliseTriviaAnswer(LIVE_CORRECT_ANSWER)
+
+        const { error: markError } = await supabase
+          .from('submissions')
+          .update({
+            is_correct: isCorrect,
+            points_awarded: isCorrect ? 1 : 0,
+          })
+          .eq('id', submission.id)
+
+        if (markError) throw markError
+
+        if (isCorrect) {
+          const currentScore = scoreByTeam.get(submission.team_id) ?? 0
+          const { error: scoreError } = await supabase
+            .from('teams')
+            .update({ score: currentScore + 1 })
+            .eq('id', submission.team_id)
+
+          if (scoreError) throw scoreError
+          scoreByTeam.set(submission.team_id, currentScore + 1)
+        }
+      }
+
+      const { error: phaseError } = await supabase
+        .from('games')
+        .update({ answer_phase: 'revealed' })
+        .eq('id', liveGameId)
+
+      if (phaseError) throw phaseError
+
+      setPhase('revealed')
+    } catch (error) {
+      console.error('Could not reveal answer:', error)
+      setLiveError('Could not reveal and score the answer. Please try again.')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const submissionByTeam = new Map(submissions.map(submission => [submission.team_id, submission]))
+  const answerRows = teams.map(team => ({
+    team,
+    submission: submissionByTeam.get(team.id) ?? null,
+  }))
+  const answeredCount = answerRows.filter(row => row.submission).length
+  const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
 
   return (
     <div style={{ background: C.liveBg, color: C.liveText }} className="h-screen flex flex-col overflow-hidden">
@@ -1892,7 +2137,6 @@ function LiveQuestion({ go }: { go: Go }) {
               Which country has the longest coastline in the world?
             </p>
 
-            {/* Correct answer — always visible to host, styling shifts on reveal */}
             {phase !== 'revealed' ? (
               <div style={{ background: `${C.violet}12`, border: `1px dashed ${C.violet}50` }}
                 className="flex items-center gap-3 rounded-xl px-4 py-3 mb-3">
@@ -1902,7 +2146,7 @@ function LiveQuestion({ go }: { go: Go }) {
                 </svg>
                 <div className="flex-1 min-w-0">
                   <p style={{ color: `${C.violet}99` }} className="text-[10px] font-bold uppercase tracking-widest">Correct Answer · Host only</p>
-                  <p style={{ color: C.violet }} className="text-lg font-extrabold mt-0.5">Canada</p>
+                  <p style={{ color: C.violet }} className="text-lg font-extrabold mt-0.5">{LIVE_CORRECT_ANSWER}</p>
                 </div>
                 <span style={{ color: `${C.violet}60`, border: `1px solid ${C.violet}30` }}
                   className="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide shrink-0">Not revealed</span>
@@ -1913,12 +2157,11 @@ function LiveQuestion({ go }: { go: Go }) {
                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" fill={C.go} fillOpacity="0.2"/><path d="M5 9l3 3 5-5" stroke={C.go} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
                 <div className="flex-1 min-w-0">
                   <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Correct Answer · Revealed to players</p>
-                  <p style={{ color: C.go }} className="text-xl font-extrabold mt-0.5">Canada</p>
+                  <p style={{ color: C.go }} className="text-xl font-extrabold mt-0.5">{LIVE_CORRECT_ANSWER}</p>
                 </div>
               </div>
             )}
 
-            {/* Host notes — always visible */}
             <div style={{ background: `${C.violet}10`, border: `1px dashed ${C.violet}40` }}
               className="flex items-start gap-3 rounded-xl p-3.5">
               <svg width="13" height="13" viewBox="0 0 14 14" fill="none" className="shrink-0 mt-0.5">
@@ -1933,7 +2176,6 @@ function LiveQuestion({ go }: { go: Go }) {
             </div>
           </div>
 
-          {/* Persistent state label */}
           <div style={{
             background: phase === 'open' ? `${C.violet}20` : phase === 'closed' ? `${C.caution}20` : `${C.go}20`,
             border: `1px solid ${phase === 'open' ? `${C.violet}40` : phase === 'closed' ? `${C.caution}40` : `${C.go}40`}`,
@@ -1943,14 +2185,26 @@ function LiveQuestion({ go }: { go: Go }) {
             {phase === 'open' ? 'Accepting Answers' : phase === 'closed' ? 'Answers Closed' : 'Answer Revealed'}
           </div>
 
-          {/* Answer progress + table */}
+          {liveError && (
+            <div style={{ background: `${C.stop}18`, border: `1px solid ${C.stop}45`, color: '#FCA5A5' }}
+              className="rounded-xl px-4 py-3 text-sm font-semibold">
+              {liveError}
+            </div>
+          )}
+
           <div className="flex items-center justify-between shrink-0">
             <h3 style={{ color: C.liveText }} className="font-bold text-sm">Team Answers</h3>
             <div className="flex items-center gap-3">
               <div style={{ background: C.liveLine }} className="h-1.5 w-32 rounded-full overflow-hidden">
-                <div style={{ width: `${(5/7)*100}%`, background: C.violet }} className="h-full rounded-full" />
+                <div
+                  style={{
+                    width: `${teams.length ? (answeredCount / teams.length) * 100 : 0}%`,
+                    background: C.violet,
+                  }}
+                  className="h-full rounded-full"
+                />
               </div>
-              <span style={{ color: C.liveText }} className="text-sm font-bold tabular-nums">5 / 7</span>
+              <span style={{ color: C.liveText }} className="text-sm font-bold tabular-nums">{answeredCount} / {teams.length}</span>
               <span style={{ color: C.liveDim }} className="text-xs">answered</span>
             </div>
           </div>
@@ -1966,83 +2220,74 @@ function LiveQuestion({ go }: { go: Go }) {
             }} className="text-[10px] font-bold uppercase tracking-widest px-4 py-2.5">
               <span>Team</span><span className="text-center">Answer</span><span className="text-center">Status</span>
             </div>
-            {answers.map(row => {
-              const isReview = !row.waiting && row.status === 'review'
+
+            {answerRows.map(({ team, submission }) => {
+              const waiting = !submission
               return (
-                <div key={row.team}
+                <div key={team.id}
                   style={{
-                    borderBottom: `1px solid ${isReview ? C.caution + '40' : C.liveLine}`,
-                    background: isReview ? `${C.caution}15` : 'transparent',
+                    borderBottom: `1px solid ${C.liveLine}`,
                     display: 'grid',
                     gridTemplateColumns: '1fr 1fr 1fr',
                     alignItems: 'center',
                   }}
                   className="last:border-0 px-4 py-3 gap-3">
 
-                  {/* Col 1: Team name */}
-                  <span style={{ color: row.waiting ? `${C.liveText}45` : isReview ? C.liveText : `${C.liveText}80` }}
-                    className={`text-sm truncate ${isReview ? 'font-bold' : 'font-medium'}`}>
-                    {row.team}
+                  <span style={{ color: waiting ? `${C.liveText}45` : `${C.liveText}90` }}
+                    className="text-sm truncate font-medium">
+                    {team.name}
                   </span>
 
-                  {/* Col 2: Answer */}
-                  <span style={{ color: row.waiting ? C.liveDim : isReview ? C.liveText : `${C.liveText}70` }}
-                    className={`text-sm text-center italic ${isReview ? 'font-semibold' : ''}`}>
-                    {row.waiting ? 'Waiting…' : row.answer}
+                  <span style={{ color: waiting ? C.liveDim : `${C.liveText}80` }}
+                    className="text-sm text-center italic">
+                    {waiting ? 'Waiting…' : submission.answer_text}
                   </span>
 
-                  {/* Col 3: Status / actions */}
                   <div className="flex items-center justify-end gap-2">
-                    {row.waiting && (
+                    {waiting ? (
                       <span style={{ color: C.liveDim }} className="text-xs">—</span>
-                    )}
-                    {!row.waiting && row.status === 'correct' && (
+                    ) : phase !== 'revealed' ? (
+                      <span style={{ background: `${C.violet}22`, color: '#C4B5FD', border: `1px solid ${C.violet}45` }}
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold">
+                        ✓ Answered
+                      </span>
+                    ) : submission.is_correct ? (
                       <span style={{ background: `${C.go}25`, color: C.go, border: `1px solid ${C.go}40` }}
                         className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold">
                         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
                         Correct
                       </span>
-                    )}
-                    {!row.waiting && row.status === 'incorrect' && (
+                    ) : (
                       <span style={{ background: `${C.stop}20`, color: C.stop, border: `1px solid ${C.stop}35` }}
                         className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold">
                         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M9 3L3 9M3 3l6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
                         Incorrect
                       </span>
                     )}
-                    {isReview && (
-                      <>
-                        <button style={{ background: C.go, color: 'white' }}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold hover:opacity-90 transition-opacity shrink-0">
-                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="white" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                          Accept
-                        </button>
-                        <button style={{ background: C.stop, color: 'white' }}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold hover:opacity-90 transition-opacity shrink-0">
-                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M9 3L3 9M3 3l6 6" stroke="white" strokeWidth="1.6" strokeLinecap="round"/></svg>
-                          Reject
-                        </button>
-                      </>
-                    )}
                   </div>
                 </div>
               )
             })}
+
+            {teams.length === 0 && (
+              <div className="px-4 py-8 text-center">
+                <p style={{ color: C.liveDim }} className="text-sm">No teams are in this game yet.</p>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Right: Leaderboard + Controls */}
         <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 280 }}
           className="flex flex-col shrink-0">
-          {/* Leaderboard */}
           <div className="flex-1 p-5 overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
               <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest">Leaderboard</p>
               <p style={{ color: C.liveDim }} className="text-[10px] font-mono">pts = questions correct</p>
             </div>
             <div className="space-y-1">
-              {LB.map((t, i) => (
-                <div key={t.name}
+              {leaderboard.map((team, i) => (
+                <div key={team.id}
                   style={{ background: i === 0 ? `${C.violet}20` : 'transparent' }}
                   className="flex items-center gap-3 p-2.5 rounded-xl">
                   <div style={{
@@ -2053,24 +2298,24 @@ function LiveQuestion({ go }: { go: Go }) {
                     {i + 1}
                   </div>
                   <span style={{ color: i === 0 ? C.liveText : `${C.liveText}99` }}
-                    className={`text-sm flex-1 truncate ${i === 0 ? 'font-bold' : 'font-medium'}`}>{t.name}</span>
+                    className={`text-sm flex-1 truncate ${i === 0 ? 'font-bold' : 'font-medium'}`}>{team.name}</span>
                   <span style={{ color: i === 0 ? C.liveText : `${C.liveText}99` }}
-                    className="text-sm font-bold tabular-nums">{t.score} <span style={{ color: C.liveDim }} className="text-[10px] font-normal">pts</span></span>
+                    className="text-sm font-bold tabular-nums">{team.score} <span style={{ color: C.liveDim }} className="text-[10px] font-normal">pts</span></span>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Controls */}
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="p-5 shrink-0">
             {phase === 'open' && (
               <div className="space-y-3">
                 <p style={{ color: C.liveDim }} className="text-[11px] text-center font-semibold uppercase tracking-widest">Accepting answers…</p>
                 <button
-                  onClick={() => setPhase('closed')}
+                  onClick={handleCloseAnswers}
+                  disabled={actionBusy}
                   style={{ border: `2px solid ${C.liveLine}`, color: C.liveText, background: C.livePanel }}
-                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:border-violet hover:text-violet transition-all active:scale-[0.98]">
-                  Close Answers
+                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:border-violet hover:text-violet transition-all active:scale-[0.98] disabled:opacity-50">
+                  {actionBusy ? 'Closing…' : 'Close Answers'}
                 </button>
               </div>
             )}
@@ -2078,11 +2323,12 @@ function LiveQuestion({ go }: { go: Go }) {
               <div className="space-y-3">
                 <p style={{ color: C.caution }} className="text-[11px] text-center font-semibold uppercase tracking-widest">Answers closed — ready to reveal</p>
                 <button
-                  onClick={() => setPhase('revealed')}
+                  onClick={handleRevealAnswer}
+                  disabled={actionBusy}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
-                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98]">
-                  Reveal Answer
-                  <span className="block text-sm font-semibold opacity-80 mt-0.5">& Apply Points</span>
+                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
+                  {actionBusy ? 'Revealing…' : 'Reveal Answer'}
+                  {!actionBusy && <span className="block text-sm font-semibold opacity-80 mt-0.5">& Apply Points</span>}
                 </button>
               </div>
             )}
@@ -2094,8 +2340,8 @@ function LiveQuestion({ go }: { go: Go }) {
                     <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                     Answer Revealed
                   </div>
-                  <p style={{ color: C.liveText }} className="font-extrabold text-base">Canada</p>
-                  <p style={{ color: C.liveDim }} className="text-[11px] mt-0.5">Points applied to all teams</p>
+                  <p style={{ color: C.liveText }} className="font-extrabold text-base">{LIVE_CORRECT_ANSWER}</p>
+                  <p style={{ color: C.liveDim }} className="text-[11px] mt-0.5">Points applied to all submitted answers</p>
                 </div>
                 <button
                   onClick={() => go('end-of-round')}
