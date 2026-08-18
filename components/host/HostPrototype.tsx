@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase/client";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -40,15 +41,6 @@ const QUIZZES = [
   { id: 4, title: 'Music Through the Decades', rounds: 4, questions: 20, mins: 55, edited: '1 week ago', status: 'Draft' },
 ]
 
-const TEAMS = [
-  'Trivia Newton John',
-  'Quizteama Aguilera',
-  'Norfolk & Chance',
-  'The Know-It-Alls',
-  'Risky Quizness',
-  'Quiz Khalifa',
-  'I Am Smarticus',
-]
 
 const LB = [
   { name: 'Trivia Newton John', score: 48, delta: 3 },
@@ -1604,7 +1596,87 @@ function SCard({ title, children }: { title: string; children: React.ReactNode }
 
 // ─── SCREEN 8: LOBBY ──────────────────────────────────────────────────────────
 
+type LobbyTeam = {
+  id: string
+  name: string
+}
+
 function Lobby({ go }: { go: Go }) {
+  const [teams, setTeams] = useState<LobbyTeam[]>([])
+  const [lobbyError, setLobbyError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    let channel: ReturnType<typeof supabase.channel> | null = null
+
+    async function setupLobby() {
+      setLobbyError(null)
+
+      const { data: game, error: gameError } = await supabase
+        .from("games")
+        .select("id")
+        .eq("code", "728461")
+        .maybeSingle()
+
+      if (!active) return
+
+      if (gameError || !game) {
+        console.error("Could not find lobby game:", gameError)
+        setLobbyError("Could not load this lobby.")
+        return
+      }
+
+      const { data, error } = await supabase
+        .from("teams")
+        .select("id, name")
+        .eq("game_id", game.id)
+        .order("created_at", { ascending: true })
+
+      if (!active) return
+
+      if (error) {
+        console.error("Could not load teams:", error)
+        setLobbyError("Could not load teams.")
+      } else {
+        setTeams(data ?? [])
+      }
+
+      channel = supabase
+        .channel(`lobby-teams-${game.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "teams",
+            filter: `game_id=eq.${game.id}`,
+          },
+          (payload) => {
+            const newTeam = payload.new as LobbyTeam
+
+            setTeams((current) => {
+              if (current.some((team) => team.id === newTeam.id)) {
+                return current
+              }
+
+              return [...current, newTeam]
+            })
+          }
+        )
+        .subscribe()
+    }
+
+    void setupLobby()
+
+    return () => {
+      active = false
+
+      if (channel) {
+        void supabase.removeChannel(channel)
+      }
+    }
+  }, [])
+
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
       <header style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }}
@@ -1661,19 +1733,31 @@ function Lobby({ go }: { go: Go }) {
               <h2 style={{ color: C.ink }} className="font-extrabold">Teams Joined</h2>
               <div className="flex items-center gap-2">
                 <span style={{ background: C.go }} className="w-2 h-2 rounded-full animate-pulse inline-block" />
-                <span style={{ color: C.ink }} className="font-bold text-lg">{TEAMS.length}</span>
+                <span style={{ color: C.ink }} className="font-bold text-lg">{teams.length}</span>
                 <span style={{ color: C.sub }} className="text-sm">teams</span>
               </div>
             </div>
+            {lobbyError && (
+              <div style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}
+                className="rounded-xl px-3 py-2.5 mb-3">
+                <p style={{ color: C.stop }} className="text-xs font-semibold">{lobbyError}</p>
+              </div>
+            )}
             <div className="space-y-2 mb-6">
-              {TEAMS.map((t, i) => (
-                <div key={t} style={{ background: C.panel, border: `1px solid ${C.line}` }}
+              {teams.length === 0 && !lobbyError && (
+                <div style={{ background: C.panel, border: `1px dashed ${C.line}` }}
+                  className="rounded-xl px-4 py-5 text-center">
+                  <p style={{ color: C.sub }} className="text-sm">Waiting for teams to join…</p>
+                </div>
+              )}
+              {teams.map((t, i) => (
+                <div key={t.id} style={{ background: C.panel, border: `1px solid ${C.line}` }}
                   className="flex items-center gap-3 p-3 rounded-xl">
                   <div style={{ background: C.violetPale, color: C.violet }}
                     className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 font-mono">
                     {i + 1}
                   </div>
-                  <span style={{ color: C.ink }} className="text-sm font-semibold flex-1 truncate">{t}</span>
+                  <span style={{ color: C.ink }} className="text-sm font-semibold flex-1 truncate">{t.name}</span>
                   <span style={{ background: C.go }} className="w-2 h-2 rounded-full shrink-0" />
                 </div>
               ))}
