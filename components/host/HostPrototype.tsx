@@ -1642,11 +1642,22 @@ function Lobby({ go }: { go: Go }) {
         throw gameError ?? new Error('Game not found')
       }
 
+      const { data: firstQuestion, error: questionError } = await supabase
+        .from('game_questions')
+        .select('question_key')
+        .eq('game_id', game.id)
+        .order('position', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+
+      if (questionError || !firstQuestion) {
+        throw questionError ?? new Error('No questions found for this game')
+      }
+
       const { error: clearError } = await supabase
         .from('submissions')
         .delete()
         .eq('game_id', game.id)
-        .eq('question_key', 'q1')
 
       if (clearError) throw clearError
 
@@ -1659,9 +1670,9 @@ function Lobby({ go }: { go: Go }) {
 
       await updateLiveGame({
         status: 'live',
-        current_screen: 'single-answer',
+        current_screen: 'round-start',
         answer_phase: 'open',
-        current_question_key: 'q1',
+        current_question_key: firstQuestion.question_key,
       })
 
       go('live-question')
@@ -1846,7 +1857,7 @@ function Lobby({ go }: { go: Go }) {
 }
 
 // ─── SCREEN 9: LIVE QUESTION ──────────────────────────────────────────────────
-// Dark operational mode — the host is on stage
+// Dark operational mode — now backed by the live question sequence in Supabase.
 
 type LiveTeam = {
   id: string
@@ -1862,19 +1873,134 @@ type LiveSubmission = {
   points_awarded: number
 }
 
-const LIVE_QUESTION_KEY = 'q1'
-const LIVE_CORRECT_ANSWER = 'Canada'
+type LiveQuestionDefinition = {
+  question_key: string
+  position: number
+  round_number: number
+  round_position: number
+  round_question_count: number
+  round_title: string
+  prompt: string
+  category: string | null
+  difficulty: string | null
+  question_type: string
+  correct_answer: unknown
+  options: unknown
+  image_url: string | null
+  points_max: number
+  notes: string | null
+}
 
 function normaliseTriviaAnswer(value: string) {
   return value.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 }
 
+function parseStoredAnswer(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(item => String(item)) : []
+}
+
+function questionOptions(value: unknown): { key?: string; label?: string; clue?: string }[] {
+  return Array.isArray(value) ? value.filter(item => item && typeof item === 'object') as { key?: string; label?: string; clue?: string }[] : []
+}
+
+function correctAnswerDisplay(question: LiveQuestionDefinition | null) {
+  if (!question) return '—'
+
+  if (question.question_type === 'multiple-choice') {
+    const key = String(question.correct_answer ?? '')
+    const match = questionOptions(question.options).find(option => option.key === key)
+    return match?.label ? `${key} · ${match.label}` : key
+  }
+
+  if (Array.isArray(question.correct_answer)) {
+    return question.correct_answer.map(item => String(item)).join(' · ')
+  }
+
+  return String(question.correct_answer ?? '—')
+}
+
+function submissionDisplay(question: LiveQuestionDefinition | null, answerText: string) {
+  if (!question) return answerText
+  const parsed = parseStoredAnswer(answerText)
+
+  if (question.question_type === 'multiple-choice') {
+    const key = String(parsed ?? '')
+    const match = questionOptions(question.options).find(option => option.key === key)
+    return match?.label ? `${key} · ${match.label}` : key
+  }
+
+  if (Array.isArray(parsed)) {
+    return parsed.map(item => String(item)).join(' · ')
+  }
+
+  return String(parsed ?? '')
+}
+
+function scoreSubmission(question: LiveQuestionDefinition, answerText: string) {
+  const parsed = parseStoredAnswer(answerText)
+  const max = Math.max(1, question.points_max || 1)
+
+  if (question.question_type === 'single-answer' || question.question_type === 'image-question') {
+    const correct = normaliseTriviaAnswer(String(question.correct_answer ?? ''))
+    const submitted = normaliseTriviaAnswer(String(parsed ?? ''))
+    const points = submitted && submitted === correct ? 1 : 0
+    return { points, max }
+  }
+
+  if (question.question_type === 'multiple-choice') {
+    const points = String(parsed ?? '') === String(question.correct_answer ?? '') ? 1 : 0
+    return { points, max }
+  }
+
+  if (question.question_type === 'multi-answer') {
+    const submitted = asStringArray(parsed).map(normaliseTriviaAnswer)
+    const correct = asStringArray(question.correct_answer).map(normaliseTriviaAnswer)
+    const remaining = [...submitted]
+    let points = 0
+
+    for (const expected of correct) {
+      const index = remaining.findIndex(value => value === expected)
+      if (index >= 0) {
+        points += 1
+        remaining.splice(index, 1)
+      }
+    }
+
+    return { points: Math.min(points, max), max }
+  }
+
+  if (question.question_type === 'multi-part' || question.question_type === 'ranking') {
+    const submitted = asStringArray(parsed).map(normaliseTriviaAnswer)
+    const correct = asStringArray(question.correct_answer).map(normaliseTriviaAnswer)
+    let points = 0
+
+    for (let i = 0; i < correct.length; i += 1) {
+      if (submitted[i] && submitted[i] === correct[i]) points += 1
+    }
+
+    return { points: Math.min(points, max), max }
+  }
+
+  return { points: 0, max }
+}
+
 function LiveQuestion({ go }: { go: Go }) {
   const [phase, setPhase] = useState<'open' | 'closed' | 'revealed'>('open')
+  const [gameScreen, setGameScreen] = useState('round-start')
   const [emergency, setEmergency] = useState(false)
   const [liveGameId, setLiveGameId] = useState<string | null>(null)
   const [teams, setTeams] = useState<LiveTeam[]>([])
   const [submissions, setSubmissions] = useState<LiveSubmission[]>([])
+  const [question, setQuestion] = useState<LiveQuestionDefinition | null>(null)
+  const [allQuestions, setAllQuestions] = useState<LiveQuestionDefinition[]>([])
   const [liveError, setLiveError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
 
@@ -1885,7 +2011,7 @@ function LiveQuestion({ go }: { go: Go }) {
     async function loadLiveData() {
       const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('id, answer_phase')
+        .select('id, answer_phase, current_question_key, current_screen')
         .eq('code', LIVE_GAME_CODE)
         .maybeSingle()
 
@@ -1898,35 +2024,61 @@ function LiveQuestion({ go }: { go: Go }) {
       }
 
       setLiveGameId(game.id)
+      setGameScreen(game.current_screen ?? '')
 
       if (game.answer_phase === 'open' || game.answer_phase === 'closed' || game.answer_phase === 'revealed') {
         setPhase(game.answer_phase)
       }
 
-      const [{ data: teamRows, error: teamError }, { data: submissionRows, error: submissionError }] = await Promise.all([
+      const [{ data: questionRows, error: questionError }, { data: teamRows, error: teamError }] = await Promise.all([
+        supabase
+          .from('game_questions')
+          .select('question_key, position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
+          .eq('game_id', game.id)
+          .order('position', { ascending: true }),
         supabase
           .from('teams')
           .select('id, name, score')
           .eq('game_id', game.id)
           .order('created_at', { ascending: true }),
-        supabase
-          .from('submissions')
-          .select('id, team_id, answer_text, is_correct, points_awarded')
-          .eq('game_id', game.id)
-          .eq('question_key', LIVE_QUESTION_KEY)
-          .order('created_at', { ascending: true }),
       ])
 
       if (!active) return
 
-      if (teamError || submissionError) {
-        console.error('Could not load live question data:', teamError ?? submissionError)
-        setLiveError('Could not load team answers.')
+      if (questionError || teamError) {
+        console.error('Could not load live question data:', questionError ?? teamError)
+        setLiveError('Could not load the live question.')
         return
       }
 
-      setTeams(teamRows ?? [])
-      setSubmissions(submissionRows ?? [])
+      const questions = (questionRows ?? []) as LiveQuestionDefinition[]
+      const currentQuestion = questions.find(item => item.question_key === game.current_question_key) ?? questions[0] ?? null
+
+      setAllQuestions(questions)
+      setQuestion(currentQuestion)
+      setTeams((teamRows ?? []) as LiveTeam[])
+
+      if (currentQuestion) {
+        const { data: submissionRows, error: submissionError } = await supabase
+          .from('submissions')
+          .select('id, team_id, answer_text, is_correct, points_awarded')
+          .eq('game_id', game.id)
+          .eq('question_key', currentQuestion.question_key)
+          .order('created_at', { ascending: true })
+
+        if (!active) return
+
+        if (submissionError) {
+          console.error('Could not load team answers:', submissionError)
+          setLiveError('Could not load team answers.')
+          return
+        }
+
+        setSubmissions((submissionRows ?? []) as LiveSubmission[])
+      } else {
+        setSubmissions([])
+      }
+
       setLiveError(null)
 
       if (!channel) {
@@ -1934,32 +2086,17 @@ function LiveQuestion({ go }: { go: Go }) {
           .channel(`host-live-question-${game.id}`)
           .on(
             'postgres_changes',
-            {
-              event: '*',
-              schema: 'public',
-              table: 'submissions',
-              filter: `game_id=eq.${game.id}`,
-            },
+            { event: '*', schema: 'public', table: 'submissions', filter: `game_id=eq.${game.id}` },
             () => { void loadLiveData() },
           )
           .on(
             'postgres_changes',
-            {
-              event: 'UPDATE',
-              schema: 'public',
-              table: 'teams',
-              filter: `game_id=eq.${game.id}`,
-            },
+            { event: 'UPDATE', schema: 'public', table: 'teams', filter: `game_id=eq.${game.id}` },
             () => { void loadLiveData() },
           )
           .on(
             'postgres_changes',
-            {
-              event: 'UPDATE',
-              schema: 'public',
-              table: 'games',
-              filter: `id=eq.${game.id}`,
-            },
+            { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${game.id}` },
             () => { void loadLiveData() },
           )
           .subscribe()
@@ -1970,15 +2107,34 @@ function LiveQuestion({ go }: { go: Go }) {
 
     return () => {
       active = false
-      if (channel) {
-        void supabase.removeChannel(channel)
-      }
+      if (channel) void supabase.removeChannel(channel)
     }
   }, [])
 
+  async function handleOpenQuestion() {
+    if (!question || actionBusy) return
+    setActionBusy(true)
+    setLiveError(null)
+
+    try {
+      await updateLiveGame({
+        status: 'live',
+        current_screen: question.question_type,
+        answer_phase: 'open',
+        current_question_key: question.question_key,
+      })
+      setGameScreen(question.question_type)
+      setPhase('open')
+    } catch (error) {
+      console.error('Could not open question:', error)
+      setLiveError('Could not open the question. Please try again.')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
   async function handleCloseAnswers() {
     if (!liveGameId || actionBusy) return
-
     setActionBusy(true)
     setLiveError(null)
 
@@ -1998,55 +2154,48 @@ function LiveQuestion({ go }: { go: Go }) {
   }
 
   async function handleRevealAnswer() {
-    if (!liveGameId || actionBusy) return
-
+    if (!liveGameId || !question || actionBusy) return
     setActionBusy(true)
     setLiveError(null)
 
     try {
       const [{ data: freshTeams, error: teamError }, { data: freshSubmissions, error: submissionError }] = await Promise.all([
-        supabase
-          .from('teams')
-          .select('id, score')
-          .eq('game_id', liveGameId),
+        supabase.from('teams').select('id, score').eq('game_id', liveGameId),
         supabase
           .from('submissions')
-          .select('id, team_id, answer_text, is_correct')
+          .select('id, team_id, answer_text, is_correct, points_awarded')
           .eq('game_id', liveGameId)
-          .eq('question_key', LIVE_QUESTION_KEY),
+          .eq('question_key', question.question_key),
       ])
 
-      if (teamError || submissionError) {
-        throw teamError ?? submissionError
-      }
+      if (teamError || submissionError) throw teamError ?? submissionError
 
-      const scoreByTeam = new Map<string, number>(((freshTeams ?? []) as { id: string; score: number }[]).map(team => [team.id, team.score]))
+      const scoreByTeam = new Map<string, number>(
+        ((freshTeams ?? []) as { id: string; score: number }[]).map(team => [team.id, team.score]),
+      )
 
-      for (const submission of (freshSubmissions ?? []) as { id: string; team_id: string; answer_text: string; is_correct: boolean | null }[]) {
+      for (const submission of (freshSubmissions ?? []) as LiveSubmission[]) {
         if (submission.is_correct !== null) continue
 
-        const isCorrect =
-          normaliseTriviaAnswer(submission.answer_text) === normaliseTriviaAnswer(LIVE_CORRECT_ANSWER)
+        const result = scoreSubmission(question, submission.answer_text)
+        const fullyCorrect = result.points === result.max
 
         const { error: markError } = await supabase
           .from('submissions')
-          .update({
-            is_correct: isCorrect,
-            points_awarded: isCorrect ? 1 : 0,
-          })
+          .update({ is_correct: fullyCorrect, points_awarded: result.points })
           .eq('id', submission.id)
 
         if (markError) throw markError
 
-        if (isCorrect) {
+        if (result.points > 0) {
           const currentScore = scoreByTeam.get(submission.team_id) ?? 0
           const { error: scoreError } = await supabase
             .from('teams')
-            .update({ score: currentScore + 1 })
+            .update({ score: currentScore + result.points })
             .eq('id', submission.team_id)
 
           if (scoreError) throw scoreError
-          scoreByTeam.set(submission.team_id, currentScore + 1)
+          scoreByTeam.set(submission.team_id, currentScore + result.points)
         }
       }
 
@@ -2056,7 +2205,6 @@ function LiveQuestion({ go }: { go: Go }) {
         .eq('id', liveGameId)
 
       if (phaseError) throw phaseError
-
       setPhase('revealed')
     } catch (error) {
       console.error('Could not reveal answer:', error)
@@ -2066,17 +2214,64 @@ function LiveQuestion({ go }: { go: Go }) {
     }
   }
 
+  async function handleAdvance() {
+    if (!question || actionBusy) return
+    setActionBusy(true)
+    setLiveError(null)
+
+    try {
+      const nextQuestion = allQuestions.find(item => item.position > question.position) ?? null
+
+      if (!nextQuestion) {
+        await updateLiveGame({
+          status: 'finished',
+          current_screen: 'final-result',
+          answer_phase: 'revealed',
+          current_question_key: question.question_key,
+        })
+        go('final-results')
+        return
+      }
+
+      if (nextQuestion.round_number !== question.round_number) {
+        await updateLiveGame({
+          current_screen: 'round-results',
+          answer_phase: 'closed',
+          current_question_key: question.question_key,
+        })
+        go('end-of-round')
+        return
+      }
+
+      await updateLiveGame({
+        current_screen: nextQuestion.question_type,
+        answer_phase: 'open',
+        current_question_key: nextQuestion.question_key,
+      })
+      setQuestion(nextQuestion)
+      setPhase('open')
+      setGameScreen(nextQuestion.question_type)
+      setSubmissions([])
+    } catch (error) {
+      console.error('Could not advance the game:', error)
+      setLiveError('Could not advance the game. Please try again.')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
   const submissionByTeam = new Map(submissions.map(submission => [submission.team_id, submission]))
-  const answerRows = teams.map(team => ({
-    team,
-    submission: submissionByTeam.get(team.id) ?? null,
-  }))
+  const answerRows = teams.map(team => ({ team, submission: submissionByTeam.get(team.id) ?? null }))
   const answeredCount = answerRows.filter(row => row.submission).length
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+  const totalRounds = Math.max(1, ...allQuestions.map(item => item.round_number))
+  const nextQuestion = question ? allQuestions.find(item => item.position > question.position) ?? null : null
+  const nextIsNewRound = !!question && !!nextQuestion && nextQuestion.round_number !== question.round_number
+  const isFinalQuestion = !!question && !nextQuestion
+  const correctDisplay = correctAnswerDisplay(question)
 
   return (
     <div style={{ background: C.liveBg, color: C.liveText }} className="h-screen flex flex-col overflow-hidden">
-      {/* Live top bar */}
       <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }}
         className="flex items-center px-6 gap-4 shrink-0">
         <div className="flex items-center gap-2 shrink-0">
@@ -2089,34 +2284,29 @@ function LiveQuestion({ go }: { go: Go }) {
           <span style={{ color: C.liveDim }} className="font-bold text-sm">Simple Trivia</span>
         </div>
         <div className="flex-1 flex items-center justify-center gap-4 text-sm">
-          <span style={{ color: C.liveDim }}>Round 2 of 6</span>
+          <span style={{ color: C.liveDim }}>Round {question?.round_number ?? 1} of {totalRounds}</span>
           <span style={{ color: C.liveLine }}>·</span>
-          <span style={{ color: C.liveText }} className="font-bold">Question 3 of 5</span>
+          <span style={{ color: C.liveText }} className="font-bold">
+            Question {question?.round_position ?? 1} of {question?.round_question_count ?? 1}
+          </span>
           <span style={{ color: C.liveLine }}>·</span>
-          <span style={{ color: C.liveDim }}>Friday Night Trivia</span>
+          <span style={{ color: C.liveDim }}>{question?.round_title ?? 'Friday Night Trivia'}</span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <div className="relative">
             <button onClick={() => setEmergency(e => !e)}
               style={{ border: `1px solid ${C.liveLine}`, color: C.liveDim }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold hover:border-caution hover:text-caution transition-colors">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M6 3.5v3M6 8v.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
               Controls
             </button>
             {emergency && (
               <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, right: 0, top: '100%', marginTop: 6, width: 200, zIndex: 50 }}
                 className="absolute rounded-xl shadow-2xl p-2 space-y-0.5">
                 <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest px-2 py-1">Game Controls</p>
-                {[
-                  { label: 'Pause Game', icon: '⏸' },
-                  { label: 'Reopen Answers', icon: '↩' },
-                  { label: 'Go Back to Previous', icon: '←' },
-                ].map(item => (
-                  <button key={item.label} onClick={() => setEmergency(false)}
-                    style={{ color: C.liveText }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold hover:bg-live-surface transition-colors text-left">
-                    <span className="text-base leading-none">{item.icon}</span>
-                    {item.label}
+                {['Pause Game', 'Reopen Answers', 'Go Back to Previous'].map(label => (
+                  <button key={label} onClick={() => setEmergency(false)} style={{ color: C.liveText }}
+                    className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold hover:bg-live-surface transition-colors text-left">
+                    {label}
                   </button>
                 ))}
               </div>
@@ -2128,25 +2318,28 @@ function LiveQuestion({ go }: { go: Go }) {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left: Question + Answers */}
         <div className="flex-1 flex flex-col px-7 py-6 overflow-y-auto gap-5 min-w-0">
-          {/* Question card */}
           <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-6 shrink-0">
-            <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">Geography · Medium</p>
+            <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">
+              {(question?.category ?? 'General')} · {question?.difficulty ?? '—'} · {question?.points_max ?? 1} pts max
+            </p>
+
+            {question?.image_url && (
+              <div style={{ background: '#fff', borderRadius: 16 }} className="h-36 mb-5 flex items-center justify-center overflow-hidden">
+                <img src={question.image_url} alt="Question image" className="max-h-28 max-w-[80%] object-contain" />
+              </div>
+            )}
+
             <p style={{ color: C.liveText }} className="text-3xl font-extrabold leading-snug mb-5">
-              Which country has the longest coastline in the world?
+              {question?.prompt ?? 'Loading question…'}
             </p>
 
             {phase !== 'revealed' ? (
               <div style={{ background: `${C.violet}12`, border: `1px dashed ${C.violet}50` }}
                 className="flex items-center gap-3 rounded-xl px-4 py-3 mb-3">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <rect x="1" y="1" width="12" height="12" rx="3" stroke={C.violet} strokeWidth="1.3" strokeDasharray="2.5 1.5"/>
-                  <path d="M4 7h6M7 4v6" stroke={C.violet} strokeWidth="1.2" strokeLinecap="round" opacity="0.6"/>
-                </svg>
                 <div className="flex-1 min-w-0">
                   <p style={{ color: `${C.violet}99` }} className="text-[10px] font-bold uppercase tracking-widest">Correct Answer · Host only</p>
-                  <p style={{ color: C.violet }} className="text-lg font-extrabold mt-0.5">{LIVE_CORRECT_ANSWER}</p>
+                  <p style={{ color: C.violet }} className="text-lg font-extrabold mt-0.5">{correctDisplay}</p>
                 </div>
                 <span style={{ color: `${C.violet}60`, border: `1px solid ${C.violet}30` }}
                   className="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide shrink-0">Not revealed</span>
@@ -2154,40 +2347,32 @@ function LiveQuestion({ go }: { go: Go }) {
             ) : (
               <div style={{ background: `${C.go}20`, border: `1.5px solid ${C.go}60` }}
                 className="flex items-center gap-3 rounded-xl px-4 py-3 mb-3">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" fill={C.go} fillOpacity="0.2"/><path d="M5 9l3 3 5-5" stroke={C.go} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
                 <div className="flex-1 min-w-0">
                   <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Correct Answer · Revealed to players</p>
-                  <p style={{ color: C.go }} className="text-xl font-extrabold mt-0.5">{LIVE_CORRECT_ANSWER}</p>
+                  <p style={{ color: C.go }} className="text-xl font-extrabold mt-0.5">{correctDisplay}</p>
                 </div>
               </div>
             )}
 
-            <div style={{ background: `${C.violet}10`, border: `1px dashed ${C.violet}40` }}
-              className="flex items-start gap-3 rounded-xl p-3.5">
-              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" className="shrink-0 mt-0.5">
-                <rect x="1" y="1" width="12" height="12" rx="3" stroke={C.violet} strokeWidth="1.3" strokeDasharray="2.5 1.5"/>
-              </svg>
-              <div>
+            {question?.notes && (
+              <div style={{ background: `${C.violet}10`, border: `1px dashed ${C.violet}40` }} className="rounded-xl p-3.5">
                 <p style={{ color: `${C.violet}80` }} className="text-[10px] font-bold uppercase tracking-widest mb-1">Notes · Host only</p>
-                <p style={{ color: `${C.liveText}99` }} className="text-sm leading-relaxed">
-                  Canada has approximately 202,080 km of coastline depending on measurement methodology.
-                </p>
+                <p style={{ color: `${C.liveText}99` }} className="text-sm leading-relaxed">{question.notes}</p>
               </div>
-            </div>
+            )}
           </div>
 
           <div style={{
-            background: phase === 'open' ? `${C.violet}20` : phase === 'closed' ? `${C.caution}20` : `${C.go}20`,
-            border: `1px solid ${phase === 'open' ? `${C.violet}40` : phase === 'closed' ? `${C.caution}40` : `${C.go}40`}`,
-            color: phase === 'open' ? C.violet : phase === 'closed' ? C.caution : C.go,
+            background: gameScreen === 'round-start' ? `${C.caution}20` : phase === 'open' ? `${C.violet}20` : phase === 'closed' ? `${C.caution}20` : `${C.go}20`,
+            border: `1px solid ${gameScreen === 'round-start' ? `${C.caution}40` : phase === 'open' ? `${C.violet}40` : phase === 'closed' ? `${C.caution}40` : `${C.go}40`}`,
+            color: gameScreen === 'round-start' ? C.caution : phase === 'open' ? C.violet : phase === 'closed' ? C.caution : C.go,
           }} className="flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-extrabold uppercase tracking-widest shrink-0">
             <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'currentColor' }} />
-            {phase === 'open' ? 'Accepting Answers' : phase === 'closed' ? 'Answers Closed' : 'Answer Revealed'}
+            {gameScreen === 'round-start' ? 'Players are on the round intro' : phase === 'open' ? 'Accepting Answers' : phase === 'closed' ? 'Answers Closed' : 'Answer Revealed'}
           </div>
 
           {liveError && (
-            <div style={{ background: `${C.stop}18`, border: `1px solid ${C.stop}45`, color: '#FCA5A5' }}
-              className="rounded-xl px-4 py-3 text-sm font-semibold">
+            <div style={{ background: `${C.stop}18`, border: `1px solid ${C.stop}45`, color: '#FCA5A5' }} className="rounded-xl px-4 py-3 text-sm font-semibold">
               {liveError}
             </div>
           )}
@@ -2196,158 +2381,105 @@ function LiveQuestion({ go }: { go: Go }) {
             <h3 style={{ color: C.liveText }} className="font-bold text-sm">Team Answers</h3>
             <div className="flex items-center gap-3">
               <div style={{ background: C.liveLine }} className="h-1.5 w-32 rounded-full overflow-hidden">
-                <div
-                  style={{
-                    width: `${teams.length ? (answeredCount / teams.length) * 100 : 0}%`,
-                    background: C.violet,
-                  }}
-                  className="h-full rounded-full"
-                />
+                <div style={{ width: `${teams.length ? (answeredCount / teams.length) * 100 : 0}%`, background: C.violet }} className="h-full rounded-full" />
               </div>
               <span style={{ color: C.liveText }} className="text-sm font-bold tabular-nums">{answeredCount} / {teams.length}</span>
               <span style={{ color: C.liveDim }} className="text-xs">answered</span>
             </div>
           </div>
 
-          <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }}
-            className="rounded-2xl overflow-hidden flex-1">
-            <div style={{
-              background: C.livePanel,
-              borderBottom: `1px solid ${C.liveLine}`,
-              color: C.liveDim,
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr 1fr',
-            }} className="text-[10px] font-bold uppercase tracking-widest px-4 py-2.5">
+          <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl overflow-hidden flex-1">
+            <div style={{ background: C.livePanel, borderBottom: `1px solid ${C.liveLine}`, color: C.liveDim, display: 'grid', gridTemplateColumns: '1fr 1.4fr 1fr' }}
+              className="text-[10px] font-bold uppercase tracking-widest px-4 py-2.5">
               <span>Team</span><span className="text-center">Answer</span><span className="text-center">Status</span>
             </div>
 
             {answerRows.map(({ team, submission }) => {
               const waiting = !submission
+              const points = submission?.points_awarded ?? 0
+              const max = question?.points_max ?? 1
               return (
-                <div key={team.id}
-                  style={{
-                    borderBottom: `1px solid ${C.liveLine}`,
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr 1fr',
-                    alignItems: 'center',
-                  }}
+                <div key={team.id} style={{ borderBottom: `1px solid ${C.liveLine}`, display: 'grid', gridTemplateColumns: '1fr 1.4fr 1fr', alignItems: 'center' }}
                   className="last:border-0 px-4 py-3 gap-3">
-
-                  <span style={{ color: waiting ? `${C.liveText}45` : `${C.liveText}90` }}
-                    className="text-sm truncate font-medium">
-                    {team.name}
+                  <span style={{ color: waiting ? `${C.liveText}45` : `${C.liveText}90` }} className="text-sm truncate font-medium">{team.name}</span>
+                  <span style={{ color: waiting ? C.liveDim : `${C.liveText}80` }} className="text-sm text-center italic truncate">
+                    {waiting ? 'Waiting…' : submissionDisplay(question, submission.answer_text)}
                   </span>
-
-                  <span style={{ color: waiting ? C.liveDim : `${C.liveText}80` }}
-                    className="text-sm text-center italic">
-                    {waiting ? 'Waiting…' : submission.answer_text}
-                  </span>
-
                   <div className="flex items-center justify-end gap-2">
                     {waiting ? (
                       <span style={{ color: C.liveDim }} className="text-xs">—</span>
                     ) : phase !== 'revealed' ? (
-                      <span style={{ background: `${C.violet}22`, color: '#C4B5FD', border: `1px solid ${C.violet}45` }}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold">
-                        ✓ Answered
-                      </span>
-                    ) : submission.is_correct ? (
-                      <span style={{ background: `${C.go}25`, color: C.go, border: `1px solid ${C.go}40` }}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                        Correct
-                      </span>
+                      <span style={{ background: `${C.violet}22`, color: '#C4B5FD', border: `1px solid ${C.violet}45` }} className="px-2.5 py-1 rounded-lg text-xs font-bold">✓ Answered</span>
+                    ) : points === max ? (
+                      <span style={{ background: `${C.go}25`, color: C.go, border: `1px solid ${C.go}40` }} className="px-2.5 py-1 rounded-lg text-xs font-bold">Correct +{points}</span>
+                    ) : points > 0 ? (
+                      <span style={{ background: `${C.caution}25`, color: C.caution, border: `1px solid ${C.caution}40` }} className="px-2.5 py-1 rounded-lg text-xs font-bold">Partial +{points}</span>
                     ) : (
-                      <span style={{ background: `${C.stop}20`, color: C.stop, border: `1px solid ${C.stop}35` }}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M9 3L3 9M3 3l6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
-                        Incorrect
-                      </span>
+                      <span style={{ background: `${C.stop}20`, color: C.stop, border: `1px solid ${C.stop}35` }} className="px-2.5 py-1 rounded-lg text-xs font-bold">Incorrect</span>
                     )}
                   </div>
                 </div>
               )
             })}
 
-            {teams.length === 0 && (
-              <div className="px-4 py-8 text-center">
-                <p style={{ color: C.liveDim }} className="text-sm">No teams are in this game yet.</p>
-              </div>
-            )}
+            {teams.length === 0 && <div className="px-4 py-8 text-center"><p style={{ color: C.liveDim }} className="text-sm">No teams are in this game yet.</p></div>}
           </div>
         </div>
 
-        {/* Right: Leaderboard + Controls */}
-        <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 280 }}
-          className="flex flex-col shrink-0">
+        <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 280 }} className="flex flex-col shrink-0">
           <div className="flex-1 p-5 overflow-y-auto">
-            <div className="flex items-center justify-between mb-3">
-              <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest">Leaderboard</p>
-              <p style={{ color: C.liveDim }} className="text-[10px] font-mono">pts = questions correct</p>
-            </div>
+            <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">Leaderboard</p>
             <div className="space-y-1">
               {leaderboard.map((team, i) => (
-                <div key={team.id}
-                  style={{ background: i === 0 ? `${C.violet}20` : 'transparent' }}
-                  className="flex items-center gap-3 p-2.5 rounded-xl">
-                  <div style={{
-                    background: i === 0 ? C.violet : C.liveLine,
-                    color: i === 0 ? 'white' : C.liveDim,
-                    width: 24, height: 24,
-                  }} className="rounded-full flex items-center justify-center text-xs font-bold shrink-0 tabular-nums">
-                    {i + 1}
-                  </div>
-                  <span style={{ color: i === 0 ? C.liveText : `${C.liveText}99` }}
-                    className={`text-sm flex-1 truncate ${i === 0 ? 'font-bold' : 'font-medium'}`}>{team.name}</span>
-                  <span style={{ color: i === 0 ? C.liveText : `${C.liveText}99` }}
-                    className="text-sm font-bold tabular-nums">{team.score} <span style={{ color: C.liveDim }} className="text-[10px] font-normal">pts</span></span>
+                <div key={team.id} style={{ background: i === 0 ? `${C.violet}20` : 'transparent' }} className="flex items-center gap-3 p-2.5 rounded-xl">
+                  <div style={{ background: i === 0 ? C.violet : C.liveLine, color: i === 0 ? 'white' : C.liveDim, width: 24, height: 24 }}
+                    className="rounded-full flex items-center justify-center text-xs font-bold shrink-0 tabular-nums">{i + 1}</div>
+                  <span style={{ color: i === 0 ? C.liveText : `${C.liveText}99` }} className={`text-sm flex-1 truncate ${i === 0 ? 'font-bold' : 'font-medium'}`}>{team.name}</span>
+                  <span style={{ color: i === 0 ? C.liveText : `${C.liveText}99` }} className="text-sm font-bold tabular-nums">{team.score}</span>
                 </div>
               ))}
             </div>
           </div>
 
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="p-5 shrink-0">
-            {phase === 'open' && (
+            {gameScreen === 'round-start' ? (
+              <div className="space-y-3">
+                <p style={{ color: C.caution }} className="text-[11px] text-center font-semibold uppercase tracking-widest">Round intro is on player phones</p>
+                <button onClick={handleOpenQuestion} disabled={actionBusy || !question}
+                  style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
+                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
+                  {actionBusy ? 'Opening…' : 'Open First Question'}
+                </button>
+              </div>
+            ) : phase === 'open' ? (
               <div className="space-y-3">
                 <p style={{ color: C.liveDim }} className="text-[11px] text-center font-semibold uppercase tracking-widest">Accepting answers…</p>
-                <button
-                  onClick={handleCloseAnswers}
-                  disabled={actionBusy}
+                <button onClick={handleCloseAnswers} disabled={actionBusy}
                   style={{ border: `2px solid ${C.liveLine}`, color: C.liveText, background: C.livePanel }}
                   className="w-full py-6 rounded-2xl text-xl font-extrabold hover:border-violet hover:text-violet transition-all active:scale-[0.98] disabled:opacity-50">
                   {actionBusy ? 'Closing…' : 'Close Answers'}
                 </button>
               </div>
-            )}
-            {phase === 'closed' && (
+            ) : phase === 'closed' ? (
               <div className="space-y-3">
                 <p style={{ color: C.caution }} className="text-[11px] text-center font-semibold uppercase tracking-widest">Answers closed — ready to reveal</p>
-                <button
-                  onClick={handleRevealAnswer}
-                  disabled={actionBusy}
+                <button onClick={handleRevealAnswer} disabled={actionBusy || !question}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
                   className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
                   {actionBusy ? 'Revealing…' : 'Reveal Answer'}
                   {!actionBusy && <span className="block text-sm font-semibold opacity-80 mt-0.5">& Apply Points</span>}
                 </button>
               </div>
-            )}
-            {phase === 'revealed' && (
+            ) : (
               <div className="space-y-3">
                 <div style={{ background: `${C.go}18`, border: `1.5px solid ${C.go}50`, borderRadius: 14 }} className="p-3 text-center">
-                  <div style={{ background: C.go, color: 'white' }}
-                    className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-widest mb-1.5">
-                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    Answer Revealed
-                  </div>
-                  <p style={{ color: C.liveText }} className="font-extrabold text-base">{LIVE_CORRECT_ANSWER}</p>
-                  <p style={{ color: C.liveDim }} className="text-[11px] mt-0.5">Points applied to all submitted answers</p>
+                  <p style={{ color: C.go }} className="font-extrabold text-base">Answer Revealed</p>
+                  <p style={{ color: C.liveDim }} className="text-[11px] mt-0.5">{correctDisplay}</p>
                 </div>
-                <button
-                  onClick={() => go('end-of-round')}
+                <button onClick={handleAdvance} disabled={actionBusy}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
-                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98]">
-                  Next Question →
+                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
+                  {actionBusy ? 'Advancing…' : isFinalQuestion ? 'Finish Game →' : nextIsNewRound ? 'End Round →' : 'Next Question →'}
                 </button>
               </div>
             )}
@@ -2362,96 +2494,157 @@ function LiveQuestion({ go }: { go: Go }) {
 
 function EndOfRound({ go }: { go: Go }) {
   const [intermission, setIntermission] = useState(false)
+  const [teams, setTeams] = useState<LiveTeam[]>([])
+  const [currentQuestion, setCurrentQuestion] = useState<LiveQuestionDefinition | null>(null)
+  const [nextQuestion, setNextQuestion] = useState<LiveQuestionDefinition | null>(null)
+  const [totalRounds, setTotalRounds] = useState(1)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+
+    async function loadRoundSummary() {
+      const { data: game, error: gameError } = await supabase
+        .from('games')
+        .select('id, current_question_key, current_screen')
+        .eq('code', LIVE_GAME_CODE)
+        .maybeSingle()
+
+      if (!active) return
+      if (gameError || !game) {
+        setError('Could not load the round summary.')
+        return
+      }
+
+      setIntermission(game.current_screen === 'intermission')
+
+      const [{ data: questionRows }, { data: teamRows }] = await Promise.all([
+        supabase
+          .from('game_questions')
+          .select('question_key, position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
+          .eq('game_id', game.id)
+          .order('position', { ascending: true }),
+        supabase
+          .from('teams')
+          .select('id, name, score')
+          .eq('game_id', game.id)
+          .order('score', { ascending: false }),
+      ])
+
+      if (!active) return
+
+      const questions = (questionRows ?? []) as LiveQuestionDefinition[]
+      const current = questions.find(item => item.question_key === game.current_question_key) ?? null
+      const next = current ? questions.find(item => item.position > current.position) ?? null : null
+
+      setCurrentQuestion(current)
+      setNextQuestion(next)
+      setTotalRounds(Math.max(1, ...questions.map(item => item.round_number)))
+      setTeams((teamRows ?? []) as LiveTeam[])
+      setError(null)
+    }
+
+    void loadRoundSummary()
+    return () => { active = false }
+  }, [])
+
+  async function toggleIntermission() {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const next = !intermission
+      await updateLiveGame({ current_screen: next ? 'intermission' : 'round-results' })
+      setIntermission(next)
+    } catch (err) {
+      console.error('Could not change intermission:', err)
+      setError('Could not change the player intermission screen.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function startNextRound() {
+    if (!nextQuestion || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await updateLiveGame({
+        status: 'live',
+        current_question_key: nextQuestion.question_key,
+        current_screen: 'round-start',
+        answer_phase: 'open',
+      })
+      go('live-question')
+    } catch (err) {
+      console.error('Could not start next round:', err)
+      setError('Could not start the next round.')
+      setBusy(false)
+    }
+  }
+
+  const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+  const roundNumber = currentQuestion?.round_number ?? 1
 
   return (
     <div style={{ background: C.ground }} className="min-h-screen flex flex-col">
       <header style={{ background: C.ink }} className="h-12 flex items-center px-6 shrink-0">
         <div className="flex items-center gap-2.5">
-          <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-              <circle cx="7" cy="5" r="2.5" fill="white"/>
-              <path d="M2 12c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="white" strokeWidth="1.4" strokeLinecap="round"/>
-            </svg>
-          </div>
+          <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold">ST</div>
           <span style={{ color: '#ffffff80' }} className="font-bold text-sm">Simple Trivia</span>
         </div>
-        <div className="flex-1 text-center">
-          <span style={{ color: '#ffffff50' }} className="text-sm">Friday Night Trivia</span>
-        </div>
+        <div className="flex-1 text-center"><span style={{ color: '#ffffff50' }} className="text-sm">Friday Night Trivia</span></div>
         <div style={{ width: 80 }} />
       </header>
 
       <main className="flex-1 max-w-2xl mx-auto w-full px-6 py-12">
         <div className="text-center mb-10">
           <div style={{ background: `${C.go}15`, color: C.go, border: `1px solid ${C.go}30` }}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-5">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M2 7l3.5 3.5 6.5-7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            Round Complete
-          </div>
-          <h1 style={{ color: C.ink }} className="text-5xl font-extrabold">Round 2 Complete</h1>
-          <p style={{ color: C.sub }} className="mt-2 text-sm">4 rounds remaining · Next up: Movies</p>
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-5">✓ Round Complete</div>
+          <h1 style={{ color: C.ink }} className="text-5xl font-extrabold">Round {roundNumber} Complete</h1>
+          <p style={{ color: C.sub }} className="mt-2 text-sm">
+            {nextQuestion ? `Next up: Round ${nextQuestion.round_number} · ${nextQuestion.round_title}` : 'That was the final round.'}
+          </p>
         </div>
 
-        {/* Leaderboard */}
+        {error && <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="rounded-xl px-4 py-3 mb-5 text-sm font-semibold">{error}</div>}
+
         <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5 mb-7">
           <p style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider mb-4">Current Standings</p>
           <div className="space-y-1.5">
-            {LB.map((t, i) => (
-              <div key={t.name}
-                style={{ background: i < 3 ? C.ground : 'transparent' }}
-                className="flex items-center gap-4 p-3 rounded-xl">
-                <div style={{
-                  background: i === 0 ? '#FEF9C3' : i === 1 ? '#F4F4F5' : i === 2 ? '#FFF7ED' : 'transparent',
-                  color: i === 0 ? '#854D0E' : i === 1 ? '#52525B' : i === 2 ? '#9A3412' : C.sub,
-                  border: i >= 3 ? `1px solid ${C.line}` : 'none',
-                  width: 32, height: 32,
-                }} className="rounded-full flex items-center justify-center text-sm font-extrabold shrink-0">
-                  {i + 1}
-                </div>
-                <span style={{ color: C.ink }} className="flex-1 text-sm font-semibold">{t.name}</span>
-                <span style={{ color: C.ink }} className="font-extrabold tabular-nums">{t.score}</span>
-                {i > 0 && (
-                  <span style={{ color: C.sub }} className="text-xs font-mono text-right flex items-baseline gap-0.5">
-                    <span>-{LB[0].score - t.score}</span>
-                    <span className="text-[9px] font-sans opacity-60">behind</span>
-                  </span>
-                )}
+            {leaderboard.map((team, i) => (
+              <div key={team.id} style={{ background: i < 3 ? C.ground : 'transparent' }} className="flex items-center gap-4 p-3 rounded-xl">
+                <div style={{ background: i === 0 ? C.violetPale : C.panel, color: i === 0 ? C.violet : C.sub, border: `1px solid ${C.line}`, width: 32, height: 32 }}
+                  className="rounded-full flex items-center justify-center text-sm font-extrabold shrink-0">{i + 1}</div>
+                <span style={{ color: C.ink }} className="flex-1 text-sm font-semibold">{team.name}</span>
+                <span style={{ color: C.ink }} className="font-extrabold tabular-nums">{team.score}</span>
               </div>
             ))}
           </div>
         </div>
 
         <div className="flex gap-3 mb-6">
-          <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={() => setIntermission(v => !v)}>
+          <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={toggleIntermission} disabled={busy}>
             {intermission ? 'Hide Intermission' : 'Take a Break'}
           </Btn>
-          <Btn sz="lg" cls="flex-1 justify-center" onClick={() => go('live-question')}>Start Round 3</Btn>
+          {nextQuestion ? (
+            <Btn sz="lg" cls="flex-1 justify-center" onClick={startNextRound} disabled={busy}>
+              Start Round {nextQuestion.round_number}
+            </Btn>
+          ) : (
+            <Btn sz="lg" cls="flex-1 justify-center" onClick={() => go('final-results')}>View Final Results</Btn>
+          )}
         </div>
 
         {intermission && (
           <div style={{ border: `2px dashed ${C.line}` }} className="rounded-2xl overflow-hidden">
-            <div style={{ background: C.ground, borderBottom: `1px solid ${C.line}` }}
-              className="text-center py-2">
-              <span style={{ color: C.sub }} className="text-xs font-semibold">Player screen preview</span>
+            <div style={{ background: C.ground, borderBottom: `1px solid ${C.line}` }} className="text-center py-2">
+              <span style={{ color: C.sub }} className="text-xs font-semibold">Player screen is now showing intermission</span>
             </div>
             <div style={{ background: C.liveBg }} className="p-14 text-center">
-              <div style={{ background: C.violet }} className="w-10 h-10 rounded-xl flex items-center justify-center mx-auto mb-4">
-                <svg width="18" height="18" viewBox="0 0 14 14" fill="none">
-                  <circle cx="7" cy="5" r="2.5" fill="white"/>
-                  <path d="M2 12c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="white" strokeWidth="1.4" strokeLinecap="round"/>
-                </svg>
-              </div>
               <h2 style={{ color: C.liveText }} className="text-2xl font-extrabold mb-2">Intermission</h2>
               <p style={{ color: C.liveDim }} className="text-sm">The next round will begin shortly.</p>
-              <div className="flex items-center justify-center gap-1.5 mt-6">
-                {[0, 1, 2].map(i => (
-                  <div key={i}
-                    style={{ background: `${C.liveDim}60`, width: 6, height: 6, animationDelay: `${i * 250}ms` }}
-                    className="rounded-full animate-pulse" />
-                ))}
-              </div>
             </div>
           </div>
         )}
@@ -2463,92 +2656,58 @@ function EndOfRound({ go }: { go: Go }) {
 // ─── SCREEN 11: FINAL RESULTS ─────────────────────────────────────────────────
 
 function FinalResults({ go }: { go: Go }) {
-  const top = LB.slice(0, 3)
-  const podium = [
-    { idx: 1, team: top[1], medal: '🥈', h: 96, bg: '#F4F4F5', txt: '#52525B', border: '#D4D4D8' },
-    { idx: 0, team: top[0], medal: '🥇', h: 140, bg: '#FEF9C3', txt: '#854D0E', border: '#FDE68A' },
-    { idx: 2, team: top[2], medal: '🥉', h: 72, bg: '#FFF7ED', txt: '#9A3412', border: '#FED7AA' },
-  ]
+  const [teams, setTeams] = useState<LiveTeam[]>([])
+
+  useEffect(() => {
+    let active = true
+    async function loadFinal() {
+      const { data: game } = await supabase.from('games').select('id').eq('code', LIVE_GAME_CODE).maybeSingle()
+      if (!active || !game) return
+      const { data } = await supabase.from('teams').select('id, name, score').eq('game_id', game.id).order('score', { ascending: false })
+      if (active) setTeams((data ?? []) as LiveTeam[])
+    }
+    void loadFinal()
+    return () => { active = false }
+  }, [])
+
+  const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+  const winner = leaderboard[0]
 
   return (
     <div style={{ background: C.ground }} className="min-h-screen flex flex-col">
       <header style={{ background: C.ink }} className="h-12 flex items-center px-6 shrink-0">
         <div className="flex items-center gap-2.5">
-          <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-              <circle cx="7" cy="5" r="2.5" fill="white"/>
-              <path d="M2 12c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="white" strokeWidth="1.4" strokeLinecap="round"/>
-            </svg>
-          </div>
+          <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold">ST</div>
           <span style={{ color: '#ffffff80' }} className="font-bold text-sm">Simple Trivia</span>
         </div>
-        <div className="flex-1 text-center">
-          <span style={{ color: '#ffffff50' }} className="text-sm">Friday Night Trivia</span>
-        </div>
+        <div className="flex-1 text-center"><span style={{ color: '#ffffff50' }} className="text-sm">Friday Night Trivia</span></div>
         <div style={{ width: 80 }} />
       </header>
 
       <main className="flex-1 max-w-2xl mx-auto w-full px-6 py-12">
-        <div className="text-center mb-12">
-          <div style={{ background: C.violetPale, color: C.violet }}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-4">
-            <I.star /> Game Complete
-          </div>
-          <h1 style={{ color: C.ink }} className="text-5xl font-extrabold">
-            {"What a night!"}
-          </h1>
+        <div className="text-center mb-10">
+          <div style={{ background: C.violetPale, color: C.violet }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-4">★ Game Complete</div>
+          <h1 style={{ color: C.ink }} className="text-5xl font-extrabold">What a night!</h1>
         </div>
 
-        {/* Podium */}
-        <div className="flex items-end justify-center gap-4 mb-10">
-          {podium.map(p => (
-            <div key={p.idx} className="flex flex-col items-center" style={{ width: p.idx === 0 ? 160 : 130 }}>
-              <div style={{
-                  border: `3px solid ${p.border}`, background: p.bg, color: p.txt,
-                  width: p.idx === 0 ? 64 : 52, height: p.idx === 0 ? 64 : 52, fontSize: p.idx === 0 ? 22 : 18,
-                }}
-                className="rounded-full flex items-center justify-center font-extrabold mb-2">
-                {p.idx + 1}
-              </div>
-              <p style={{ color: C.ink }} className="text-xs font-bold text-center mb-1 leading-tight px-1">{p.team.name}</p>
-              <p style={{ color: C.violet }} className={`font-extrabold tabular-nums mb-2 ${p.idx === 0 ? 'text-3xl' : 'text-2xl'}`}>
-                {p.team.score}
-              </p>
-              <div
-                style={{ height: p.h, background: p.bg, border: `1.5px solid ${p.border}`, width: '100%' }}
-                className="rounded-t-xl flex items-center justify-center text-3xl">
-                {p.medal}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Prize placements */}
-        {[
-          { place: 0, label: '1st Place', icon: '🏆', bg: '#FEF9C3', border: '#FDE68A', txt: '#854D0E', body: '#92400E', msg: "You've won a $100 venue voucher!" },
-          { place: 1, label: '2nd Place', icon: '🥈', bg: '#F4F4F5', border: '#D4D4D8', txt: '#52525B', body: '#71717A', msg: '' },
-          { place: 2, label: '3rd Place', icon: '🥉', bg: '#FFF7ED', border: '#FED7AA', txt: '#9A3412', body: '#C2410C', msg: '' },
-        ].map(p => (
-          <div key={p.place} style={{ background: p.bg, border: `1.5px solid ${p.border}` }} className="rounded-2xl p-4 mb-3">
-            <div className="flex items-center gap-2 mb-1">
-              <span>{p.icon}</span>
-              <span style={{ color: p.txt }} className="font-bold text-sm">{p.label} · {top[p.place]?.name}</span>
-            </div>
-            {p.msg && <p style={{ color: p.body }} className="text-sm">{p.msg}</p>}
+        {winner && (
+          <div style={{ background: C.violet, color: 'white' }} className="rounded-3xl p-8 text-center mb-8 shadow-xl">
+            <div className="text-4xl mb-2">🏆</div>
+            <p className="text-sm font-bold uppercase tracking-widest opacity-80">Winner</p>
+            <h2 className="text-3xl font-extrabold mt-2">{winner.name}</h2>
+            <p className="text-5xl font-black mt-3">{winner.score}</p>
+            <p className="text-sm opacity-75">points</p>
           </div>
-        ))}
+        )}
 
-        {/* Full leaderboard */}
         <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5 mb-8">
           <p style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider mb-3">Final Standings</p>
           <div style={{ borderTop: `1px solid ${C.line}` }}>
-            {LB.map((t, i) => (
-              <div key={t.name}
-                style={{ borderBottom: `1px solid ${C.line}` }}
-                className="flex items-center gap-3 py-3 last:border-0">
-                <span style={{ color: i < 3 ? C.ink : C.sub }} className={`w-5 text-center text-sm shrink-0 ${i < 3 ? 'font-extrabold' : 'font-mono'}`}>{i + 1}</span>
-                <span style={{ color: C.ink }} className="flex-1 text-sm font-semibold">{t.name}</span>
-                <span style={{ color: C.ink }} className="font-extrabold tabular-nums">{t.score}</span>
+            {leaderboard.map((team, i) => (
+              <div key={team.id} style={{ borderBottom: `1px solid ${C.line}` }} className="flex items-center gap-3 py-3 last:border-0">
+                <span style={{ color: i < 3 ? C.ink : C.sub }} className="w-5 text-center text-sm shrink-0 font-extrabold">{i + 1}</span>
+                <span style={{ color: C.ink }} className="flex-1 text-sm font-semibold">{team.name}</span>
+                <span style={{ color: C.ink }} className="font-extrabold tabular-nums">{team.score}</span>
               </div>
             ))}
           </div>
