@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -13,6 +13,100 @@ type PlayerScreen =
   | 'content-screen' | 'intermission' | 'round-results' | 'round-results-hidden'
   | 'delayed-reveal' | 'winner' | 'final-result'
   | 'reconnecting' | 'game-ended'
+
+const LIVE_PLAYER_SCREENS = new Set<PlayerScreen>([
+  'waiting',
+  'round-start',
+  'single-answer',
+  'image-question',
+  'multiple-choice',
+  'multi-answer',
+  'multi-part',
+  'ranking',
+  'submitted',
+  'no-answer',
+  'correct',
+  'incorrect',
+  'partial-correct',
+  'content-screen',
+  'intermission',
+  'round-results',
+  'round-results-hidden',
+  'delayed-reveal',
+  'winner',
+  'final-result',
+  'reconnecting',
+  'game-ended',
+])
+
+function playerScreenFromGameState(value: string | null | undefined): PlayerScreen | null {
+  if (!value) return null
+  if (value === 'lobby') return 'waiting'
+  return LIVE_PLAYER_SCREENS.has(value as PlayerScreen) ? value as PlayerScreen : null
+}
+
+function useLivePlayerSync(
+  screen: PlayerScreen,
+  setScreen: React.Dispatch<React.SetStateAction<PlayerScreen>>,
+) {
+  const joined = screen !== 'join' && screen !== 'team-setup'
+
+  useEffect(() => {
+    if (!joined) return
+
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    const teamId = localStorage.getItem('simple-trivia-team-id')
+
+    if (!gameId || !teamId) return
+
+    let active = true
+
+    const applyRemoteScreen = (currentScreen: string | null | undefined) => {
+      const next = playerScreenFromGameState(currentScreen)
+      if (active && next) {
+        setScreen(next)
+      }
+    }
+
+    async function loadGameState() {
+      const { data, error } = await supabase
+        .from('games')
+        .select('current_screen')
+        .eq('id', gameId)
+        .maybeSingle()
+
+      if (error) {
+        console.error('Could not load live game state:', error)
+        return
+      }
+
+      applyRemoteScreen(data?.current_screen)
+    }
+
+    void loadGameState()
+
+    const channel = supabase
+      .channel(`player-game-${gameId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'games',
+          filter: `id=eq.${gameId}`,
+        },
+        (payload) => {
+          applyRemoteScreen((payload.new as { current_screen?: string }).current_screen)
+        },
+      )
+      .subscribe()
+
+    return () => {
+      active = false
+      void supabase.removeChannel(channel)
+    }
+  }, [joined, setScreen])
+}
 
 // ─── PALETTE ──────────────────────────────────────────────────────────────────
 const C = {
@@ -230,6 +324,7 @@ async function handleJoin() {
 
   localStorage.setItem("simple-trivia-game-id", game.id);
   localStorage.setItem("simple-trivia-game-code", game.code);
+  localStorage.setItem("simple-trivia-game-title", game.title);
 
   go("team-setup");
 }
@@ -562,6 +657,67 @@ async function handleJoin() {
 
 // ─── SCREEN 3 — WAITING ───────────────────────────────────────────────────────
 function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
+  const [teamName, setTeamName] = useState('Your team')
+  const [gameTitle, setGameTitle] = useState('Friday Night Trivia')
+  const [gameCode, setGameCode] = useState('728461')
+  const [teamCount, setTeamCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    const storedTeamName = localStorage.getItem('simple-trivia-team-name')
+    const storedGameTitle = localStorage.getItem('simple-trivia-game-title')
+    const storedGameCode = localStorage.getItem('simple-trivia-game-code')
+
+    if (storedTeamName) setTeamName(storedTeamName)
+    if (storedGameTitle) setGameTitle(storedGameTitle)
+    if (storedGameCode) setGameCode(storedGameCode)
+
+    if (!gameId) return
+
+    let active = true
+
+    async function loadTeamCount() {
+      const { count, error } = await supabase
+        .from('teams')
+        .select('id', { count: 'exact', head: true })
+        .eq('game_id', gameId)
+
+      if (!active) return
+
+      if (error) {
+        console.error('Could not load team count:', error)
+        return
+      }
+
+      setTeamCount(count ?? 0)
+    }
+
+    void loadTeamCount()
+
+    const channel = supabase
+      .channel(`waiting-teams-${gameId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'teams',
+          filter: `game_id=eq.${gameId}`,
+        },
+        () => setTeamCount((current) => current === null ? 1 : current + 1),
+      )
+      .subscribe()
+
+    return () => {
+      active = false
+      void supabase.removeChannel(channel)
+    }
+  }, [])
+
+  const formattedCode = gameCode.length === 6
+    ? `${gameCode.slice(0, 3)} ${gameCode.slice(3)}`
+    : gameCode
+
   return (
     <div className="flex flex-col items-center justify-center px-6 py-14 text-center" style={{ minHeight: '100%' }}>
       <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 64, height: 64 }}
@@ -572,18 +728,20 @@ function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
       <h1 style={{ color: C.ink, fontSize: 32 }} className="font-black mb-2">You're in!</h1>
 
       <div style={{ background: C.violetPale, borderRadius: 18, width: '100%', maxWidth: 300, padding: '18px 24px', marginTop: 8, marginBottom: 24 }}>
-        <p style={{ color: C.violet, fontSize: 20 }} className="font-black mb-1">Trivia Newton John</p>
-        <p style={{ color: C.sub, fontSize: 14 }}>Friday Night Trivia</p>
+        <p style={{ color: C.violet, fontSize: 20 }} className="font-black mb-1">{teamName}</p>
+        <p style={{ color: C.sub, fontSize: 14 }}>{gameTitle}</p>
       </div>
 
       <WaitMsg msg="Waiting for the host to start the quiz…" />
 
-      <p style={{ color: C.sub, fontSize: 13, marginTop: 16 }}>7 teams joined</p>
+      <p style={{ color: C.sub, fontSize: 13, marginTop: 16 }}>
+        {teamCount === null ? 'Loading teams…' : `${teamCount} ${teamCount === 1 ? 'team' : 'teams'} joined`}
+      </p>
 
       <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 20, marginTop: 28, width: '100%', maxWidth: 260 }}>
         <p style={{ color: C.sub, fontSize: 12 }}>
           Game code{' '}
-          <span style={{ color: C.ink, fontWeight: 800, letterSpacing: '0.15em' }}>728 461</span>
+          <span style={{ color: C.ink, fontWeight: 800, letterSpacing: '0.15em' }}>{formattedCode}</span>
         </p>
       </div>
 
@@ -1634,6 +1792,7 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
 
 export function PlayerFlow() {
   const [screen, setScreen] = useState<PlayerScreen>('join')
+  useLivePlayerSync(screen, setScreen)
 
   function go(nextScreen: PlayerScreen) {
     setScreen(nextScreen)

@@ -10,6 +10,19 @@ type Screen =
   | 'lobby' | 'live-question' | 'end-of-round' | 'final-results'
 type Go = (s: Screen) => void
 
+const LIVE_GAME_CODE = '728461'
+
+async function updateLiveGame(values: { status?: 'lobby' | 'live' | 'finished'; current_screen?: string }) {
+  const { error } = await supabase
+    .from('games')
+    .update(values)
+    .eq('code', LIVE_GAME_CODE)
+
+  if (error) {
+    throw error
+  }
+}
+
 // ─── PALETTE ──────────────────────────────────────────────────────────────────
 const C = {
   violet: '#7C3AED',
@@ -1604,6 +1617,28 @@ type LobbyTeam = {
 function Lobby({ go }: { go: Go }) {
   const [teams, setTeams] = useState<LobbyTeam[]>([])
   const [lobbyError, setLobbyError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
+
+  async function handleStartQuiz() {
+    if (starting) return
+
+    setStarting(true)
+    setStartError(null)
+
+    try {
+      await updateLiveGame({
+        status: 'live',
+        current_screen: 'single-answer',
+      })
+
+      go('live-question')
+    } catch (error) {
+      console.error('Could not start quiz:', error)
+      setStartError('Could not start the quiz. Please try again.')
+      setStarting(false)
+    }
+  }
 
   useEffect(() => {
     let active = true
@@ -1615,7 +1650,7 @@ function Lobby({ go }: { go: Go }) {
       const { data: game, error: gameError } = await supabase
         .from("games")
         .select("id")
-        .eq("code", "728461")
+        .eq("code", LIVE_GAME_CODE)
         .maybeSingle()
 
       if (!active) return
@@ -1762,7 +1797,15 @@ function Lobby({ go }: { go: Go }) {
                 </div>
               ))}
             </div>
-            <Btn sz="lg" cls="w-full" onClick={() => go('live-question')}>Start Quiz</Btn>
+            {startError && (
+              <div style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}
+                className="rounded-xl px-3 py-2.5 mb-3">
+                <p style={{ color: C.stop }} className="text-xs font-semibold">{startError}</p>
+              </div>
+            )}
+            <Btn sz="lg" cls="w-full" onClick={handleStartQuiz} disabled={starting || teams.length === 0}>
+              {starting ? 'Starting Quiz…' : 'Start Quiz'}
+            </Btn>
           </div>
         </div>
       </main>
