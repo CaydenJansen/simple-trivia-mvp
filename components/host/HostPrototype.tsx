@@ -2,6 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import {
+  asStringArray,
+  gradingPoints,
+  multiAnswerMissing,
+  parseStoredAnswer,
+  questionOptions,
+  scoreSubmission,
+  storedSubmissionGrading,
+  type ReviewStatus,
+  type SubmissionGrading,
+} from "@/lib/trivia/grading";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -10,7 +21,33 @@ type Screen =
   | 'lobby' | 'live-question' | 'end-of-round' | 'final-results'
 type Go = (s: Screen) => void
 
-const LIVE_GAME_CODE = '728461'
+const DEMO_GAME_CODE = '728461'
+
+function getHostGameCode() {
+  if (typeof window === 'undefined') return DEMO_GAME_CODE
+  return localStorage.getItem('simple-trivia-host-game-code') || DEMO_GAME_CODE
+}
+
+function getHostGameTitle() {
+  if (typeof window === 'undefined') return 'Friday Night Trivia'
+  return localStorage.getItem('simple-trivia-host-game-title') || 'Friday Night Trivia'
+}
+
+async function generateUniqueGameCode() {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const code = String(Math.floor(100000 + Math.random() * 900000))
+    const { data, error } = await supabase
+      .from('games')
+      .select('id')
+      .eq('code', code)
+      .maybeSingle()
+
+    if (error) throw error
+    if (!data) return code
+  }
+
+  throw new Error('Could not generate a unique game code')
+}
 
 async function updateLiveGame(values: {
   status?: 'lobby' | 'live' | 'finished'
@@ -21,7 +58,7 @@ async function updateLiveGame(values: {
   const { error } = await supabase
     .from('games')
     .update(values)
-    .eq('code', LIVE_GAME_CODE)
+    .eq('code', getHostGameCode())
 
   if (error) {
     throw error
@@ -211,17 +248,80 @@ function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
 
 // ─── SCREEN 1: DASHBOARD ──────────────────────────────────────────────────────
 
+type QuizSummary = {
+  id: string
+  title: string
+  status: 'draft' | 'ready'
+  round_count: number
+  question_count: number
+  estimated_minutes: number
+  updated_at: string
+}
+
+function formatEditedAt(value: string) {
+  const date = new Date(value)
+  const diffMs = Date.now() - date.getTime()
+  const mins = Math.max(0, Math.round(diffMs / 60000))
+
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min${mins === 1 ? '' : 's'} ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  const days = Math.round(hours / 24)
+  return `${days} day${days === 1 ? '' : 's'} ago`
+}
+
 function Dashboard({ go }: { go: Go }) {
-  const [empty, setEmpty] = useState(false)
+  const [quizzes, setQuizzes] = useState<QuizSummary[]>([])
+  const [gamesHosted, setGamesHosted] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+
+    async function loadDashboard() {
+      setLoading(true)
+      setLoadError(null)
+
+      const [quizResult, gameCountResult] = await Promise.all([
+        supabase
+          .from('quizzes')
+          .select('id, title, status, round_count, question_count, estimated_minutes, updated_at')
+          .order('updated_at', { ascending: false }),
+        supabase
+          .from('games')
+          .select('id', { count: 'exact', head: true }),
+      ])
+
+      if (!active) return
+
+      if (quizResult.error) {
+        console.error('Could not load quizzes:', quizResult.error)
+        setLoadError('Could not load your quizzes.')
+      } else {
+        setQuizzes((quizResult.data ?? []) as QuizSummary[])
+      }
+
+      if (!gameCountResult.error) {
+        setGamesHosted(gameCountResult.count ?? 0)
+      }
+
+      setLoading(false)
+    }
+
+    void loadDashboard()
+    return () => { active = false }
+  }, [])
+
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
       <Nav go={go} active="My Quizzes" />
       <main className="max-w-6xl mx-auto px-6 py-10">
-        {/* Stats row */}
         <div className="flex items-center gap-4 mb-8">
           {[
-            { label: 'Quizzes', value: '4' },
-            { label: 'Games hosted', value: '23' },
+            { label: 'Quizzes', value: String(quizzes.length) },
+            { label: 'Games hosted', value: String(gamesHosted) },
           ].map(s => (
             <div key={s.label} style={{ background: C.panel, border: `1px solid ${C.line}` }}
               className="flex items-center gap-3 px-4 py-2.5 rounded-xl">
@@ -230,19 +330,22 @@ function Dashboard({ go }: { go: Go }) {
             </div>
           ))}
           <div className="flex-1" />
-          <button
-            onClick={() => setEmpty(e => !e)}
-            style={{ color: C.sub }} className="text-xs hover:text-violet transition-colors px-2">
-            {empty ? 'Show quizzes' : 'Preview empty state'}
-          </button>
           <Btn onClick={() => go('create-quiz')} sz="sm">
             <I.plus /> Create Quiz
           </Btn>
         </div>
 
-        {empty ? (
+        {loadError && (
+          <div style={{ background: '#FEF2F2', border: '1px solid #FECACA' }} className="rounded-xl px-4 py-3 mb-5">
+            <p style={{ color: C.stop }} className="text-sm font-semibold">{loadError}</p>
+          </div>
+        )}
+
+        {loading ? (
+          <div style={{ color: C.sub }} className="py-24 text-center text-sm">Loading quizzes…</div>
+        ) : quizzes.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-28 text-center">
-            <div style={{ background: C.violetPale }} className="w-18 h-18 rounded-2xl flex items-center justify-center mb-5 w-16 h-16">
+            <div style={{ background: C.violetPale }} className="w-16 h-16 rounded-2xl flex items-center justify-center mb-5">
               <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
                 <rect x="5" y="3" width="24" height="28" rx="3.5" stroke={C.violet} strokeWidth="1.8"/>
                 <path d="M11 12h12M11 17.5h8" stroke={C.violet} strokeWidth="1.8" strokeLinecap="round"/>
@@ -251,25 +354,21 @@ function Dashboard({ go }: { go: Go }) {
               </svg>
             </div>
             <h2 style={{ color: C.ink }} className="text-xl font-bold mb-2">No quizzes yet</h2>
-            <p style={{ color: C.sub }} className="text-sm max-w-[280px] mb-6 leading-relaxed">
-              Create your first quiz to get started. Build from scratch or let us generate one for you.
+            <p style={{ color: C.sub }} className="text-sm max-w-[300px] mb-6 leading-relaxed">
+              Create your first quiz, then host a fresh game session whenever you need one.
             </p>
-            <Btn onClick={() => go('create-quiz')}>
-              <I.plus /> Create Quiz
-            </Btn>
+            <Btn onClick={() => go('create-quiz')}><I.plus /> Create Quiz</Btn>
           </div>
         ) : (
           <div className="grid grid-cols-3 gap-4">
-            {QUIZZES.map(q => <QuizCard key={q.id} q={q} go={go} />)}
+            {quizzes.map(q => <QuizCard key={q.id} q={q} go={go} />)}
             <button
               onClick={() => go('create-quiz')}
               style={{ border: `2px dashed ${C.line}` }}
               className="rounded-2xl flex flex-col items-center justify-center gap-2.5 min-h-[210px] group hover:border-violet transition-colors"
             >
               <div style={{ background: C.violetMist }} className="w-10 h-10 rounded-xl flex items-center justify-center transition-colors group-hover:bg-violet-pale">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                  <path d="M9 3.5v11M3.5 9h11" stroke={C.violet} strokeWidth="2" strokeLinecap="round"/>
-                </svg>
+                <I.plus />
               </div>
               <span style={{ color: C.sub }} className="text-sm font-semibold group-hover:text-violet transition-colors">New Quiz</span>
             </button>
@@ -280,8 +379,15 @@ function Dashboard({ go }: { go: Go }) {
   )
 }
 
-function QuizCard({ q, go }: { q: typeof QUIZZES[0]; go: Go }) {
-  const ready = q.status === 'Ready'
+function QuizCard({ q, go }: { q: QuizSummary; go: Go }) {
+  const ready = q.status === 'ready'
+
+  function selectQuiz(next: Screen) {
+    localStorage.setItem('simple-trivia-selected-quiz-id', q.id)
+    localStorage.setItem('simple-trivia-selected-quiz-title', q.title)
+    go(next)
+  }
+
   return (
     <div
       style={{
@@ -293,19 +399,19 @@ function QuizCard({ q, go }: { q: typeof QUIZZES[0]; go: Go }) {
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <h3 style={{ color: C.ink }} className="font-bold text-[15px] leading-snug">{q.title}</h3>
-        <Chip color={ready ? 'ready' : 'draft'}>{q.status}</Chip>
+        <Chip color={ready ? 'ready' : 'draft'}>{ready ? 'Ready' : 'Draft'}</Chip>
       </div>
       <div style={{ color: C.sub }} className="text-sm flex items-center gap-2 mb-1">
-        <span>{q.rounds} rounds</span>
+        <span>{q.round_count} rounds</span>
         <span style={{ color: C.line }}>·</span>
-        <span>{q.questions} questions</span>
+        <span>{q.question_count} questions</span>
         <span style={{ color: C.line }}>·</span>
-        <span>~{q.mins} mins</span>
+        <span>~{q.estimated_minutes} mins</span>
       </div>
-      <p style={{ color: C.sub }} className="text-xs mb-auto pb-4">Edited {q.edited}</p>
+      <p style={{ color: C.sub }} className="text-xs mb-auto pb-4">Edited {formatEditedAt(q.updated_at)}</p>
       <div style={{ borderTop: `1px solid ${C.line}` }} className="flex items-center gap-2 pt-3.5 mt-2">
-        <Btn v="ghost" sz="sm" onClick={() => go('quiz-builder')} cls="flex-1 justify-center">Edit</Btn>
-        <Btn sz="sm" onClick={() => go('host-setup')} cls="flex-1 justify-center">Host Game</Btn>
+        <Btn v="ghost" sz="sm" onClick={() => selectQuiz('quiz-builder')} cls="flex-1 justify-center">Edit</Btn>
+        <Btn sz="sm" onClick={() => selectQuiz('host-setup')} cls="flex-1 justify-center" disabled={!ready}>Host Game</Btn>
         <button style={{ color: C.sub }} className="p-1.5 rounded-lg hover:bg-ground transition-colors"><I.menu /></button>
       </div>
     </div>
@@ -839,7 +945,7 @@ function QuestionEditor({ type: initialType, onClose }: { type: 'single' | 'mult
             <div className="px-6 pb-4">
               <div style={{ background: '#FFF7ED', border: `1.5px solid #FED7AA` }} className="rounded-xl p-4">
                 <p style={{ color: '#92400E' }} className="text-sm font-semibold mb-1">Switch to {typeLabel[pendingType!]}?</p>
-                <p style={{ color: '#B45309' }} className="text-xs mb-3">The existing answer options will be removed. This can't be undone.</p>
+                <p style={{ color: '#B45309' }} className="text-xs mb-3">The existing answer options will be removed. This can’t be undone.</p>
                 <div className="flex gap-2">
                   <button onClick={confirmTypeChange}
                     style={{ background: C.caution, color: 'white' }}
@@ -1483,6 +1589,127 @@ function HostSetup({ go }: { go: Go }) {
   const [botPrizes, setBotPrizes] = useState<PrizePlace[]>([
     initPrize(), initPrize(), initPrize(),
   ])
+  const [quiz, setQuiz] = useState<QuizSummary | null>(null)
+  const [loadingQuiz, setLoadingQuiz] = useState(true)
+  const [openingLobby, setOpeningLobby] = useState(false)
+  const [setupError, setSetupError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+
+    async function loadQuiz() {
+      setLoadingQuiz(true)
+      setSetupError(null)
+      const selectedId = localStorage.getItem('simple-trivia-selected-quiz-id')
+
+      let query = supabase
+        .from('quizzes')
+        .select('id, title, status, round_count, question_count, estimated_minutes, updated_at')
+
+      if (selectedId) {
+        query = query.eq('id', selectedId)
+      } else {
+        query = query.eq('status', 'ready').order('updated_at', { ascending: false }).limit(1)
+      }
+
+      const { data, error } = await query.maybeSingle()
+      if (!active) return
+
+      if (error || !data) {
+        console.error('Could not load selected quiz:', error)
+        setSetupError('Could not load the quiz you selected.')
+      } else {
+        setQuiz(data as QuizSummary)
+        localStorage.setItem('simple-trivia-selected-quiz-id', data.id)
+        localStorage.setItem('simple-trivia-selected-quiz-title', data.title)
+      }
+
+      setLoadingQuiz(false)
+    }
+
+    void loadQuiz()
+    return () => { active = false }
+  }, [])
+
+  async function handleOpenLobby() {
+    if (!quiz || openingLobby) return
+    setOpeningLobby(true)
+    setSetupError(null)
+
+    try {
+      const { data: questionRows, error: questionError } = await supabase
+        .from('quiz_questions')
+        .select('question_key, position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
+        .eq('quiz_id', quiz.id)
+        .order('position', { ascending: true })
+
+      if (questionError) throw questionError
+      if (!questionRows || questionRows.length === 0) throw new Error('This quiz has no questions yet')
+
+      const code = await generateUniqueGameCode()
+      const firstQuestionKey = questionRows[0].question_key
+
+      const { data: game, error: gameError } = await supabase
+        .from('games')
+        .insert({
+          code,
+          title: quiz.title,
+          status: 'lobby',
+          current_screen: 'lobby',
+          answer_phase: 'open',
+          current_question_key: firstQuestionKey,
+          quiz_id: quiz.id,
+          settings: {
+            answer_reveal: reveal,
+            leaderboard_visibility: lb,
+            top_prizes: topPrizes,
+            bottom_prizes: botPrizes,
+          },
+        })
+        .select('id, code, title')
+        .single()
+
+      if (gameError) throw gameError
+
+      const gameQuestions = questionRows.map((question) => ({
+        game_id: game.id,
+        question_key: question.question_key,
+        position: question.position,
+        round_number: question.round_number,
+        round_position: question.round_position,
+        round_question_count: question.round_question_count,
+        round_title: question.round_title,
+        prompt: question.prompt,
+        category: question.category,
+        difficulty: question.difficulty,
+        question_type: question.question_type,
+        correct_answer: question.correct_answer,
+        options: question.options,
+        image_url: question.image_url,
+        points_max: question.points_max,
+        notes: question.notes,
+      }))
+
+      const { error: copyError } = await supabase
+        .from('game_questions')
+        .insert(gameQuestions)
+
+      if (copyError) {
+        await supabase.from('games').delete().eq('id', game.id)
+        throw copyError
+      }
+
+      localStorage.setItem('simple-trivia-host-game-id', game.id)
+      localStorage.setItem('simple-trivia-host-game-code', game.code)
+      localStorage.setItem('simple-trivia-host-game-title', game.title)
+      go('lobby')
+    } catch (error) {
+      console.error('Could not open lobby:', error)
+      setSetupError(error instanceof Error ? error.message : 'Could not open the lobby.')
+    } finally {
+      setOpeningLobby(false)
+    }
+  }
 
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
@@ -1494,10 +1721,18 @@ function HostSetup({ go }: { go: Go }) {
         </button>
         <h1 style={{ color: C.ink }} className="text-3xl font-extrabold mb-1">Host a Game</h1>
         <div style={{ color: C.sub }} className="flex items-center gap-2 mb-8 text-sm">
-          <span style={{ color: C.ink }} className="font-bold">Friday Night Trivia</span>
-          <span style={{ color: C.line }}>·</span>
-          <span>30 questions · 6 rounds</span>
+          <span style={{ color: C.ink }} className="font-bold">{loadingQuiz ? 'Loading quiz…' : quiz?.title ?? 'No quiz selected'}</span>
+          {quiz && <>
+            <span style={{ color: C.line }}>·</span>
+            <span>{quiz.question_count} questions · {quiz.round_count} rounds</span>
+          </>}
         </div>
+
+        {setupError && (
+          <div style={{ background: '#FEF2F2', border: '1px solid #FECACA' }} className="rounded-xl px-4 py-3 mb-4">
+            <p style={{ color: C.stop }} className="text-sm font-semibold">{setupError}</p>
+          </div>
+        )}
 
         <div className="space-y-4">
           {/* Answer reveal */}
@@ -1596,7 +1831,10 @@ function HostSetup({ go }: { go: Go }) {
             </div>
           </SCard>
 
-          <Btn sz="lg" cls="w-full" onClick={() => go('lobby')}>Open Lobby →</Btn>
+
+          <Btn sz="lg" cls="w-full" onClick={handleOpenLobby} disabled={!quiz || openingLobby}>
+            {openingLobby ? 'Creating Game…' : 'Open Fresh Lobby →'}
+          </Btn>
         </div>
       </main>
     </div>
@@ -1620,6 +1858,8 @@ type LobbyTeam = {
 }
 
 function Lobby({ go }: { go: Go }) {
+  const [lobbyCode] = useState(() => getHostGameCode())
+  const [lobbyTitle] = useState(() => getHostGameTitle())
   const [teams, setTeams] = useState<LobbyTeam[]>([])
   const [lobbyError, setLobbyError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
@@ -1635,7 +1875,7 @@ function Lobby({ go }: { go: Go }) {
       const { data: game, error: gameError } = await supabase
         .from('games')
         .select('id')
-        .eq('code', LIVE_GAME_CODE)
+        .eq('code', lobbyCode)
         .maybeSingle()
 
       if (gameError || !game) {
@@ -1693,7 +1933,7 @@ function Lobby({ go }: { go: Go }) {
       const { data: game, error: gameError } = await supabase
         .from("games")
         .select("id")
-        .eq("code", LIVE_GAME_CODE)
+        .eq("code", lobbyCode)
         .maybeSingle()
 
       if (!active) return
@@ -1753,7 +1993,7 @@ function Lobby({ go }: { go: Go }) {
         void supabase.removeChannel(channel)
       }
     }
-  }, [])
+  }, [lobbyCode])
 
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
@@ -1778,7 +2018,7 @@ function Lobby({ go }: { go: Go }) {
 
       <main className="max-w-5xl mx-auto px-6 py-10">
         <div className="text-center mb-10">
-          <h1 style={{ color: C.ink }} className="text-3xl font-extrabold mb-1">Friday Night Trivia</h1>
+          <h1 style={{ color: C.ink }} className="text-3xl font-extrabold mb-1">{lobbyTitle}</h1>
           <p style={{ color: C.sub }} className="text-sm">Share the code or QR so teams can join on their phones.</p>
         </div>
 
@@ -1787,7 +2027,7 @@ function Lobby({ go }: { go: Go }) {
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-8 flex flex-col items-center text-center">
             <p style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-widest mb-4">Game Code</p>
             <div style={{ color: C.ink, letterSpacing: '0.2em' }} className="text-6xl font-extrabold mb-7 tabular-nums">
-              728461
+              {lobbyCode}
             </div>
             {/* QR Placeholder */}
             <div style={{ background: C.ground, border: `1px solid ${C.line}` }}
@@ -1865,20 +2105,6 @@ type LiveTeam = {
   score: number
 }
 
-type ReviewStatus = 'correct' | 'incorrect' | 'review'
-
-type ReviewItem = {
-  label?: string
-  submitted: string
-  expected?: string
-  status: ReviewStatus
-}
-
-type SubmissionGrading = {
-  items: ReviewItem[]
-  missing?: string[]
-}
-
 type LiveSubmission = {
   id: string
   team_id: string
@@ -1904,26 +2130,6 @@ type LiveQuestionDefinition = {
   image_url: string | null
   points_max: number
   notes: string | null
-}
-
-function normaliseTriviaAnswer(value: string) {
-  return value.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
-}
-
-function parseStoredAnswer(value: string): unknown {
-  try {
-    return JSON.parse(value)
-  } catch {
-    return value
-  }
-}
-
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map(item => String(item)) : []
-}
-
-function questionOptions(value: unknown): { key?: string; label?: string; clue?: string }[] {
-  return Array.isArray(value) ? value.filter(item => item && typeof item === 'object') as { key?: string; label?: string; clue?: string }[] : []
 }
 
 type HostQuestionDetail = {
@@ -1989,208 +2195,6 @@ function submissionDisplay(question: LiveQuestionDefinition | null, answerText: 
   }
 
   return String(parsed ?? '')
-}
-
-function isOneEditAway(a: string, b: string) {
-  if (!a || !b || a === b) return false
-  if (Math.abs(a.length - b.length) > 1) return false
-
-  let i = 0
-  let j = 0
-  let edits = 0
-
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      i += 1
-      j += 1
-      continue
-    }
-
-    edits += 1
-    if (edits > 1) return false
-
-    if (a.length > b.length) i += 1
-    else if (b.length > a.length) j += 1
-    else {
-      i += 1
-      j += 1
-    }
-  }
-
-  if (i < a.length || j < b.length) edits += 1
-  return edits === 1
-}
-
-function reviewStatusForPair(submitted: string, expected: string): ReviewStatus {
-  const s = normaliseTriviaAnswer(submitted)
-  const e = normaliseTriviaAnswer(expected)
-
-  if (s && s === e) return 'correct'
-  if (s && e && isOneEditAway(s, e)) return 'review'
-  return 'incorrect'
-}
-
-function buildSubmissionGrading(question: LiveQuestionDefinition, answerText: string): SubmissionGrading {
-  const parsed = parseStoredAnswer(answerText)
-
-  if (question.question_type === 'single-answer' || question.question_type === 'image-question') {
-    const submitted = String(parsed ?? '')
-    const expected = String(question.correct_answer ?? '')
-    return { items: [{ submitted, expected, status: reviewStatusForPair(submitted, expected) }] }
-  }
-
-  if (question.question_type === 'multiple-choice') {
-    const submittedKey = String(parsed ?? '')
-    const expectedKey = String(question.correct_answer ?? '')
-    const submittedOption = questionOptions(question.options).find(option => option.key === submittedKey)
-    const expectedOption = questionOptions(question.options).find(option => option.key === expectedKey)
-    return {
-      items: [{
-        submitted: submittedOption?.label ?? submittedKey,
-        expected: expectedOption?.label ?? expectedKey,
-        status: submittedKey === expectedKey ? 'correct' : 'incorrect',
-      }],
-    }
-  }
-
-  if (question.question_type === 'multi-answer') {
-    const submittedRaw = asStringArray(parsed).filter(value => normaliseTriviaAnswer(value))
-    const expectedRaw = asStringArray(question.correct_answer)
-    const remaining = expectedRaw.map(value => ({
-      value,
-      norm: normaliseTriviaAnswer(value),
-    }))
-
-    const items: ReviewItem[] = submittedRaw.map((submitted) => {
-      const norm = normaliseTriviaAnswer(submitted)
-      const exactIndex = remaining.findIndex(candidate => norm && candidate.norm === norm)
-
-      if (exactIndex >= 0) {
-        const [match] = remaining.splice(exactIndex, 1)
-        return { submitted, expected: match.value, status: 'correct' }
-      }
-
-      const nearIndex = remaining.findIndex(candidate => norm && isOneEditAway(norm, candidate.norm))
-      if (nearIndex >= 0) {
-        const [match] = remaining.splice(nearIndex, 1)
-        return { submitted, expected: match.value, status: 'review' }
-      }
-
-      return { submitted, status: 'incorrect' }
-    })
-
-    return {
-      items,
-      missing: remaining.map(candidate => candidate.value),
-    }
-  }
-
-  if (question.question_type === 'multi-part') {
-    const submitted = asStringArray(parsed)
-    const expected = asStringArray(question.correct_answer)
-    return {
-      items: expected.map((expectedValue, index) => {
-        const submittedValue = submitted[index] ?? ''
-        return {
-          label: String.fromCharCode(65 + index),
-          submitted: submittedValue,
-          expected: expectedValue,
-          status: reviewStatusForPair(submittedValue, expectedValue),
-        }
-      }),
-    }
-  }
-
-  if (question.question_type === 'ranking') {
-    const submitted = asStringArray(parsed)
-    const expected = asStringArray(question.correct_answer)
-    return {
-      items: expected.map((expectedValue, index) => ({
-        label: String(index + 1),
-        submitted: submitted[index] ?? '',
-        expected: expectedValue,
-        status: normaliseTriviaAnswer(submitted[index] ?? '') === normaliseTriviaAnswer(expectedValue)
-          ? 'correct'
-          : 'incorrect',
-      })),
-    }
-  }
-
-  return { items: [] }
-}
-
-function multiAnswerMissing(question: LiveQuestionDefinition, grading: SubmissionGrading) {
-  if (question.question_type !== 'multi-answer') return []
-
-  const expected = asStringArray(question.correct_answer)
-  const remaining = expected.map(value => ({
-    value,
-    norm: normaliseTriviaAnswer(value),
-  }))
-
-  for (const item of grading.items) {
-    if (item.status !== 'correct' && item.status !== 'review') continue
-
-    const expectedNorm = item.expected ? normaliseTriviaAnswer(item.expected) : ''
-    let matchIndex = expectedNorm
-      ? remaining.findIndex(candidate => candidate.norm === expectedNorm)
-      : -1
-
-    if (matchIndex < 0 && item.status === 'correct') {
-      const submittedNorm = normaliseTriviaAnswer(item.submitted)
-      matchIndex = remaining.findIndex(candidate => submittedNorm && candidate.norm === submittedNorm)
-    }
-
-    if (matchIndex >= 0) remaining.splice(matchIndex, 1)
-  }
-
-  const resolvedOrPending = grading.items.filter(
-    item => item.status === 'correct' || item.status === 'review',
-  ).length
-  const target = Math.max(1, question.points_max || expected.length || 1)
-  const missingCount = Math.max(0, target - resolvedOrPending)
-
-  return remaining.slice(0, missingCount).map(candidate => candidate.value)
-}
-
-function storedSubmissionGrading(question: LiveQuestionDefinition, submission: LiveSubmission): SubmissionGrading {
-  const stored = submission.grading_json
-
-  if (stored && Array.isArray(stored.items)) {
-    const grading: SubmissionGrading = {
-      items: stored.items.map((item, index) => ({
-        label: item.label ?? String(index + 1),
-        submitted: String(item.submitted ?? ''),
-        expected: item.expected === undefined ? undefined : String(item.expected),
-        status: item.status === 'correct' || item.status === 'review' ? item.status : 'incorrect',
-      })),
-    }
-
-    if (question.question_type === 'multi-answer') {
-      grading.missing = multiAnswerMissing(question, grading)
-    }
-
-    return grading
-  }
-
-  const grading = buildSubmissionGrading(question, submission.answer_text)
-  if (question.question_type === 'multi-answer') {
-    grading.missing = multiAnswerMissing(question, grading)
-  }
-  return grading
-}
-
-function gradingPoints(grading: SubmissionGrading, max: number) {
-  return Math.min(
-    grading.items.filter(item => item.status === 'correct').length,
-    Math.max(1, max || 1),
-  )
-}
-
-function scoreSubmission(question: LiveQuestionDefinition, submission: LiveSubmission) {
-  const max = Math.max(1, question.points_max || 1)
-  const grading = storedSubmissionGrading(question, submission)
-  return { grading, points: gradingPoints(grading, max), max }
 }
 
 function ReviewBadge({
@@ -2266,7 +2270,7 @@ function LiveQuestion({ go }: { go: Go }) {
       const { data: game, error: gameError } = await supabase
         .from('games')
         .select('id, answer_phase, current_question_key, current_screen')
-        .eq('code', LIVE_GAME_CODE)
+        .eq('code', getHostGameCode())
         .maybeSingle()
 
       if (!active) return
@@ -3223,7 +3227,7 @@ function EndOfRound({ go }: { go: Go }) {
       const { data: game, error: gameError } = await supabase
         .from('games')
         .select('id, current_question_key, current_screen')
-        .eq('code', LIVE_GAME_CODE)
+        .eq('code', getHostGameCode())
         .maybeSingle()
 
       if (!active) return
@@ -3376,7 +3380,7 @@ function FinalResults({ go }: { go: Go }) {
   useEffect(() => {
     let active = true
     async function loadFinal() {
-      const { data: game } = await supabase.from('games').select('id').eq('code', LIVE_GAME_CODE).maybeSingle()
+      const { data: game } = await supabase.from('games').select('id').eq('code', getHostGameCode()).maybeSingle()
       if (!active || !game) return
       const { data } = await supabase.from('teams').select('id, name, score').eq('game_id', game.id).order('score', { ascending: false })
       if (active) setTeams((data ?? []) as LiveTeam[])

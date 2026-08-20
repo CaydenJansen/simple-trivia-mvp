@@ -146,11 +146,13 @@ function useLivePlayerSync(screen: PlayerScreen, setScreen: React.Dispatch<React
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
     if (!gameId || !teamId) return
+    const activeGameId = gameId
+    const activeTeamId = teamId
 
     let active = true
 
     async function applyGameState(gameState: RemoteGameState) {
-      const next = await resolveLivePlayerScreen(gameId, teamId, gameState)
+      const next = await resolveLivePlayerScreen(activeGameId, activeTeamId, gameState)
       if (active && next) setScreen(next)
     }
 
@@ -158,7 +160,7 @@ function useLivePlayerSync(screen: PlayerScreen, setScreen: React.Dispatch<React
       const { data, error } = await supabase
         .from('games')
         .select('current_screen, answer_phase, current_question_key')
-        .eq('id', gameId)
+        .eq('id', activeGameId)
         .maybeSingle()
       if (error) return console.error('Could not load live game state:', error)
       if (data) await applyGameState(data as RemoteGameState)
@@ -183,15 +185,16 @@ function useLiveQuestionDefinition() {
   useEffect(() => {
     const gameId = localStorage.getItem('simple-trivia-game-id')
     if (!gameId) return
+    const activeGameId = gameId
     let active = true
 
     async function loadQuestion() {
-      const { data: game } = await supabase.from('games').select('current_question_key').eq('id', gameId).maybeSingle()
+      const { data: game } = await supabase.from('games').select('current_question_key').eq('id', activeGameId).maybeSingle()
       if (!active || !game?.current_question_key) return
       const { data, error } = await supabase
         .from('game_questions')
         .select('question_key, position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
-        .eq('game_id', gameId)
+        .eq('game_id', activeGameId)
         .eq('question_key', game.current_question_key)
         .maybeSingle()
       if (!active) return
@@ -530,12 +533,14 @@ function usePlayerSnapshot(): PlayerSnapshot {
     const teamId = localStorage.getItem('simple-trivia-team-id')
     const fallbackName = localStorage.getItem('simple-trivia-team-name') ?? ''
     if (!gameId || !teamId) return
+    const activeGameId = gameId
+    const activeTeamId = teamId
     let active = true
 
     async function loadSnapshot() {
       const [{ data: team }, { data: game }] = await Promise.all([
-        supabase.from('teams').select('name, score').eq('id', teamId).maybeSingle(),
-        supabase.from('games').select('current_question_key').eq('id', gameId).maybeSingle(),
+        supabase.from('teams').select('name, score').eq('id', activeTeamId).maybeSingle(),
+        supabase.from('games').select('current_question_key').eq('id', activeGameId).maybeSingle(),
       ])
       if (!active) return
 
@@ -547,14 +552,14 @@ function usePlayerSnapshot(): PlayerSnapshot {
           supabase
             .from('game_questions')
             .select('question_key, position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
-            .eq('game_id', gameId)
+            .eq('game_id', activeGameId)
             .eq('question_key', game.current_question_key)
             .maybeSingle(),
           supabase
             .from('submissions')
             .select('answer_text, is_correct, points_awarded, grading_json')
-            .eq('game_id', gameId)
-            .eq('team_id', teamId)
+            .eq('game_id', activeGameId)
+            .eq('team_id', activeTeamId)
             .eq('question_key', game.current_question_key)
             .maybeSingle(),
         ])
@@ -611,12 +616,15 @@ function useLiveLeaderboard() {
   useEffect(() => {
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const storedTeamId = localStorage.getItem('simple-trivia-team-id') ?? ''
+    // Restore this browser-owned identity after hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setTeamId(storedTeamId)
     if (!gameId) return
+    const activeGameId = gameId
     let active = true
 
     async function load() {
-      const { data } = await supabase.from('teams').select('id, name, score').eq('game_id', gameId).order('score', { ascending: false })
+      const { data } = await supabase.from('teams').select('id, name, score').eq('game_id', activeGameId).order('score', { ascending: false })
       if (active) setTeams((data ?? []) as PlayerLeaderboardTeam[])
     }
     void load()
@@ -830,6 +838,7 @@ async function handleJoin() {
     .from("games")
     .select("id, code, title, status")
     .eq("code", code)
+    .eq("status", "lobby")
     .maybeSingle();
 
   if (error) {
@@ -899,7 +908,7 @@ async function handleJoin() {
               marginTop: 12,
             }} className="px-4 py-3">
               <p style={{ color: C.stop, fontSize: 14, fontWeight: 600 }} className="text-center">
-                We couldn't find that game.
+                We couldn’t find that game.
               </p>
               <p style={{ color: C.stop, fontSize: 13, opacity: 0.8 }} className="text-center">
                 Check the code and try again.
@@ -912,7 +921,7 @@ async function handleJoin() {
           </div>
 
           <p style={{ color: C.sub, fontSize: 12, marginTop: 12 }} className="text-center">
-            Or scan your host's QR code to join instantly.
+            Or scan your host’s QR code to join instantly.
           </p>
         </div>
       </div>
@@ -980,9 +989,9 @@ async function handleJoin() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <h3 style={{ color: C.ink, fontSize: 24 }} className="font-black mb-1">What's your team name?</h3>
+        <h3 style={{ color: C.ink, fontSize: 24 }} className="font-black mb-1">What’s your team name?</h3>
         <p style={{ color: C.sub, fontSize: 15, marginBottom: 20 }}>
-          This is what you'll appear as on the leaderboard.
+          This is what you’ll appear as on the leaderboard.
         </p>
 
         <input
@@ -1052,7 +1061,7 @@ async function handleJoin() {
                   <span style={{ color: C.ink, fontSize: 15, fontWeight: 700, display: 'block' }}>
                     I already have a team PIN
                   </span>
-                  <span style={{ color: C.sub, fontSize: 13 }}>Enter it to link tonight's result</span>
+                  <span style={{ color: C.sub, fontSize: 13 }}>Enter it to link tonight’s result</span>
                 </span>
               </button>
               <button
@@ -1154,7 +1163,7 @@ async function handleJoin() {
               />
               <div style={{ background: C.violetMist, borderRadius: 12, padding: '10px 14px', marginTop: 10 }}>
                 <p style={{ color: C.sub, fontSize: 13, lineHeight: 1.5 }}>
-                  Remember this PIN — you'll use it at your next trivia night to pick up where you left off.
+                  Remember this PIN — you’ll use it at your next trivia night to pick up where you left off.
                 </p>
               </div>
               <button
@@ -1189,11 +1198,14 @@ function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
     const storedGameTitle = localStorage.getItem('simple-trivia-game-title')
     const storedGameCode = localStorage.getItem('simple-trivia-game-code')
 
+    // Restore browser-owned lobby details after hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (storedTeamName) setTeamName(storedTeamName)
     if (storedGameTitle) setGameTitle(storedGameTitle)
     if (storedGameCode) setGameCode(storedGameCode)
 
     if (!gameId) return
+    const activeGameId = gameId
 
     let active = true
 
@@ -1201,7 +1213,7 @@ function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
       const { count, error } = await supabase
         .from('teams')
         .select('id', { count: 'exact', head: true })
-        .eq('game_id', gameId)
+        .eq('game_id', activeGameId)
 
       if (!active) return
 
@@ -1246,7 +1258,7 @@ function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
         <span style={{ fontSize: 28, color: C.go }}>✓</span>
       </div>
 
-      <h1 style={{ color: C.ink, fontSize: 32 }} className="font-black mb-2">You're in!</h1>
+      <h1 style={{ color: C.ink, fontSize: 32 }} className="font-black mb-2">You’re in!</h1>
 
       <div style={{ background: C.violetPale, borderRadius: 18, width: '100%', maxWidth: 300, padding: '18px 24px', marginTop: 8, marginBottom: 24 }}>
         <p style={{ color: C.violet, fontSize: 20 }} className="font-black mb-1">{teamName}</p>
@@ -1274,14 +1286,23 @@ function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
 }
 
 // ─── SCREEN 4 — ROUND START ───────────────────────────────────────────────────
-function RoundStart({ go }: { go: (s: PlayerScreen) => void }) {
+function RoundStart() {
   const question = useLiveQuestionDefinition()
+
+  if (!question) {
+    return (
+      <div className="flex flex-col items-center justify-center px-6 text-center" style={{ minHeight: '100%' }}>
+        <WaitMsg msg="Loading round…" />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col items-center justify-center px-6 text-center" style={{ minHeight: '100%' }}>
       <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 20 }}>Starting now</p>
-      <p style={{ color: C.violet, fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Round {question?.round_number ?? 1}</p>
-      <h1 style={{ color: C.ink, fontSize: 42 }} className="font-black mb-2">{question?.round_title ?? 'Next Round'}</h1>
-      <p style={{ color: C.sub, fontSize: 16, marginBottom: 40 }}>{question?.round_question_count ?? 0} questions</p>
+      <p style={{ color: C.violet, fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Round {question.round_number}</p>
+      <h1 style={{ color: C.ink, fontSize: 42 }} className="font-black mb-2">{question.round_title}</h1>
+      <p style={{ color: C.sub, fontSize: 16, marginBottom: 40 }}>{question.round_question_count} questions</p>
       <WaitMsg msg="Waiting for the first question…" />
     </div>
   )
@@ -1380,7 +1401,11 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-answer')
 
-  useEffect(() => { setAnswers(current => Array.from({ length: count }, (_, i) => current[i] ?? '')) }, [count])
+  useEffect(() => {
+    // Resize local inputs when the live question definition arrives.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAnswers(current => Array.from({ length: count }, (_, i) => current[i] ?? ''))
+  }, [count])
   const setA = (i: number, value: string) => setAnswers(current => current.map((answer, index) => index === i ? value : answer))
   const anyFilled = answers.some(answer => answer.trim())
 
@@ -1415,7 +1440,11 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-part')
 
-  useEffect(() => { setAnswers(current => Array.from({ length: count }, (_, i) => current[i] ?? '')) }, [count])
+  useEffect(() => {
+    // Resize local inputs when the live question definition arrives.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAnswers(current => Array.from({ length: count }, (_, i) => current[i] ?? ''))
+  }, [count])
   const anyFilled = answers.some(answer => answer.trim())
 
   return (
@@ -1457,6 +1486,8 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
 
   useEffect(() => {
     const next = Array.isArray(question?.options) ? question.options.map(String) : []
+    // Reset the order when the host advances to a new live ranking question.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (next.length) setItems(next)
   }, [question?.question_key, question?.options])
 
@@ -1740,10 +1771,10 @@ function ContentScreen({ go }: { go: (s: PlayerScreen) => void }) {
           <span style={{ fontSize: 32 }}>🍺</span>
         </div>
         <h1 style={{ color: C.ink, fontSize: 28, lineHeight: 1.2 }} className="font-black mb-4">
-          Bar's open — back in 10 minutes!
+          Bar’s open — back in 10 minutes!
         </h1>
         <p style={{ color: C.sub, fontSize: 16, lineHeight: 1.6, maxWidth: 280 }}>
-          Grab a drink and we'll be back with Round 3 shortly.
+          Grab a drink and we’ll be back with Round 3 shortly.
         </p>
       </div>
     </div>
@@ -1867,7 +1898,7 @@ function Winner({ go }: { go: (s: PlayerScreen) => void }) {
         <p style={{ color: '#fff', fontSize: 52, fontWeight: 900, lineHeight: 1 }}>48</p>
         <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: 13, marginTop: 4, marginBottom: 16 }}>Final score</p>
         <div style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 16, padding: '12px 20px' }}>
-          <p style={{ color: '#fff', fontSize: 16, fontWeight: 600 }}>You've won a $100 venue voucher!</p>
+          <p style={{ color: '#fff', fontSize: 16, fontWeight: 600 }}>You’ve won a $100 venue voucher!</p>
         </div>
       </div>
 
@@ -1935,7 +1966,7 @@ function Reconnecting({ go }: { go: (s: PlayerScreen) => void }) {
             className="flex items-center justify-center mb-5">
             <span style={{ fontSize: 28, color: C.go }}>✓</span>
           </div>
-          <h1 style={{ color: C.go, fontSize: 30 }} className="font-black mb-2">You're back!</h1>
+          <h1 style={{ color: C.go, fontSize: 30 }} className="font-black mb-2">You’re back!</h1>
           <p style={{ color: C.sub, fontSize: 15 }}>Returning to the game…</p>
         </>
       ) : (
@@ -2037,7 +2068,7 @@ function RoundResultsHidden({ go }: { go: (s: PlayerScreen) => void }) {
           width: '100%',
         }}>
           <p style={{ color: C.sub, fontSize: 13, fontStyle: 'italic' }}>
-            Standings aren't being shown right now.
+            Standings aren’t being shown right now.
           </p>
         </div>
       </div>
@@ -2051,7 +2082,7 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
     case 'join':           return <JoinGame go={go} />
     case 'team-setup':     return <TeamSetup go={go} />
     case 'waiting':        return <Waiting go={go} />
-    case 'round-start':    return <RoundStart go={go} />
+    case 'round-start':    return <RoundStart />
     case 'single-answer':  return <SingleAnswer go={go} />
     case 'image-question': return <ImageQuestion go={go} />
     case 'multiple-choice':return <MultipleChoice go={go} />
