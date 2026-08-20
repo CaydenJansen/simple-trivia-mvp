@@ -73,6 +73,15 @@ type LiveContentScreenDefinition = {
   image_url: string | null
 }
 
+async function loadPlayerQuestion(gameId: string, questionKey: string) {
+  return supabase
+    .rpc('get_player_game_question', {
+      p_game_id: gameId,
+      p_question_key: questionKey,
+    })
+    .maybeSingle()
+}
+
 type PlayerLeaderboardTeam = {
   id: string
   name: string
@@ -136,12 +145,7 @@ async function resolveLivePlayerScreen(gameId: string, teamId: string, gameState
         .eq('team_id', teamId)
         .eq('question_key', questionKey)
         .maybeSingle(),
-      supabase
-        .from('game_questions')
-        .select('points_max')
-        .eq('game_id', gameId)
-        .eq('question_key', questionKey)
-        .maybeSingle(),
+      loadPlayerQuestion(gameId, questionKey),
     ])
 
     if (error) console.error('Could not check player submission:', error)
@@ -242,12 +246,7 @@ function useLiveQuestionDefinition() {
     async function loadQuestion() {
       const { data: game } = await supabase.from('games').select('current_question_key').eq('id', activeGameId).maybeSingle()
       if (!active || !game?.current_question_key) return
-      const { data, error } = await supabase
-        .from('game_questions')
-        .select('question_key, position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
-        .eq('game_id', activeGameId)
-        .eq('question_key', game.current_question_key)
-        .maybeSingle()
+      const { data, error } = await loadPlayerQuestion(activeGameId, game.current_question_key)
       if (!active) return
       if (error) return console.error('Could not load question:', error)
       setQuestion(data as LiveQuestionDefinition | null)
@@ -344,17 +343,11 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
     }
 
     const answerText = Array.isArray(value) ? JSON.stringify(value.map(item => item.trim())) : value.trim()
-    const { error } = await supabase
-      .from('submissions')
-      .upsert({
-        game_id: gameId,
-        team_id: teamId,
-        question_key: game.current_question_key || 'q1',
-        answer_text: answerText,
-        is_correct: null,
-        points_awarded: 0,
-        grading_json: null,
-      }, { onConflict: 'game_id,team_id,question_key' })
+    const { error } = await supabase.rpc('submit_player_answer', {
+      p_game_id: gameId,
+      p_team_id: teamId,
+      p_answer_text: answerText,
+    })
 
     if (error) {
       console.error('Could not submit answer:', error)
@@ -648,12 +641,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
 
       if (game?.current_question_key) {
         const [{ data: questionRow }, { data: submissionRow }] = await Promise.all([
-          supabase
-            .from('game_questions')
-            .select('question_key, position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
-            .eq('game_id', activeGameId)
-            .eq('question_key', game.current_question_key)
-            .maybeSingle(),
+          loadPlayerQuestion(activeGameId, game.current_question_key),
           supabase
             .from('submissions')
             .select('answer_text, is_correct, points_awarded, grading_json')
@@ -1098,13 +1086,10 @@ async function handleJoin() {
   }
 
   const { data: team, error } = await supabase
-    .from("teams")
-    .insert({
-      game_id: gameId,
-      name: name.trim(),
-      score: 0,
+    .rpc("join_live_game", {
+      p_game_id: gameId,
+      p_team_name: name.trim(),
     })
-    .select("id, name, score")
     .single();
 
   if (error) {

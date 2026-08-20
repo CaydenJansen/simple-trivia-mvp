@@ -364,6 +364,48 @@ export type Database = {
     }
     Views: Record<string, never>
     Functions: {
+      get_player_game_question: {
+        Args: {
+          p_game_id: string
+          p_question_key: string
+        }
+        Returns: {
+          question_key: string
+          position: number
+          round_number: number
+          round_position: number
+          round_question_count: number
+          round_title: string
+          prompt: string
+          category: string | null
+          difficulty: string | null
+          question_type: string
+          correct_answer: Json | null
+          options: Json | null
+          image_url: string | null
+          points_max: number
+          notes: string | null
+        }[]
+      }
+      join_live_game: {
+        Args: {
+          p_game_id: string
+          p_team_name: string
+        }
+        Returns: {
+          id: string
+          name: string
+          score: number
+        }[]
+      }
+      submit_player_answer: {
+        Args: {
+          p_game_id: string
+          p_team_id: string
+          p_answer_text: string
+        }
+        Returns: string
+      }
       create_game_from_quiz: {
         Args: {
           p_quiz_id: string
