@@ -1,7 +1,18 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import {
+  leaderboardVisibilityFromSettings,
+  playersSeeFinalLeaderboard,
+  type LeaderboardVisibility,
+} from "@/lib/trivia/leaderboard-visibility";
+import {
+  answerRevealModeFromSettings,
+  type AnswerRevealMode,
+} from "@/lib/trivia/answer-reveal";
+import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
+import { PLAYER_SESSION_KEYS } from "@/lib/trivia/session-recovery";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -13,6 +24,8 @@ type PlayerScreen =
   | 'content-screen' | 'intermission' | 'round-results' | 'round-results-hidden'
   | 'delayed-reveal' | 'winner' | 'final-result'
   | 'reconnecting' | 'game-ended'
+
+const PlayerDevControlsContext = createContext(false)
 
 const LIVE_PLAYER_SCREENS = new Set<PlayerScreen>([
   'waiting', 'round-start', 'single-answer', 'image-question', 'multiple-choice',
@@ -29,6 +42,7 @@ type RemoteGameState = {
   current_screen: string | null
   answer_phase: string | null
   current_question_key: string | null
+  current_content_screen_key: string | null
 }
 
 type LiveQuestionDefinition = {
@@ -47,6 +61,16 @@ type LiveQuestionDefinition = {
   image_url: string | null
   points_max: number
   notes: string | null
+}
+
+type LiveContentScreenDefinition = {
+  screen_key: string
+  item_position: number
+  round_number: number
+  round_title: string
+  title: string
+  body: string | null
+  image_url: string | null
 }
 
 type PlayerLeaderboardTeam = {
@@ -138,8 +162,12 @@ async function resolveLivePlayerScreen(gameId: string, teamId: string, gameState
   return remoteScreen
 }
 
-function useLivePlayerSync(screen: PlayerScreen, setScreen: React.Dispatch<React.SetStateAction<PlayerScreen>>) {
-  const joined = screen !== 'join' && screen !== 'team-setup'
+function useLivePlayerSync(
+  screen: PlayerScreen,
+  setScreen: React.Dispatch<React.SetStateAction<PlayerScreen>>,
+  enabled = true,
+) {
+  const joined = enabled && screen !== 'join' && screen !== 'team-setup'
 
   useEffect(() => {
     if (!joined) return
@@ -157,13 +185,22 @@ function useLivePlayerSync(screen: PlayerScreen, setScreen: React.Dispatch<React
     }
 
     async function loadGameState() {
+      if (!navigator.onLine) {
+        if (active) setScreen('reconnecting')
+        return
+      }
       const { data, error } = await supabase
         .from('games')
-        .select('current_screen, answer_phase, current_question_key')
+        .select('current_screen, answer_phase, current_question_key, current_content_screen_key')
         .eq('id', activeGameId)
         .maybeSingle()
-      if (error) return console.error('Could not load live game state:', error)
+      if (error) {
+        console.error('Could not load live game state:', error)
+        if (active) setScreen('reconnecting')
+        return
+      }
       if (data) await applyGameState(data as RemoteGameState)
+      else if (active) setScreen('game-ended')
     }
 
     void loadGameState()
@@ -173,9 +210,23 @@ function useLivePlayerSync(screen: PlayerScreen, setScreen: React.Dispatch<React
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => {
         void applyGameState(payload.new as RemoteGameState)
       })
-      .subscribe()
+      .subscribe(status => {
+        if (!active) return
+        if (status === 'SUBSCRIBED') void loadGameState()
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setScreen('reconnecting')
+      })
 
-    return () => { active = false; void supabase.removeChannel(channel) }
+    const handleOffline = () => { if (active) setScreen('reconnecting') }
+    const handleOnline = () => { if (active) void loadGameState() }
+    window.addEventListener('offline', handleOffline)
+    window.addEventListener('online', handleOnline)
+
+    return () => {
+      active = false
+      window.removeEventListener('offline', handleOffline)
+      window.removeEventListener('online', handleOnline)
+      void supabase.removeChannel(channel)
+    }
   }, [joined, setScreen])
 }
 
@@ -212,6 +263,53 @@ function useLiveQuestionDefinition() {
   }, [])
 
   return question
+}
+
+function useLiveContentScreenDefinition() {
+  const [contentScreen, setContentScreen] = useState<LiveContentScreenDefinition | null>(null)
+
+  useEffect(() => {
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    if (!gameId) return
+    const activeGameId = gameId
+    let active = true
+
+    async function loadContentScreen() {
+      const { data: game, error: gameError } = await supabase
+        .from('games')
+        .select('current_content_screen_key')
+        .eq('id', activeGameId)
+        .maybeSingle()
+
+      if (!active) return
+      if (gameError) return console.error('Could not load content-screen state:', gameError)
+      if (!game?.current_content_screen_key) {
+        setContentScreen(null)
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('game_content_screens')
+        .select('screen_key, item_position, round_number, round_title, title, body, image_url')
+        .eq('game_id', activeGameId)
+        .eq('screen_key', game.current_content_screen_key)
+        .maybeSingle()
+
+      if (!active) return
+      if (error) return console.error('Could not load live content screen:', error)
+      setContentScreen(data as LiveContentScreenDefinition | null)
+    }
+
+    void loadContentScreen()
+    const channel = supabase
+      .channel(`player-content-screen-${gameId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadContentScreen() })
+      .subscribe()
+
+    return () => { active = false; void supabase.removeChannel(channel) }
+  }, [])
+
+  return contentScreen
 }
 
 function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerScreen) {
@@ -295,6 +393,7 @@ type PlayerSnapshot = {
   questionType: PlayerScreen | null
   reviewItems: PlayerReviewItem[]
   missingAnswers: string[]
+  prizeAwards: PrizeAward[]
 }
 
 function playerReviewItemsFromJson(value: unknown): PlayerReviewItem[] {
@@ -525,7 +624,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>({
     teamName: '', score: 0, answer: '', isCorrect: null, pointsAwarded: 0, pointsMax: 1,
     prompt: '', correctAnswer: '—', roundLabel: '', questionLabel: '', questionType: null,
-    reviewItems: [], missingAnswers: [],
+    reviewItems: [], missingAnswers: [], prizeAwards: [],
   })
 
   useEffect(() => {
@@ -539,7 +638,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
 
     async function loadSnapshot() {
       const [{ data: team }, { data: game }] = await Promise.all([
-        supabase.from('teams').select('name, score').eq('id', activeTeamId).maybeSingle(),
+        supabase.from('teams').select('name, score, prize_awards').eq('id', activeTeamId).maybeSingle(),
         supabase.from('games').select('current_question_key').eq('id', activeGameId).maybeSingle(),
       ])
       if (!active) return
@@ -586,6 +685,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
         questionType: question?.question_type ?? null,
         reviewItems,
         missingAnswers,
+        prizeAwards: prizeAwardsFromJson(team?.prize_awards),
       })
     }
 
@@ -609,7 +709,49 @@ function playerResponseLabel(questionType: PlayerScreen | null) {
   return 'YOUR ANSWER'
 }
 
-function useLiveLeaderboard() {
+function useLeaderboardVisibility() {
+  const [visibility, setVisibility] = useState<LeaderboardVisibility | null>(null)
+
+  useEffect(() => {
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    if (!gameId) return
+    const activeGameId = gameId
+    let active = true
+
+    async function load() {
+      const { data } = await supabase.from('games').select('settings').eq('id', activeGameId).maybeSingle()
+      if (active) setVisibility(leaderboardVisibilityFromSettings(data?.settings))
+    }
+
+    void load()
+    return () => { active = false }
+  }, [])
+
+  return visibility
+}
+
+function useAnswerRevealMode() {
+  const [mode, setMode] = useState<AnswerRevealMode | null>(null)
+
+  useEffect(() => {
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    if (!gameId) return
+    const activeGameId = gameId
+    let active = true
+
+    async function load() {
+      const { data } = await supabase.from('games').select('settings').eq('id', activeGameId).maybeSingle()
+      if (active) setMode(answerRevealModeFromSettings(data?.settings))
+    }
+
+    void load()
+    return () => { active = false }
+  }, [])
+
+  return mode
+}
+
+function useLiveLeaderboard(enabled = true) {
   const [teams, setTeams] = useState<PlayerLeaderboardTeam[]>([])
   const [teamId, setTeamId] = useState('')
 
@@ -619,7 +761,7 @@ function useLiveLeaderboard() {
     // Restore this browser-owned identity after hydration.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setTeamId(storedTeamId)
-    if (!gameId) return
+    if (!gameId || !enabled) return
     const activeGameId = gameId
     let active = true
 
@@ -633,7 +775,7 @@ function useLiveLeaderboard() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'teams', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .subscribe()
     return () => { active = false; void supabase.removeChannel(channel) }
-  }, [])
+  }, [enabled])
 
   return { teams: [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)), teamId }
 }
@@ -702,6 +844,9 @@ function TopBar({
 }: {
   team?: string; score?: number; round?: string; question?: string
 }) {
+  const answerRevealMode = useAnswerRevealMode()
+  const showScore = score !== undefined && answerRevealMode === 'each'
+
   return (
     <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="px-4 pt-3 pb-3 shrink-0">
       <div className="flex items-center justify-between">
@@ -715,7 +860,7 @@ function TopBar({
         {team && (
           <div className="text-right">
             <div style={{ color: C.ink, fontSize: 14 }} className="font-bold leading-tight">{team}</div>
-            {score !== undefined && (
+            {showScore && (
               <div style={{ color: C.violet, fontSize: 13 }} className="font-bold">{score} pts</div>
             )}
           </div>
@@ -807,6 +952,9 @@ function Btn({
 }
 
 function HostAdvance({ label, to, go }: { label: string; to: PlayerScreen; go: (s: PlayerScreen) => void }) {
+  const enabled = useContext(PlayerDevControlsContext)
+  if (!enabled) return null
+
   return (
     <button
       onClick={() => go(to)}
@@ -882,7 +1030,8 @@ async function handleJoin() {
             maxLength={6}
             value={code}
             onChange={e => { setCode(e.target.value.replace(/\D/g, '')); setInvalid(false) }}
-            placeholder="728461"
+            placeholder="000000"
+            className="placeholder:text-zinc-300"
             style={{
               border: `2px solid ${invalid ? C.stop : code.length === 6 ? C.violet : C.line}`,
               borderRadius: 18,
@@ -1189,7 +1338,7 @@ async function handleJoin() {
 function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
   const [teamName, setTeamName] = useState('Your team')
   const [gameTitle, setGameTitle] = useState('Friday Night Trivia')
-  const [gameCode, setGameCode] = useState('728461')
+  const [gameCode, setGameCode] = useState('')
   const [teamCount, setTeamCount] = useState<number | null>(null)
 
   useEffect(() => {
@@ -1271,12 +1420,14 @@ function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
         {teamCount === null ? 'Loading teams…' : `${teamCount} ${teamCount === 1 ? 'team' : 'teams'} joined`}
       </p>
 
-      <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 20, marginTop: 28, width: '100%', maxWidth: 260 }}>
-        <p style={{ color: C.sub, fontSize: 12 }}>
-          Game code{' '}
-          <span style={{ color: C.ink, fontWeight: 800, letterSpacing: '0.15em' }}>{formattedCode}</span>
-        </p>
-      </div>
+      {gameCode && (
+        <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 20, marginTop: 28, width: '100%', maxWidth: 260 }}>
+          <p style={{ color: C.sub, fontSize: 12 }}>
+            Game code{' '}
+            <span style={{ color: C.ink, fontWeight: 800, letterSpacing: '0.15em' }}>{formattedCode}</span>
+          </p>
+        </div>
+      )}
 
       <div style={{ marginTop: 20 }}>
         <HostAdvance label="host starts game" to="round-start" go={go} />
@@ -1760,22 +1911,27 @@ function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
 }
 
 // ─── SCREEN 15 — CONTENT SCREEN ───────────────────────────────────────────────
-function ContentScreen({ go }: { go: (s: PlayerScreen) => void }) {
+function ContentScreen() {
+  const snapshot = usePlayerSnapshot()
+  const contentScreen = useLiveContentScreenDefinition()
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
-      <TopBar team="Trivia Newton John" score={28} />
+      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={contentScreen ? `Round ${contentScreen.round_number}` : ''} />
 
       <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-        <div style={{ background: C.violetPale, borderRadius: 24, width: 72, height: 72 }}
-          className="flex items-center justify-center mb-6 shrink-0">
-          <span style={{ fontSize: 32 }}>🍺</span>
-        </div>
+        {contentScreen?.image_url ? (
+          <div role="img" aria-label="Content screen image" style={{ backgroundImage: `url(${contentScreen.image_url})`, borderRadius: 20, width: '100%', maxWidth: 340, height: 220, backgroundPosition: 'center', backgroundSize: 'cover', marginBottom: 24 }} />
+        ) : (
+          <div style={{ background: C.violetPale, borderRadius: 24, width: 72, height: 72 }} className="flex items-center justify-center mb-6 shrink-0">
+            <span style={{ fontSize: 32 }}>✦</span>
+          </div>
+        )}
+        <p style={{ color: C.violet, fontSize: 11, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 12 }}>{contentScreen?.round_title ?? 'Content Screen'}</p>
         <h1 style={{ color: C.ink, fontSize: 28, lineHeight: 1.2 }} className="font-black mb-4">
-          Bar’s open — back in 10 minutes!
+          {contentScreen?.title ?? 'Loading content screen…'}
         </h1>
-        <p style={{ color: C.sub, fontSize: 16, lineHeight: 1.6, maxWidth: 280 }}>
-          Grab a drink and we’ll be back with Round 3 shortly.
-        </p>
+        {contentScreen?.body && <p style={{ color: C.sub, fontSize: 16, lineHeight: 1.6, maxWidth: 300 }}>{contentScreen.body}</p>}
+        <WaitMsg msg="Waiting for the host to continue…" />
       </div>
     </div>
   )
@@ -1830,47 +1986,40 @@ function RoundResults({ go }: { go: (s: PlayerScreen) => void }) {
 
 // ─── SCREEN 18 — DELAYED REVEAL ───────────────────────────────────────────────
 function DelayedReveal({ go }: { go: (s: PlayerScreen) => void }) {
-  const [revealed, setRevealed] = useState(false)
+  const snapshot = usePlayerSnapshot()
+  const fullyCorrect = snapshot.pointsAwarded > 0 && snapshot.pointsAwarded >= snapshot.pointsMax
+  const partiallyCorrect = snapshot.pointsAwarded > 0 && snapshot.pointsAwarded < snapshot.pointsMax
+  const resultTitle = !snapshot.answer
+    ? 'No answer submitted'
+    : fullyCorrect
+      ? 'Correct!'
+      : partiallyCorrect
+        ? `${snapshot.pointsAwarded} of ${snapshot.pointsMax} correct`
+        : 'Not quite'
+
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
-      <TopBar team="Trivia Newton John" score={14} round="Round 2 — Answers" question="Question 1 of 5" />
+      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={`${snapshot.roundLabel} — Answers`} question={snapshot.questionLabel} />
 
       <div className="flex-1 px-5 py-6">
         <h2 style={{ color: C.ink, fontSize: 20, lineHeight: 1.35, fontWeight: 900, marginBottom: 20 }}>
-          Which country has the longest coastline in the world?
+          {snapshot.prompt || 'Loading answer…'}
         </h2>
 
         <div style={{ background: C.ground, border: `1px solid ${C.line}`, borderRadius: 14, padding: '14px 18px', marginBottom: 16 }}>
           <p style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Your answer</p>
-          <p style={{ color: C.ink, fontSize: 20, fontWeight: 800 }}>Canada</p>
+          <p style={{ color: C.ink, fontSize: 20, fontWeight: 800 }}>{snapshot.answer || 'No answer'}</p>
         </div>
 
-        {revealed ? (
-          <>
-            <div style={{ background: C.goMist, border: `1px solid ${C.goBorder}`, borderRadius: 14, padding: '14px 18px', marginBottom: 12 }}>
-              <p style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Correct answer</p>
-              <p style={{ color: C.go, fontSize: 20, fontWeight: 800 }}>Canada</p>
-            </div>
-            <div style={{ background: C.violetPale, borderRadius: 12, padding: '12px 18px', textAlign: 'center' }}>
-              <p style={{ color: C.go, fontSize: 20, fontWeight: 900 }}>Correct! +1</p>
-            </div>
-          </>
-        ) : (
-          <div style={{ background: C.cautionMist, borderRadius: 14, border: `1px solid ${C.cautionBorder}`, padding: '12px 18px', textAlign: 'center' }}>
-            <WaitMsg msg="Waiting for host to reveal…" />
-          </div>
-        )}
-
-        {!revealed && (
-          <div style={{ marginTop: 20, textAlign: 'center' }}>
-            <button
-              onClick={() => setRevealed(true)}
-              style={{ color: C.sub, fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'inherit' }}
-            >
-              ↓ prototype: host reveals answer
-            </button>
-          </div>
-        )}
+        <div style={{ background: C.goMist, border: `1px solid ${C.goBorder}`, borderRadius: 14, padding: '14px 18px', marginBottom: 12 }}>
+          <p style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Correct answer</p>
+          <p style={{ color: C.go, fontSize: 20, fontWeight: 800 }}>{snapshot.correctAnswer}</p>
+        </div>
+        <div style={{ background: fullyCorrect || partiallyCorrect ? C.goMist : C.ground, border: `1px solid ${fullyCorrect || partiallyCorrect ? C.goBorder : C.line}`, borderRadius: 12, padding: '12px 18px', textAlign: 'center' }}>
+          <p style={{ color: fullyCorrect || partiallyCorrect ? C.go : C.ink, fontSize: 20, fontWeight: 900 }}>{resultTitle}</p>
+          <p style={{ color: C.sub, fontSize: 13, marginTop: 3 }}>+{snapshot.pointsAwarded} {snapshot.pointsAwarded === 1 ? 'point' : 'points'}</p>
+        </div>
+        <div style={{ marginTop: 20 }}><WaitMsg msg="Waiting for the next answer…" /></div>
       </div>
     </div>
   )
@@ -1930,7 +2079,9 @@ function Winner({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 20 — FINAL RESULT ─────────────────────────────────────────────────
 function FinalResult({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
-  const { teams, teamId } = useLiveLeaderboard()
+  const visibility = useLeaderboardVisibility()
+  const showFinalLeaderboard = visibility !== null && playersSeeFinalLeaderboard(visibility)
+  const { teams, teamId } = useLiveLeaderboard(showFinalLeaderboard)
   const myIndex = teams.findIndex(team => team.id === teamId)
   const me = teams.find(team => team.id === teamId)
   return (
@@ -1939,55 +2090,55 @@ function FinalResult({ go }: { go: (s: PlayerScreen) => void }) {
         <p style={{ color: C.sub, fontSize: 14, marginBottom: 8 }}>Game Complete</p>
         <h1 style={{ color: C.ink, fontSize: 24 }} className="font-black mb-4">{snapshot.teamName || me?.name || 'Your Team'}</h1>
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 18, padding: '18px 20px', display: 'inline-block', minWidth: 180, marginBottom: 24 }}>
-          <p style={{ color: C.sub, fontSize: 11, fontWeight: 800 }}>YOU FINISHED</p>
-          <p style={{ color: C.ink, fontSize: 48, fontWeight: 900 }}>{myIndex >= 0 ? myIndex + 1 : '—'}</p>
-          <p style={{ color: C.sub, fontSize: 13 }}>Final score: {me?.score ?? snapshot.score}</p>
+          <p style={{ color: C.sub, fontSize: 11, fontWeight: 800 }}>{showFinalLeaderboard ? 'YOU FINISHED' : 'YOUR FINAL SCORE'}</p>
+          <p style={{ color: C.ink, fontSize: 48, fontWeight: 900 }}>{showFinalLeaderboard ? (myIndex >= 0 ? myIndex + 1 : '—') : snapshot.score}</p>
+          <p style={{ color: C.sub, fontSize: 13 }}>{showFinalLeaderboard ? `Final score: ${me?.score ?? snapshot.score}` : 'Thanks for playing!'}</p>
         </div>
-        <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textAlign: 'left', marginBottom: 10 }}>FINAL STANDINGS</p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {teams.map((team, i) => <div key={team.id} style={{ background: team.id === teamId ? C.violetMist : C.panel, border: `1px solid ${team.id === teamId ? C.violet : C.line}`, borderRadius: 13, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
-            <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span><span style={{ color: C.violet, fontWeight: 800 }}>{team.score}</span>
-          </div>)}
-        </div>
-        <p style={{ color: C.sub, fontSize: 13, marginTop: 24 }}>Thanks for playing!</p>
+        {snapshot.prizeAwards.length > 0 && (
+          <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 16, padding: '18px 20px', marginBottom: 24, textAlign: 'left' }}>
+            <p style={{ color: '#92400E', fontSize: 12, fontWeight: 900, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+              {snapshot.prizeAwards.length === 1 ? 'You’ve won a prize!' : 'You’ve won prizes!'}
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {snapshot.prizeAwards.map((award, index) => (
+                <p key={`${award.placement}-${index}`} style={{ color: C.ink, fontSize: 16, fontWeight: 800 }}>{award.message}</p>
+              ))}
+            </div>
+          </div>
+        )}
+        {showFinalLeaderboard ? (
+          <>
+            <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textAlign: 'left', marginBottom: 10 }}>FINAL STANDINGS</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {teams.map((team, i) => <div key={team.id} style={{ background: team.id === teamId ? C.violetMist : C.panel, border: `1px solid ${team.id === teamId ? C.violet : C.line}`, borderRadius: 13, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
+                <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span><span style={{ color: C.violet, fontWeight: 800 }}>{team.score}</span>
+              </div>)}
+            </div>
+            <p style={{ color: C.sub, fontSize: 13, marginTop: 24 }}>Thanks for playing!</p>
+          </>
+        ) : (
+          <div style={{ background: C.ground, border: `1px solid ${C.line}`, borderRadius: 14, padding: '14px 18px' }}>
+            <p style={{ color: C.sub, fontSize: 13, fontStyle: 'italic' }}>Final standings aren’t being shown for this game.</p>
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
 // ─── SCREEN 21 — RECONNECTING ─────────────────────────────────────────────────
-function Reconnecting({ go }: { go: (s: PlayerScreen) => void }) {
-  const [back, setBack] = useState(false)
+function Reconnecting() {
   return (
     <div className="flex flex-col items-center justify-center px-6 text-center" style={{ minHeight: '100%' }}>
-      {back ? (
-        <>
-          <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 64, height: 64 }}
-            className="flex items-center justify-center mb-5">
-            <span style={{ fontSize: 28, color: C.go }}>✓</span>
-          </div>
-          <h1 style={{ color: C.go, fontSize: 30 }} className="font-black mb-2">You’re back!</h1>
-          <p style={{ color: C.sub, fontSize: 15 }}>Returning to the game…</p>
-        </>
-      ) : (
-        <>
-          <div className="animate-spin" style={{
-            borderRadius: 999,
-            width: 56, height: 56,
-            border: `3px solid ${C.line}`,
-            borderTopColor: C.violet,
-            marginBottom: 20,
-          }} />
-          <h1 style={{ color: C.ink, fontSize: 26 }} className="font-black mb-2">Trying to reconnect…</h1>
-          <p style={{ color: C.sub, fontSize: 15, marginBottom: 32 }}>Your answer and team are safe.</p>
-          <button
-            onClick={() => setBack(true)}
-            style={{ color: C.sub, fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'inherit' }}
-          >
-            ↓ prototype: simulate reconnect
-          </button>
-        </>
-      )}
+      <div className="animate-spin" style={{
+        borderRadius: 999,
+        width: 56, height: 56,
+        border: `3px solid ${C.line}`,
+        borderTopColor: C.violet,
+        marginBottom: 20,
+      }} />
+      <h1 style={{ color: C.ink, fontSize: 26 }} className="font-black mb-2">Trying to reconnect…</h1>
+      <p style={{ color: C.sub, fontSize: 15 }}>Your answer and team are safe.</p>
     </div>
   )
 }
@@ -2036,16 +2187,17 @@ function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
 
 // ─── SCREEN 17b — ROUND RESULTS (LEADERBOARD HIDDEN) ─────────────────────────
 function RoundResultsHidden({ go }: { go: (s: PlayerScreen) => void }) {
+  const snapshot = usePlayerSnapshot()
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
-      <TopBar team="Trivia Newton John" score={28} />
+      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} />
 
       <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-        <p style={{ color: C.sub, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Round 2 Complete</p>
+        <p style={{ color: C.sub, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{snapshot.roundLabel} Complete</p>
 
         <div style={{ background: C.violetPale, borderRadius: 24, width: '100%', maxWidth: 300, padding: '32px 24px', marginBottom: 24 }}>
           <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>Your score</p>
-          <p style={{ color: C.violet, fontSize: 60, fontWeight: 900, lineHeight: 1 }}>28</p>
+          <p style={{ color: C.violet, fontSize: 60, fontWeight: 900, lineHeight: 1 }}>{snapshot.score}</p>
         </div>
 
         <p style={{ color: C.sub, fontSize: 15, lineHeight: 1.6, maxWidth: 260, marginBottom: 28 }}>
@@ -2094,14 +2246,14 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
     case 'correct':        return <Correct go={go} />
     case 'incorrect':            return <Incorrect go={go} />
     case 'partial-correct':      return <PartialCorrect go={go} />
-    case 'content-screen':       return <ContentScreen go={go} />
+    case 'content-screen':       return <ContentScreen />
     case 'intermission':   return <Intermission go={go} />
     case 'round-results':         return <RoundResults go={go} />
     case 'round-results-hidden':  return <RoundResultsHidden go={go} />
     case 'delayed-reveal': return <DelayedReveal go={go} />
     case 'winner':         return <Winner go={go} />
     case 'final-result':   return <FinalResult go={go} />
-    case 'reconnecting':   return <Reconnecting go={go} />
+    case 'reconnecting':   return <Reconnecting />
     case 'game-ended':     return <GameEnded go={go} />
   }
 }
@@ -2109,11 +2261,118 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
 
 export function PlayerFlow() {
   const [screen, setScreen] = useState<PlayerScreen>('join')
-  useLivePlayerSync(screen, setScreen)
+  const [restoringSession, setRestoringSession] = useState(true)
+  const [confirmingLeave, setConfirmingLeave] = useState(false)
+  useLivePlayerSync(screen, setScreen, !restoringSession)
+
+  useEffect(() => {
+    let active = true
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+    function clearStoredSession() {
+      PLAYER_SESSION_KEYS.forEach(key => localStorage.removeItem(key))
+    }
+
+    function retry() {
+      if (retryTimer) clearTimeout(retryTimer)
+      retryTimer = setTimeout(() => { void restore() }, 3000)
+    }
+
+    async function restore() {
+      if (retryTimer) {
+        clearTimeout(retryTimer)
+        retryTimer = null
+      }
+
+      const gameId = localStorage.getItem('simple-trivia-game-id')
+      const teamId = localStorage.getItem('simple-trivia-team-id')
+
+      if (!gameId) {
+        if (active) {
+          setScreen('join')
+          setRestoringSession(false)
+        }
+        return
+      }
+
+      if (!navigator.onLine) {
+        if (active) setScreen('reconnecting')
+        retry()
+        return
+      }
+
+      const [{ data: game, error: gameError }, { data: team, error: teamError }] = await Promise.all([
+        supabase
+          .from('games')
+          .select('status, current_screen, answer_phase, current_question_key, current_content_screen_key')
+          .eq('id', gameId)
+          .maybeSingle(),
+        teamId
+          ? supabase.from('teams').select('id, game_id, name').eq('id', teamId).maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+      ])
+
+      if (!active) return
+      if (gameError || teamError) {
+        console.error('Could not restore player session:', gameError ?? teamError)
+        setScreen('reconnecting')
+        retry()
+        return
+      }
+
+      if (!game) {
+        clearStoredSession()
+        setScreen('game-ended')
+        setRestoringSession(false)
+        return
+      }
+
+      if (!team || team.game_id !== gameId) {
+        localStorage.removeItem('simple-trivia-team-id')
+        localStorage.removeItem('simple-trivia-team-name')
+        setScreen(game.status === 'lobby' ? 'team-setup' : 'game-ended')
+        setRestoringSession(false)
+        return
+      }
+
+      localStorage.setItem('simple-trivia-team-name', team.name)
+      const nextScreen = await resolveLivePlayerScreen(gameId, team.id, game as RemoteGameState)
+      if (!active) return
+      setScreen(nextScreen ?? 'game-ended')
+      setRestoringSession(false)
+    }
+
+    const handleOffline = () => {
+      if (!active || !localStorage.getItem('simple-trivia-game-id')) return
+      setRestoringSession(true)
+      setScreen('reconnecting')
+    }
+    const handleOnline = () => { if (active) void restore() }
+
+    window.addEventListener('offline', handleOffline)
+    window.addEventListener('online', handleOnline)
+    void restore()
+
+    return () => {
+      active = false
+      if (retryTimer) clearTimeout(retryTimer)
+      window.removeEventListener('offline', handleOffline)
+      window.removeEventListener('online', handleOnline)
+    }
+  }, [])
 
   function go(nextScreen: PlayerScreen) {
     setScreen(nextScreen)
   }
+
+  function leaveGame() {
+    PLAYER_SESSION_KEYS.forEach(key => localStorage.removeItem(key))
+    setConfirmingLeave(false)
+    setRestoringSession(false)
+    setScreen('join')
+  }
+
+  const canLeaveGame = screen !== 'join' && screen !== 'team-setup' && screen !== 'game-ended'
 
   return (
     <main
@@ -2132,8 +2391,49 @@ export function PlayerFlow() {
           flexDirection: 'column',
         }}
       >
+        {canLeaveGame && (
+          <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="flex shrink-0 justify-end px-4 py-2">
+            <button
+              type="button"
+              onClick={() => setConfirmingLeave(true)}
+              style={{ color: C.sub }}
+              className="rounded-lg px-2 py-1 text-xs font-bold transition-colors hover:bg-red-50 hover:text-red-700"
+            >
+              Leave game
+            </button>
+          </div>
+        )}
         {renderScreen(screen, go)}
       </div>
+
+      {confirmingLeave && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#18171F]/70 px-5 backdrop-blur-sm">
+          <section style={{ background: C.panel }} className="w-full max-w-sm rounded-3xl p-6 text-center shadow-2xl">
+            <h2 style={{ color: C.ink }} className="text-2xl font-black">Leave this game?</h2>
+            <p style={{ color: C.sub }} className="mt-3 text-sm leading-6">
+              This device will return to Join Game. Your team and score will stay in the host’s game.
+            </p>
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmingLeave(false)}
+                style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                className="flex-1 rounded-xl bg-white px-4 py-3 text-sm font-bold"
+              >
+                Stay
+              </button>
+              <button
+                type="button"
+                onClick={leaveGame}
+                style={{ background: C.stop }}
+                className="flex-1 rounded-xl px-4 py-3 text-sm font-bold text-white"
+              >
+                Leave game
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   )
 }
@@ -2244,7 +2544,9 @@ export default function App() {
 
           {/* Screen content */}
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-            {renderScreen(screen, go)}
+            <PlayerDevControlsContext.Provider value>
+              {renderScreen(screen, go)}
+            </PlayerDevControlsContext.Provider>
           </div>
 
           {/* Home indicator */}

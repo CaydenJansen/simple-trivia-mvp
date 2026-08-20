@@ -12,6 +12,10 @@
 ## Architecture Invariants
 
 - A **quiz** is a reusable definition. A **game** is one live session of a quiz.
+- Maintain three distinct question layers: source question → independent quiz-question snapshot → frozen game-question snapshot.
+- Source questions belong either to the platform-owned **Question Library** or the user-owned **My Questions** collection.
+- Adding a source question to a quiz creates an independent copy. Editing a quiz copy must never mutate its source or another quiz that previously used it.
+- A question written inside the Quiz Builder must be saved to My Questions and independently copied into the quiz. Later synchronization with its source must always be explicit.
 - Hosting a quiz must create a fresh game with its own six-digit code, teams, submissions, scores, state, and question snapshot.
 - Never regress to using `728461` or another hard-coded code as the normal hosting path.
 - Preserve the `quiz_questions` → `game_questions` snapshot boundary so later quiz edits cannot alter an active or completed game.
@@ -19,7 +23,7 @@
 - Players follow host progression automatically; players do not advance questions themselves.
 - Correct answers must not be exposed to players before reveal.
 - Content authored by a host must remain distinct from live session data.
-- Do not introduce host authentication or AI-generated factual questions before the core create → save → host → play loop requires them.
+- Host-owned reusable content requires an authenticated host identity so ownership can be enforced with RLS. Player teams remain account-free.
 - Keep browser-only code and Supabase publishable credentials client-safe. Never expose a service-role key.
 
 ## Product Invariants
@@ -31,6 +35,11 @@
   - Host controls open, close, review, reveal, scoring, rounds, and completion.
   - The game finishes with the appropriate leaderboard.
 - Preserve optional team PIN behaviour; do not require player accounts.
+- The dashboard navigation label is **Questions**, with **My Questions** and **Question Library** inside it.
+- Quiz Builder add-question choices are **Write New**, **My Questions**, and **Question Library**.
+- Always call the platform question bank **Question Library**. “Verified” may be question metadata or a badge, not part of the product name.
+- Normal hosts may read but never edit platform Question Library records. My Questions records are user-owned and editable by their owner.
+- Platform Question Library administration is private and permission-enforced; hidden customer UI alone is not an access-control boundary.
 - Prevent duplicate team names within a game.
 - Only joinable lobby games should accept new teams.
 - Host live controls and question content must remain usable on small laptop screens.

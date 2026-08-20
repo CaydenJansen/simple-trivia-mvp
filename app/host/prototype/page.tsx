@@ -1,5 +1,7 @@
-import HostPrototype from "../../../components/host/HostPrototype";
+import { notFound } from "next/navigation";
+import HostAuthGate from "../../../components/host/HostAuthGate";
 
 export default function Page() {
-  return <HostPrototype />;
+  if (process.env.NODE_ENV === "production") notFound();
+  return <HostAuthGate showDevNavigator />;
 }

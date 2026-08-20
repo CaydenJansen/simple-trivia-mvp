@@ -1,36 +1,42 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Simple Trivia
 
-## Getting Started
+A Next.js and Supabase application for building and hosting live trivia games.
 
-First, run the development server:
+## Local development
+
+Copy `.env.example` to `.env.local` and add the Supabase project URL and publishable key. Never use a service-role key in browser environment variables.
+
+Then install dependencies and start the app:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Production routes:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `/host` — authenticated host dashboard and live console.
+- `/play` — account-free player experience.
 
-## Learn More
+Prototype routes are available only during local development and return 404 in production.
 
-To learn more about Next.js, take a look at the following resources:
+## Checks
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run typecheck
+npm test
+npm run lint
+npm run build
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Deployment checklist
 
-## Deploy on Vercel
+- Add both variables from `.env.example` to the hosting provider.
+- Deploy the Next.js project from the repository root.
+- Add the public site URL and `/host` redirect URL to Supabase Authentication URL Configuration.
+- Verify host sign-in and email confirmation on the public domain.
+- Run one complete host/player game using separate devices.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The app requires the checked-in Supabase migrations to be deployed before the matching application build goes live.

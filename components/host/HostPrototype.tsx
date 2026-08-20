@@ -2,30 +2,43 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import QuestionsArea from "@/components/host/QuestionsArea";
+import BuilderQuestionPicker, { type PickerSourceQuestion } from "@/components/host/BuilderQuestionPicker";
+import type { Json, QuestionType } from "@/lib/supabase/database.types";
 import {
   asStringArray,
   gradingPoints,
   multiAnswerMissing,
   parseStoredAnswer,
   questionOptions,
-  scoreSubmission,
   storedSubmissionGrading,
   type ReviewStatus,
   type SubmissionGrading,
 } from "@/lib/trivia/grading";
+import { buildRevealResults } from "@/lib/trivia/reveal";
+import {
+  answerRevealModeFromSettings,
+  type AnswerRevealMode,
+} from "@/lib/trivia/answer-reveal";
+import {
+  leaderboardVisibilityFromSettings,
+  playersSeeFinalLeaderboard,
+  roundResultsScreen,
+  type LeaderboardVisibility,
+} from "@/lib/trivia/leaderboard-visibility";
+import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
+import { hostRecoveryScreen } from "@/lib/trivia/session-recovery";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
-  | 'dashboard' | 'create-quiz' | 'quiz-builder'
+  | 'dashboard' | 'questions' | 'create-quiz' | 'quiz-builder'
   | 'auto-build' | 'quiz-review' | 'host-setup'
   | 'lobby' | 'live-question' | 'end-of-round' | 'final-results'
 type Go = (s: Screen) => void
 
-const DEMO_GAME_CODE = '728461'
-
 function getHostGameCode() {
-  if (typeof window === 'undefined') return DEMO_GAME_CODE
-  return localStorage.getItem('simple-trivia-host-game-code') || DEMO_GAME_CODE
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem('simple-trivia-host-game-code') || ''
 }
 
 function getHostGameTitle() {
@@ -33,27 +46,12 @@ function getHostGameTitle() {
   return localStorage.getItem('simple-trivia-host-game-title') || 'Friday Night Trivia'
 }
 
-async function generateUniqueGameCode() {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const code = String(Math.floor(100000 + Math.random() * 900000))
-    const { data, error } = await supabase
-      .from('games')
-      .select('id')
-      .eq('code', code)
-      .maybeSingle()
-
-    if (error) throw error
-    if (!data) return code
-  }
-
-  throw new Error('Could not generate a unique game code')
-}
-
 async function updateLiveGame(values: {
   status?: 'lobby' | 'live' | 'finished'
   current_screen?: string
   answer_phase?: 'open' | 'closed' | 'revealed'
-  current_question_key?: string
+  current_question_key?: string | null
+  current_content_screen_key?: string | null
 }) {
   const { error } = await supabase
     .from('games')
@@ -63,6 +61,11 @@ async function updateLiveGame(values: {
   if (error) {
     throw error
   }
+}
+
+async function finalizeLiveGame(gameId: string) {
+  const { error } = await supabase.rpc('finalize_game_with_prizes', { p_game_id: gameId })
+  if (error) throw error
 }
 
 // ─── PALETTE ──────────────────────────────────────────────────────────────────
@@ -225,15 +228,19 @@ function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
         <span style={{ color: C.ink }} className="font-bold text-[15px] tracking-tight">Simple Trivia</span>
       </button>
       <div className="flex items-center gap-0.5 flex-1">
-        {['My Quizzes', 'Question Library', 'Recent Games'].map(lbl => (
+        {[
+          { label: 'My Quizzes', screen: 'dashboard' as Screen },
+          { label: 'Questions', screen: 'questions' as Screen },
+          { label: 'Recent Games', screen: 'dashboard' as Screen },
+        ].map(({ label, screen }) => (
           <button
-            key={lbl}
-            onClick={() => go('dashboard')}
+            key={label}
+            onClick={() => go(screen)}
             className="relative px-3.5 py-2 text-sm font-medium rounded-lg transition-colors"
-            style={{ color: active === lbl ? C.violet : C.sub }}
+            style={{ color: active === label ? C.violet : C.sub }}
           >
-            {lbl}
-            {active === lbl && (
+            {label}
+            {active === label && (
               <span style={{ background: C.violet }} className="absolute bottom-0 left-3.5 right-3.5 h-0.5 rounded-full" />
             )}
           </button>
@@ -243,6 +250,15 @@ function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
         JH
       </div>
     </nav>
+  )
+}
+
+function QuestionsScreen({ go }: { go: Go }) {
+  return (
+    <div style={{ background: C.ground }} className="min-h-screen">
+      <Nav go={go} active="Questions" />
+      <QuestionsArea />
+    </div>
   )
 }
 
@@ -276,6 +292,8 @@ function Dashboard({ go }: { go: Go }) {
   const [gamesHosted, setGamesHosted] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<QuizSummary | null>(null)
+  const [deletingQuiz, setDeletingQuiz] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -313,6 +331,25 @@ function Dashboard({ go }: { go: Go }) {
     void loadDashboard()
     return () => { active = false }
   }, [])
+
+  async function deleteQuiz(quiz: QuizSummary) {
+    setDeletingQuiz(true)
+    const { error } = await supabase.from('quizzes').delete().eq('id', quiz.id)
+    if (error) {
+      console.error('Could not delete quiz:', error)
+      setLoadError('Could not delete that quiz. Please try again.')
+      setDeletingQuiz(false)
+      return
+    }
+
+    setQuizzes(current => current.filter(item => item.id !== quiz.id))
+    setPendingDelete(null)
+    setDeletingQuiz(false)
+    if (localStorage.getItem('simple-trivia-selected-quiz-id') === quiz.id) {
+      localStorage.removeItem('simple-trivia-selected-quiz-id')
+      localStorage.removeItem('simple-trivia-selected-quiz-title')
+    }
+  }
 
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
@@ -360,8 +397,8 @@ function Dashboard({ go }: { go: Go }) {
             <Btn onClick={() => go('create-quiz')}><I.plus /> Create Quiz</Btn>
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-4">
-            {quizzes.map(q => <QuizCard key={q.id} q={q} go={go} />)}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {quizzes.map(q => <QuizCard key={q.id} q={q} go={go} onDelete={() => setPendingDelete(q)} />)}
             <button
               onClick={() => go('create-quiz')}
               style={{ border: `2px dashed ${C.line}` }}
@@ -375,12 +412,25 @@ function Dashboard({ go }: { go: Go }) {
           </div>
         )}
       </main>
+      {pendingDelete && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/50 px-4 backdrop-blur-sm">
+          <section className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <h2 className="text-xl font-bold text-zinc-900">Delete quiz?</h2>
+            <p className="mt-3 text-sm leading-6 text-zinc-600">“{pendingDelete.title}” will be permanently removed. Existing game snapshots remain intact.</p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button disabled={deletingQuiz} onClick={() => setPendingDelete(null)} className="rounded-xl border border-zinc-200 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Cancel</button>
+              <button disabled={deletingQuiz} onClick={() => void deleteQuiz(pendingDelete)} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">{deletingQuiz ? 'Deleting…' : 'Delete Quiz'}</button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
 
-function QuizCard({ q, go }: { q: QuizSummary; go: Go }) {
+function QuizCard({ q, go, onDelete }: { q: QuizSummary; go: Go; onDelete: () => void }) {
   const ready = q.status === 'ready'
+  const [menuOpen, setMenuOpen] = useState(false)
 
   function selectQuiz(next: Screen) {
     localStorage.setItem('simple-trivia-selected-quiz-id', q.id)
@@ -409,10 +459,15 @@ function QuizCard({ q, go }: { q: QuizSummary; go: Go }) {
         <span>~{q.estimated_minutes} mins</span>
       </div>
       <p style={{ color: C.sub }} className="text-xs mb-auto pb-4">Edited {formatEditedAt(q.updated_at)}</p>
-      <div style={{ borderTop: `1px solid ${C.line}` }} className="flex items-center gap-2 pt-3.5 mt-2">
+      <div style={{ borderTop: `1px solid ${C.line}` }} className="relative flex items-center gap-2 pt-3.5 mt-2">
         <Btn v="ghost" sz="sm" onClick={() => selectQuiz('quiz-builder')} cls="flex-1 justify-center">Edit</Btn>
         <Btn sz="sm" onClick={() => selectQuiz('host-setup')} cls="flex-1 justify-center" disabled={!ready}>Host Game</Btn>
-        <button style={{ color: C.sub }} className="p-1.5 rounded-lg hover:bg-ground transition-colors"><I.menu /></button>
+        <button aria-label={`Quiz actions for ${q.title}`} onClick={() => setMenuOpen(open => !open)} style={{ color: C.sub }} className="p-1.5 rounded-lg hover:bg-ground transition-colors"><I.menu /></button>
+        {menuOpen && (
+          <div className="absolute bottom-10 right-0 z-20 w-40 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl">
+            <button onClick={() => { setMenuOpen(false); onDelete() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50">Delete Quiz</button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -425,6 +480,14 @@ function CreateQuiz({ go }: { go: Go }) {
   const [n, setN] = useState(30)
   const [nInput, setNInput] = useState('30')
   const est = Math.round(n * 2.4)
+
+  function openCreationPath(id: 'scratch' | 'auto', next: Screen) {
+    if (id === 'scratch') {
+      localStorage.removeItem('simple-trivia-selected-quiz-id')
+      localStorage.removeItem('simple-trivia-selected-quiz-title')
+    }
+    go(next)
+  }
 
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
@@ -477,7 +540,7 @@ function CreateQuiz({ go }: { go: Go }) {
               <Btn
                 v={sel === opt.id ? 'primary' : 'secondary'}
                 sz="sm"
-                onClick={(e) => { e.stopPropagation(); go(opt.next) }}
+                onClick={(e) => { e.stopPropagation(); openCreationPath(opt.id, opt.next) }}
               >
                 {opt.cta}
               </Btn>
@@ -531,10 +594,397 @@ function CreateQuiz({ go }: { go: Go }) {
 
 // ─── SCREEN 3: QUIZ BUILDER ───────────────────────────────────────────────────
 
+type BuilderQuestionData = {
+  id: string
+  questionKey: string
+  text: string
+  cat: string
+  diff: string
+  type: string
+  questionType: QuestionType
+  hasImage: boolean
+  correctAnswer: unknown
+  acceptedAnswers: unknown
+  options: unknown
+  tags: string[]
+  imageUrl: string | null
+  pointsMax: number
+  notes: string
+  sourceQuestionId: string | null
+  sourceRevision: number | null
+  itemPosition: number
+}
+
+type BuilderContentScreenData = {
+  id: string
+  screenKey: string
+  itemPosition: number
+  title: string
+  body: string
+  imageUrl: string | null
+}
+
+type BuilderRoundData = {
+  id: number
+  title: string
+  questions: BuilderQuestionData[]
+  contentScreens: BuilderContentScreenData[]
+}
+
+function questionTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    'single-answer': 'Single Answer',
+    'image-question': 'Single Answer',
+    'multiple-choice': 'Multiple Choice',
+    'multi-answer': 'Multi-Answer',
+    'multi-part': 'Multi-Part',
+    ranking: 'Ranking',
+  }
+  return labels[value] ?? value
+}
+
+function editorQuestionType(value: string): QType {
+  if (value === 'single-answer' || value === 'image-question') return 'single'
+  if (value === 'multiple-choice' || value === 'multi-answer' || value === 'multi-part' || value === 'ranking') return value
+  return 'single'
+}
+
+function prototypeEditorQuestion(type: 'single' | 'multi'): BuilderQuestionData {
+  const multipleChoice = type === 'multi'
+  return {
+    id: `prototype-${type}`,
+    questionKey: `prototype-${type}`,
+    text: multipleChoice
+      ? 'Which film won the Academy Award for Best Picture in 2020?'
+      : 'What is the capital city of Australia?',
+    cat: multipleChoice ? 'Movies' : 'Geography',
+    diff: 'Medium',
+    type: multipleChoice ? 'Multiple Choice' : 'Single Answer',
+    questionType: multipleChoice ? 'multiple-choice' : 'single-answer',
+    hasImage: false,
+    correctAnswer: multipleChoice ? 'A' : 'Canberra',
+    acceptedAnswers: [],
+    options: multipleChoice ? [
+      { key: 'A', label: 'Parasite' },
+      { key: 'B', label: '1917' },
+      { key: 'C', label: 'Joker' },
+      { key: 'D', label: 'Once Upon a Time in Hollywood' },
+    ] : null,
+    tags: [],
+    imageUrl: null,
+    pointsMax: 1,
+    notes: '',
+    sourceQuestionId: null,
+    sourceRevision: null,
+    itemPosition: 1,
+  }
+}
+
+function blankBuilderQuestion(): BuilderQuestionData {
+  return {
+    id: `new-${crypto.randomUUID()}`,
+    questionKey: `question-${crypto.randomUUID()}`,
+    text: '',
+    cat: 'Uncategorised',
+    diff: 'Unrated',
+    type: 'Single Answer',
+    questionType: 'single-answer',
+    hasImage: false,
+    correctAnswer: '',
+    acceptedAnswers: [],
+    options: [
+      { key: 'A', label: '' },
+      { key: 'B', label: '' },
+      { key: 'C', label: '' },
+      { key: 'D', label: '' },
+    ],
+    tags: [],
+    imageUrl: null,
+    pointsMax: 1,
+    notes: '',
+    sourceQuestionId: null,
+    sourceRevision: null,
+    itemPosition: 1,
+  }
+}
+
+function sourceToBuilderQuestion(source: PickerSourceQuestion): BuilderQuestionData {
+  return {
+    id: `source-copy-${crypto.randomUUID()}`,
+    questionKey: `question-${crypto.randomUUID()}`,
+    text: source.prompt,
+    cat: source.category ?? 'Uncategorised',
+    diff: source.difficulty ?? 'Unrated',
+    type: questionTypeLabel(source.question_type),
+    questionType: source.question_type,
+    hasImage: Boolean(source.image_url),
+    correctAnswer: source.correct_answer,
+    acceptedAnswers: source.accepted_answers,
+    options: source.options,
+    tags: [...source.tags],
+    imageUrl: source.image_url,
+    pointsMax: Array.isArray(source.correct_answer) ? Math.max(1, source.correct_answer.length) : 1,
+    notes: source.notes ?? '',
+    sourceQuestionId: source.id,
+    sourceRevision: source.revision,
+    itemPosition: 1,
+  }
+}
+
+function nextRoundItemPosition(round: BuilderRoundData) {
+  return Math.max(
+    0,
+    ...round.questions.map(question => question.itemPosition),
+    ...round.contentScreens.map(screen => screen.itemPosition),
+  ) + 1
+}
+
 function QuizBuilder({ go }: { go: Go }) {
-  const [title, setTitle] = useState('Friday Night Trivia')
-  const [modal, setModal] = useState<null | 'single' | 'multi'>(null)
+  const [quizId, setQuizId] = useState<string | null>(null)
+  const [title, setTitle] = useState('Untitled Quiz')
+  const [quizStatus, setQuizStatus] = useState<'draft' | 'ready'>('draft')
+  const [savedQuizStatus, setSavedQuizStatus] = useState<'draft' | 'ready'>('draft')
+  const [rounds, setRounds] = useState<BuilderRoundData[]>([])
+  const [persisted, setPersisted] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
+  const [newQuestionRoundId, setNewQuestionRoundId] = useState<number | null>(null)
+  const [addMenuRoundId, setAddMenuRoundId] = useState<number | null>(null)
+  const [picker, setPicker] = useState<{ roundId: number; origin: 'user' | 'platform' } | null>(null)
+  const [replaceTarget, setReplaceTarget] = useState<{ roundId: number; questionId: string } | null>(null)
+  const [replaceOrigin, setReplaceOrigin] = useState<'user' | 'platform' | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const questionCount = rounds.reduce((total, round) => total + round.questions.length, 0)
+  const estimatedMinutes = Math.round(questionCount * 2.4)
+
+  useEffect(() => {
+    let active = true
+
+    async function loadSelectedQuiz() {
+      setLoading(true)
+      setLoadError(null)
+      const selectedId = localStorage.getItem('simple-trivia-selected-quiz-id')
+
+      if (!selectedId) {
+        if (!active) return
+        setTitle('Untitled Quiz')
+        setRounds([{ id: 1, title: 'Round 1', questions: [], contentScreens: [] }])
+        setQuizId(null)
+        setQuizStatus('draft')
+        setSavedQuizStatus('draft')
+        setPersisted(false)
+        setDirty(true)
+        setLoading(false)
+        return
+      }
+
+      const [quizResult, questionResult, contentScreenResult] = await Promise.all([
+        supabase
+          .from('quizzes')
+          .select('id, title, status')
+          .eq('id', selectedId)
+          .maybeSingle(),
+        supabase
+          .from('quiz_questions')
+          .select('id, question_key, position, item_position, round_number, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, tags, image_url, points_max, notes, source_question_id, source_revision')
+          .eq('quiz_id', selectedId)
+          .order('position', { ascending: true }),
+        supabase
+          .from('quiz_content_screens')
+          .select('id, screen_key, item_position, round_number, round_title, title, body, image_url')
+          .eq('quiz_id', selectedId)
+          .order('item_position', { ascending: true }),
+      ])
+
+      if (!active) return
+
+      if (quizResult.error || !quizResult.data || questionResult.error || contentScreenResult.error) {
+        console.error('Could not load quiz builder:', quizResult.error ?? questionResult.error ?? contentScreenResult.error)
+        setLoadError('Could not load this quiz. Return to My Quizzes and try again.')
+        setLoading(false)
+        return
+      }
+
+      const groupedRounds = new Map<number, BuilderRoundData>()
+      for (const row of questionResult.data ?? []) {
+        const round = groupedRounds.get(row.round_number) ?? {
+          id: row.round_number,
+          title: row.round_title,
+          questions: [],
+          contentScreens: [],
+        }
+
+        round.questions.push({
+          id: row.id,
+          questionKey: row.question_key,
+          text: row.prompt,
+          cat: row.category ?? 'Uncategorised',
+          diff: row.difficulty ?? 'Unrated',
+          type: questionTypeLabel(row.question_type),
+          questionType: row.question_type,
+          hasImage: Boolean(row.image_url),
+          correctAnswer: row.correct_answer,
+          acceptedAnswers: row.accepted_answers,
+          options: row.options,
+          tags: row.tags,
+          imageUrl: row.image_url,
+          pointsMax: row.points_max,
+          notes: row.notes ?? '',
+          sourceQuestionId: row.source_question_id,
+          sourceRevision: row.source_revision,
+          itemPosition: row.item_position,
+        })
+        groupedRounds.set(row.round_number, round)
+      }
+
+      for (const row of contentScreenResult.data ?? []) {
+        const round = groupedRounds.get(row.round_number) ?? {
+          id: row.round_number,
+          title: row.round_title,
+          questions: [],
+          contentScreens: [],
+        }
+
+        round.contentScreens.push({
+          id: row.id,
+          screenKey: row.screen_key,
+          itemPosition: row.item_position,
+          title: row.title,
+          body: row.body ?? '',
+          imageUrl: row.image_url,
+        })
+        groupedRounds.set(row.round_number, round)
+      }
+
+      setTitle(quizResult.data.title)
+      setQuizId(quizResult.data.id)
+      const loadedStatus = quizResult.data.status === 'ready' ? 'ready' : 'draft'
+      setQuizStatus(loadedStatus)
+      setSavedQuizStatus(loadedStatus)
+      const loadedRounds = [...groupedRounds.values()].sort((a, b) => a.id - b.id)
+      setRounds(loadedRounds.length > 0 ? loadedRounds : [{ id: 1, title: 'Round 1', questions: [], contentScreens: [] }])
+      setPersisted(true)
+      setDirty(false)
+      setLoading(false)
+    }
+
+    void loadSelectedQuiz()
+    return () => { active = false }
+  }, [])
+
+  function addQuestionToRound(roundId: number, question: BuilderQuestionData) {
+    setRounds(current => current.map(round => round.id === roundId
+      ? { ...round, questions: [...round.questions, { ...question, itemPosition: nextRoundItemPosition(round) }] }
+      : round))
+    setDirty(true)
+  }
+
+  async function saveQuiz() {
+    if (saving || loading) return
+    if (!title.trim()) {
+      setSaveError('Add a quiz title before saving.')
+      return
+    }
+    if (quizStatus === 'ready' && questionCount === 0) {
+      setSaveError('Add at least one question before marking the quiz ready.')
+      return
+    }
+    if (quizStatus === 'ready' && rounds.some(round => round.contentScreens.length > 0 && round.questions.length === 0)) {
+      setSaveError('Each round with a content screen needs at least one scored question before the quiz can be hosted.')
+      return
+    }
+    if (rounds.some(round => round.contentScreens.some(screen => !screen.title.trim()))) {
+      setSaveError('Give every content screen a title before saving.')
+      return
+    }
+
+    setSaving(true)
+    setSaveError(null)
+    let questionPosition = 0
+    let itemPosition = 0
+    const snapshots: Json[] = []
+    const contentScreenSnapshots: Json[] = []
+
+    rounds.forEach((round, roundIndex) => {
+      const roundQuestionCount = round.questions.length
+      let roundQuestionPosition = 0
+      const items = [
+        ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, question })),
+        ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, screen })),
+      ].sort((a, b) => a.itemPosition - b.itemPosition)
+
+      items.forEach(item => {
+        itemPosition += 1
+        if (item.kind === 'content') {
+          contentScreenSnapshots.push({
+            screen_key: item.screen.screenKey,
+            item_position: itemPosition,
+            round_number: roundIndex + 1,
+            round_title: round.title,
+            title: item.screen.title.trim(),
+            body: item.screen.body.trim() || null,
+            image_url: item.screen.imageUrl,
+          })
+          return
+        }
+
+        questionPosition += 1
+        roundQuestionPosition += 1
+        const question = item.question
+        snapshots.push({
+          question_key: question.questionKey,
+          position: questionPosition,
+          item_position: itemPosition,
+          round_number: roundIndex + 1,
+          round_position: roundQuestionPosition,
+          round_question_count: roundQuestionCount,
+          round_title: round.title,
+          prompt: question.text,
+          category: question.cat === 'Uncategorised' ? null : question.cat,
+          difficulty: question.diff === 'Unrated' ? null : question.diff,
+          question_type: question.questionType,
+          correct_answer: question.correctAnswer as Json,
+          accepted_answers: question.acceptedAnswers as Json,
+          options: question.options as Json | null,
+          tags: question.tags,
+          image_url: question.imageUrl,
+          points_max: question.pointsMax,
+          notes: question.notes || null,
+          source_question_id: question.sourceQuestionId,
+          source_revision: question.sourceRevision,
+        })
+      })
+    })
+
+    const { data, error } = await supabase.rpc('save_quiz_with_questions', {
+      p_quiz_id: quizId,
+      p_title: title.trim(),
+      p_status: quizStatus,
+      p_estimated_minutes: estimatedMinutes,
+      p_questions: snapshots,
+      p_content_screens: contentScreenSnapshots,
+    })
+
+    setSaving(false)
+    if (error || !data) {
+      console.error('Could not save quiz:', error)
+      setSaveError('Could not save this quiz. Nothing was partially saved; try again.')
+      return
+    }
+
+    setQuizId(data)
+    setPersisted(true)
+    setSavedQuizStatus(quizStatus)
+    setDirty(false)
+    localStorage.setItem('simple-trivia-selected-quiz-id', data)
+    localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
+  }
+
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
       {/* Builder top bar */}
@@ -547,40 +997,168 @@ function QuizBuilder({ go }: { go: Go }) {
         <div className="flex-1 flex justify-center">
           <input
             value={title}
-            onChange={e => setTitle(e.target.value)}
+            onChange={e => { setTitle(e.target.value); setDirty(true) }}
             style={{ color: C.ink, borderBottom: `2px solid transparent` }}
             className="text-[15px] font-bold text-center bg-transparent px-2 py-0.5 transition-colors hover:border-b-line focus:border-b-violet focus:outline-none min-w-[200px]"
           />
         </div>
         <div style={{ color: C.sub }} className="text-xs flex items-center gap-2 shrink-0">
-          <span className="font-mono">20q</span>
+          <span className="font-mono">{questionCount}q</span>
           <span style={{ color: C.line }}>·</span>
-          <span className="font-mono">4r</span>
+          <span className="font-mono">{rounds.length}r</span>
           <span style={{ color: C.line }}>·</span>
-          <span className="font-mono">~48 min</span>
+          <span className="font-mono">~{estimatedMinutes} min</span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <span style={{ color: C.go }} className="flex items-center gap-1.5 text-xs font-semibold">
+          <span style={{ color: dirty ? C.caution : C.go }} className="flex items-center gap-1.5 text-xs font-semibold">
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            Saved 10s ago
+            {loading ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : persisted ? 'Saved to Supabase' : 'New quiz'}
           </span>
-          <Btn v="secondary" sz="sm">Preview</Btn>
-          <Btn sz="sm">Save Quiz</Btn>
+          <select
+            aria-label="Hosting status"
+            value={quizStatus}
+            onChange={event => { setQuizStatus(event.target.value as 'draft' | 'ready'); setDirty(true) }}
+            style={{
+              border: `1px solid ${quizStatus === 'ready' ? '#86EFAC' : '#FCD34D'}`,
+              background: quizStatus === 'ready' ? '#F0FDF4' : '#FFFBEB',
+              color: quizStatus === 'ready' ? '#166534' : '#92400E',
+            }}
+            className="rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-violet/30"
+          >
+            <option value="draft">Draft — cannot host</option>
+            <option value="ready">Ready to Host</option>
+          </select>
+          <Btn v="secondary" sz="sm" onClick={() => setPreviewOpen(true)}>Preview</Btn>
+          <Btn sz="sm" disabled={loading || saving || !dirty} onClick={() => void saveQuiz()}>{saving ? 'Saving…' : 'Save Quiz'}</Btn>
         </div>
       </header>
 
       <div className="flex" style={{ maxWidth: 1280, margin: '0 auto' }}>
         <main className="flex-1 px-6 py-7 space-y-3.5 min-w-0">
-          {ROUNDS.map((r, ri) => (
+          {!loading && !loadError && (() => {
+            const statusChangePending = quizStatus !== savedQuizStatus || (!persisted && quizStatus === 'ready')
+            const readyAndSaved = quizStatus === 'ready' && persisted && !statusChangePending
+
+            return (
+              <div
+                style={{
+                  background: readyAndSaved ? '#F0FDF4' : '#FFFBEB',
+                  border: `1px solid ${readyAndSaved ? '#BBF7D0' : '#FDE68A'}`,
+                }}
+                className="flex flex-col gap-3 rounded-2xl px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div>
+                  <p style={{ color: readyAndSaved ? '#166534' : '#92400E' }} className="text-sm font-bold">
+                    {readyAndSaved
+                      ? 'Ready to Host'
+                      : quizStatus === 'ready'
+                        ? 'Ready to Host selected — save to apply'
+                        : savedQuizStatus === 'ready' && statusChangePending
+                          ? 'Draft selected — save to stop hosting'
+                          : 'Draft — not available to host'}
+                  </p>
+                  <p style={{ color: readyAndSaved ? '#15803D' : '#A16207' }} className="mt-0.5 text-xs leading-5">
+                    {readyAndSaved
+                      ? dirty
+                        ? 'The last saved version can be hosted. Save again to include your latest changes.'
+                        : 'This saved quiz can be launched from My Quizzes.'
+                      : quizStatus === 'ready'
+                        ? 'Click Save Quiz to make this quiz available from My Quizzes.'
+                        : savedQuizStatus === 'ready' && statusChangePending
+                          ? 'The last saved version is still hostable until you click Save Quiz.'
+                          : 'Saving keeps your work, but Draft quizzes cannot be hosted. Mark it ready when you are finished.'}
+                  </p>
+                </div>
+                {quizStatus === 'draft' && !(savedQuizStatus === 'ready' && statusChangePending) && (
+                  <button
+                    type="button"
+                    disabled={questionCount === 0}
+                    onClick={() => { setQuizStatus('ready'); setDirty(true) }}
+                    className="shrink-0 rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    {questionCount === 0 ? 'Add a question first' : 'Mark Ready to Host'}
+                  </button>
+                )}
+              </div>
+            )
+          })()}
+          {loadError && (
+            <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="rounded-xl px-4 py-3 text-sm font-semibold">
+              {loadError}
+            </div>
+          )}
+          {saveError && (
+            <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="rounded-xl px-4 py-3 text-sm font-semibold">
+              {saveError}
+            </div>
+          )}
+          {loading && <div style={{ color: C.sub }} className="py-24 text-center text-sm">Loading quiz…</div>}
+          {!loading && !loadError && rounds.map((round) => (
             <BuilderRound
-              key={r.id} round={r}
-              qs={Qs.slice(0, ri === 0 ? 3 : ri === 1 ? 2 : 0)}
-              showContentCard={ri === 1}
-              showImageQ={ri === 0}
-              onEdit={type => setModal(type)}
+              key={round.id}
+              round={round}
+              onEdit={questionId => setEditingQuestionId(questionId)}
+              onReplace={questionId => setReplaceTarget({ roundId: round.id, questionId })}
+              onTitleChange={nextTitle => {
+                setRounds(current => current.map(item => item.id === round.id ? { ...item, title: nextTitle } : item))
+                setDirty(true)
+              }}
+              onAddQuestion={() => setAddMenuRoundId(round.id)}
+              onAddContentScreen={() => {
+                setRounds(current => current.map(item => item.id === round.id ? {
+                  ...item,
+                  contentScreens: [...item.contentScreens, {
+                    id: `content-${crypto.randomUUID()}`,
+                    screenKey: `content-${crypto.randomUUID()}`,
+                    itemPosition: nextRoundItemPosition(item),
+                    title: 'New content screen',
+                    body: '',
+                    imageUrl: null,
+                  }],
+                } : item))
+                setDirty(true)
+              }}
+              onUpdateContentScreen={(screenId, updates) => {
+                setRounds(current => current.map(item => item.id === round.id ? {
+                  ...item,
+                  contentScreens: item.contentScreens.map(screen => screen.id === screenId ? { ...screen, ...updates } : screen),
+                } : item))
+                setDirty(true)
+              }}
+              onDeleteContentScreen={screenId => {
+                setRounds(current => current.map(item => item.id === round.id ? {
+                  ...item,
+                  contentScreens: item.contentScreens.filter(screen => screen.id !== screenId),
+                } : item))
+                setDirty(true)
+              }}
+              onDeleteQuestion={questionId => {
+                setRounds(current => current.map(item => item.id === round.id
+                  ? { ...item, questions: item.questions.filter(question => question.id !== questionId) }
+                  : item))
+                setDirty(true)
+              }}
+              onDuplicateQuestion={questionId => {
+                setRounds(current => current.map(item => {
+                  if (item.id !== round.id) return item
+                  const source = item.questions.find(question => question.id === questionId)
+                  return source ? { ...item, questions: [...item.questions, {
+                    ...source,
+                    id: `duplicate-${crypto.randomUUID()}`,
+                    questionKey: `question-${crypto.randomUUID()}`,
+                    itemPosition: nextRoundItemPosition(item),
+                  }] } : item
+                }))
+                setDirty(true)
+              }}
             />
           ))}
           <button
+            onClick={() => {
+              const nextId = Math.max(0, ...rounds.map(round => round.id)) + 1
+              setRounds(current => [...current, { id: nextId, title: `Round ${nextId}`, questions: [], contentScreens: [] }])
+              setDirty(true)
+            }}
             style={{ border: `2px dashed ${C.line}` }}
             className="w-full py-4 rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors hover:border-violet"
           >
@@ -606,17 +1184,17 @@ function QuizBuilder({ go }: { go: Go }) {
             {sidebarOpen && (
               <>
                 <div className="space-y-0.5">
-                  {ROUNDS.map(r => (
-                    <div key={r.id} style={{ color: C.sub }}
+                  {rounds.map(round => (
+                    <div key={round.id} style={{ color: C.sub }}
                       className="flex items-center justify-between py-2 px-2 rounded-lg hover:bg-ground cursor-pointer transition-colors hover:text-ink text-xs">
-                      <span className="truncate"><span className="font-mono opacity-60 mr-1.5">R{r.id}</span>{r.title}</span>
-                      <span className="font-mono ml-1 shrink-0">{r.count}</span>
+                      <span className="truncate"><span className="font-mono opacity-60 mr-1.5">R{round.id}</span>{round.title}</span>
+                      <span className="font-mono ml-1 shrink-0">{round.questions.length}</span>
                     </div>
                   ))}
                 </div>
                 <div style={{ borderTop: `1px solid ${C.line}` }} className="mt-3 pt-3 flex justify-between text-xs">
                   <span style={{ color: C.sub }}>Total</span>
-                  <span style={{ color: C.ink }} className="font-bold">20 questions</span>
+                  <span style={{ color: C.ink }} className="font-bold">{questionCount} questions</span>
                 </div>
               </>
             )}
@@ -624,17 +1202,279 @@ function QuizBuilder({ go }: { go: Go }) {
         </aside>
       </div>
 
-      {modal && <QuestionEditor type={modal} onClose={() => setModal(null)} onToggle={() => setModal(t => t === 'single' ? 'multi' : 'single')} />}
+      {editingQuestionId && (() => {
+        const question = rounds.flatMap(round => round.questions).find(item => item.id === editingQuestionId)
+        return question ? (
+          <QuestionEditor
+            question={question}
+            onClose={() => setEditingQuestionId(null)}
+            onSave={(updated) => {
+              setRounds(current => current.map(round => ({
+                ...round,
+                questions: round.questions.map(item => item.id === updated.id ? updated : item),
+              })))
+              setDirty(true)
+              setEditingQuestionId(null)
+            }}
+          />
+        ) : null
+      })()}
+
+      {addMenuRoundId !== null && (
+        <AddQuestionMenu
+          onClose={() => setAddMenuRoundId(null)}
+          onWriteNew={() => {
+            setNewQuestionRoundId(addMenuRoundId)
+            setAddMenuRoundId(null)
+          }}
+          onPickMine={() => {
+            setPicker({ roundId: addMenuRoundId, origin: 'user' })
+            setAddMenuRoundId(null)
+          }}
+          onPickLibrary={() => {
+            setPicker({ roundId: addMenuRoundId, origin: 'platform' })
+            setAddMenuRoundId(null)
+          }}
+        />
+      )}
+
+      {picker && (
+        <BuilderQuestionPicker
+          origin={picker.origin}
+          onClose={() => setPicker(null)}
+          onSelect={source => {
+            addQuestionToRound(picker.roundId, sourceToBuilderQuestion(source))
+            setPicker(null)
+          }}
+        />
+      )}
+
+      {replaceTarget && replaceOrigin === null && (
+        <ReplaceQuestionMenu
+          onClose={() => setReplaceTarget(null)}
+          onPickMine={() => setReplaceOrigin('user')}
+          onPickLibrary={() => setReplaceOrigin('platform')}
+        />
+      )}
+
+      {replaceTarget && replaceOrigin !== null && (
+        <BuilderQuestionPicker
+          origin={replaceOrigin}
+          onClose={() => { setReplaceOrigin(null); setReplaceTarget(null) }}
+          onSelect={source => {
+            const replacement = sourceToBuilderQuestion(source)
+            setRounds(current => current.map(round => round.id === replaceTarget.roundId ? {
+              ...round,
+              questions: round.questions.map(question => question.id === replaceTarget.questionId ? {
+                ...replacement,
+                id: question.id,
+                questionKey: question.questionKey,
+                itemPosition: question.itemPosition,
+              } : question),
+            } : round))
+            setDirty(true)
+            setReplaceOrigin(null)
+            setReplaceTarget(null)
+          }}
+        />
+      )}
+
+      {newQuestionRoundId !== null && (
+        <QuestionEditor
+          question={blankBuilderQuestion()}
+          title="Write New Question"
+          onClose={() => setNewQuestionRoundId(null)}
+          onSave={async question => {
+            const { data: authData, error: authError } = await supabase.auth.getUser()
+            if (authError || !authData.user) throw new Error('Your host session has expired.')
+            const { data: source, error } = await supabase
+              .from('source_questions')
+              .insert({
+                origin: 'user',
+                owner_id: authData.user.id,
+                question_type: question.questionType,
+                prompt: question.text,
+                correct_answer: question.correctAnswer as Json,
+                accepted_answers: question.acceptedAnswers as Json,
+                options: question.options as Json | null,
+                category: question.cat === 'Uncategorised' ? null : question.cat,
+                difficulty: question.diff === 'Unrated' ? null : question.diff,
+                tags: question.tags,
+                image_url: question.imageUrl,
+                notes: question.notes || null,
+                status: 'active',
+              })
+              .select('id, revision')
+              .single()
+            if (error || !source) throw error ?? new Error('Could not save source question')
+            addQuestionToRound(newQuestionRoundId, {
+              ...question,
+              id: `source-copy-${crypto.randomUUID()}`,
+              questionKey: `question-${crypto.randomUUID()}`,
+              sourceQuestionId: source.id,
+              sourceRevision: source.revision,
+            })
+            setNewQuestionRoundId(null)
+          }}
+        />
+      )}
+
+      {previewOpen && <QuizPreview title={title} rounds={rounds} onClose={() => setPreviewOpen(false)} />}
     </div>
   )
 }
 
-function BuilderRound({ round, qs, onEdit, showContentCard = false, showImageQ = false }: {
-  round: typeof ROUNDS[0]; qs: typeof Qs; onEdit: (t: 'single' | 'multi') => void
-  showContentCard?: boolean; showImageQ?: boolean
+function AddQuestionMenu({ onClose, onWriteNew, onPickMine, onPickLibrary }: {
+  onClose: () => void
+  onWriteNew: () => void
+  onPickMine: () => void
+  onPickLibrary: () => void
+}) {
+  const choices = [
+    { title: 'Write New', description: 'Create a new reusable question in My Questions and add an independent quiz copy.', action: onWriteNew },
+    { title: 'My Questions', description: 'Choose one of your reusable questions and copy it into this quiz.', action: onPickMine },
+    { title: 'Question Library', description: 'Browse platform questions and add an editable snapshot.', action: onPickLibrary },
+  ]
+
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-zinc-950/45 px-4 backdrop-blur-sm">
+      <section className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="mb-5 flex items-start justify-between">
+          <div><h2 className="text-xl font-bold text-zinc-900">Add Question</h2><p className="mt-1 text-sm text-zinc-500">Choose where the question should come from.</p></div>
+          <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-semibold text-zinc-500 hover:bg-zinc-100">Close</button>
+        </div>
+        <div className="space-y-3">
+          {choices.map(choice => (
+            <button key={choice.title} type="button" onClick={choice.action} className="w-full rounded-2xl border border-zinc-200 p-4 text-left transition hover:border-violet-300 hover:bg-violet-50">
+              <span className="font-bold text-zinc-900">{choice.title}</span>
+              <span className="mt-1 block text-sm leading-6 text-zinc-500">{choice.description}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function ReplaceQuestionMenu({ onClose, onPickMine, onPickLibrary }: {
+  onClose: () => void
+  onPickMine: () => void
+  onPickLibrary: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-zinc-950/45 px-4 backdrop-blur-sm">
+      <section className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="mb-5 flex items-start justify-between">
+          <div><h2 className="text-xl font-bold text-zinc-900">Replace Question</h2><p className="mt-1 text-sm text-zinc-500">Choose a reusable question to place in this position.</p></div>
+          <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-semibold text-zinc-500 hover:bg-zinc-100">Close</button>
+        </div>
+        <div className="space-y-3">
+          <button type="button" onClick={onPickMine} className="w-full rounded-2xl border border-zinc-200 p-4 text-left transition hover:border-violet-300 hover:bg-violet-50">
+            <span className="font-bold text-zinc-900">My Questions</span>
+            <span className="mt-1 block text-sm leading-6 text-zinc-500">Replace it with an independent copy of one of your reusable questions.</span>
+          </button>
+          <button type="button" onClick={onPickLibrary} className="w-full rounded-2xl border border-zinc-200 p-4 text-left transition hover:border-violet-300 hover:bg-violet-50">
+            <span className="font-bold text-zinc-900">Question Library</span>
+            <span className="mt-1 block text-sm leading-6 text-zinc-500">Replace it with an editable snapshot from the platform library.</span>
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function builderCorrectAnswerDisplay(question: BuilderQuestionData) {
+  if (question.questionType === 'multiple-choice') {
+    const key = String(question.correctAnswer ?? '')
+    const match = questionOptions(question.options).find(option => option.key === key)
+    return match?.label ? `${key} · ${match.label}` : key || '—'
+  }
+
+  if (Array.isArray(question.correctAnswer)) {
+    return question.correctAnswer.map(item => String(item)).join(' · ') || '—'
+  }
+
+  return String(question.correctAnswer ?? '') || '—'
+}
+
+function QuizPreview({ title, rounds, onClose }: {
+  title: string
+  rounds: BuilderRoundData[]
+  onClose: () => void
+}) {
+  const [activeIndex, setActiveIndex] = useState(0)
+  const items = rounds.flatMap(round => [
+    ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, round, question })),
+    ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, round, screen })),
+  ].sort((a, b) => a.itemPosition - b.itemPosition))
+  const active = items[activeIndex]
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/80 px-4 py-8 backdrop-blur-sm">
+      <section className="flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-[#171526] text-white shadow-2xl">
+        <header className="flex items-center gap-4 border-b border-white/10 px-6 py-4">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-violet-300">Player Preview</p>
+            <h2 className="truncate text-lg font-bold">{title || 'Untitled Quiz'}</h2>
+          </div>
+          <span className="text-sm text-zinc-400">{items.length === 0 ? 'No screens yet' : `${activeIndex + 1} of ${items.length}`}</span>
+          <button onClick={onClose} className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold hover:bg-white/10">Close</button>
+        </header>
+
+        <div className="flex min-h-[420px] flex-1 items-center justify-center overflow-y-auto p-8">
+          {!active ? (
+            <div className="text-center"><h3 className="text-2xl font-bold">Nothing to preview yet</h3><p className="mt-2 text-zinc-400">Add a question or content screen first.</p></div>
+          ) : active.kind === 'content' ? (
+            <div className="w-full max-w-2xl text-center">
+              <p className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{active.round.title} · Content Screen</p>
+              {active.screen.imageUrl && <div role="img" aria-label="Content screen image" className="mx-auto mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.screen.imageUrl})` }} />}
+              <h3 className="text-4xl font-black leading-tight">{active.screen.title || 'Untitled screen'}</h3>
+              {active.screen.body && <p className="mx-auto mt-5 max-w-xl text-lg leading-8 text-zinc-300">{active.screen.body}</p>}
+            </div>
+          ) : (
+            <div className="w-full max-w-2xl">
+              <p className="mb-4 text-center text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{active.round.title} · {active.question.type}</p>
+              {active.question.imageUrl && <div role="img" aria-label="Question image" className="mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.question.imageUrl})` }} />}
+              <h3 className="text-center text-3xl font-black leading-tight">{active.question.text}</h3>
+              <div className="mx-auto mt-8 max-w-md rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-5 py-4 text-center">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">Correct answer</p>
+                <p className="mt-2 text-lg font-bold text-white">{builderCorrectAnswerDisplay(active.question)}</p>
+                {acceptedAnswerGroups(active.question.acceptedAnswers).flat().filter(Boolean).length > 0 && (
+                  <p className="mt-2 text-sm text-zinc-300">
+                    Also accept: {acceptedAnswerGroups(active.question.acceptedAnswers).flat().filter(Boolean).join(' · ')}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <footer className="flex items-center justify-between border-t border-white/10 px-6 py-4">
+          <button disabled={activeIndex === 0 || items.length === 0} onClick={() => setActiveIndex(index => Math.max(0, index - 1))} className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold disabled:opacity-30">Previous</button>
+          <button disabled={items.length === 0 || activeIndex >= items.length - 1} onClick={() => setActiveIndex(index => Math.min(items.length - 1, index + 1))} className="rounded-xl bg-violet-600 px-5 py-2 text-sm font-semibold disabled:opacity-30">Next</button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function BuilderRound({ round, onEdit, onReplace, onTitleChange, onAddQuestion, onAddContentScreen, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen }: {
+  round: BuilderRoundData
+  onEdit: (questionId: string) => void
+  onReplace: (questionId: string) => void
+  onTitleChange: (title: string) => void
+  onAddQuestion: () => void
+  onAddContentScreen: () => void
+  onDeleteQuestion: (questionId: string) => void
+  onDuplicateQuestion: (questionId: string) => void
+  onUpdateContentScreen: (screenId: string, updates: Partial<BuilderContentScreenData>) => void
+  onDeleteContentScreen: (screenId: string) => void
 }) {
   const [open, setOpen] = useState(true)
-  const [title, setTitle] = useState(round.title)
+  const items = [
+    ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, question })),
+    ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, screen })),
+  ].sort((a, b) => a.itemPosition - b.itemPosition)
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl overflow-hidden">
       <div style={{ background: C.ground, borderBottom: open ? `1px solid ${C.line}` : 'none' }}
@@ -642,35 +1482,45 @@ function BuilderRound({ round, qs, onEdit, showContentCard = false, showImageQ =
         <span style={{ color: C.sub }} className="cursor-grab hover:text-ink transition-colors"><I.grip /></span>
         <span style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-widest shrink-0">Round {round.id}</span>
         <input
-          value={title}
-          onChange={e => setTitle(e.target.value)}
+          value={round.title}
+          onChange={e => onTitleChange(e.target.value)}
           style={{ color: C.ink, borderBottom: `2px solid transparent` }}
           className="font-bold flex-1 min-w-0 bg-transparent text-sm px-1 py-0.5 focus:outline-none focus:border-b-violet hover:border-b-line transition-colors"
         />
-        <span style={{ color: C.sub }} className="text-xs font-mono">{round.count}q</span>
+        <span style={{ color: C.sub }} className="text-xs font-mono">{round.questions.length}q</span>
         <button onClick={() => setOpen(o => !o)} style={{ color: C.sub }} className="hover:text-ink transition-colors p-0.5">
           <I.down r={!open} />
         </button>
       </div>
       {open && (
         <div className="p-3 space-y-2">
-          {showImageQ && (
+          {items.map(item => item.kind === 'question' ? (
             <BuilderQuestion
-              q={{ id: 0, text: 'Which country does this flag belong to?', cat: 'Geography', diff: 'Easy', type: 'Single Answer' }}
-              idx={0} hasImage onEdit={() => onEdit('single')}
+              key={`question-${item.question.id}`}
+              q={item.question}
+              idx={round.questions.filter(question => question.itemPosition <= item.question.itemPosition).length - 1}
+              onEdit={() => onEdit(item.question.id)}
+              onReplace={() => onReplace(item.question.id)}
+              onDelete={() => onDeleteQuestion(item.question.id)}
+              onDuplicate={() => onDuplicateQuestion(item.question.id)}
             />
-          )}
-          {qs.map((q, i) => (
-            <BuilderQuestion key={q.id} q={q} idx={showImageQ ? i + 1 : i} onEdit={() => onEdit(i % 2 === 0 ? 'single' : 'multi')} />
+          ) : (
+            <BuilderContentScreen
+              key={`content-${item.screen.id}`}
+              screen={item.screen}
+              onChange={updates => onUpdateContentScreen(item.screen.id, updates)}
+              onDelete={() => onDeleteContentScreen(item.screen.id)}
+            />
           ))}
-          {showContentCard && <BuilderContentScreen />}
           <div className="flex gap-1 pt-1">
-            {['Add Question', 'Add Content Screen'].map(lbl => (
-              <button key={lbl} style={{ color: C.sub }}
-                className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
-                <I.plus /> {lbl}
-              </button>
-            ))}
+            <button onClick={onAddQuestion} style={{ color: C.sub }}
+              className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
+              <I.plus /> Add Question
+            </button>
+            <button onClick={onAddContentScreen} style={{ color: C.sub }}
+              className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
+              <I.plus /> Add Content Screen
+            </button>
           </div>
         </div>
       )}
@@ -678,11 +1528,12 @@ function BuilderRound({ round, qs, onEdit, showContentCard = false, showImageQ =
   )
 }
 
-function BuilderContentScreen() {
-  const [expanded, setExpanded] = useState(false)
-  const [title, setTitle] = useState("Bar's open — back in 10 minutes!")
-  const [body, setBody] = useState('')
-  const [showImage, setShowImage] = useState(false)
+function BuilderContentScreen({ screen, onChange, onDelete }: {
+  screen: BuilderContentScreenData
+  onChange: (updates: Partial<BuilderContentScreenData>) => void
+  onDelete: () => void
+}) {
+  const [expanded, setExpanded] = useState(() => screen.id.startsWith('content-'))
 
   return (
     <div style={{ border: `1.5px dashed ${C.violet}50`, background: `${C.violet}06` }}
@@ -699,11 +1550,11 @@ function BuilderContentScreen() {
             <span style={{ color: C.sub }} className="text-[10px]">Shown to players · Not scored</span>
           </div>
           <p style={{ color: C.ink }} className="text-sm font-semibold truncate group-hover:text-violet transition-colors">
-            {title || 'Untitled screen'}
+            {screen.title || 'Untitled screen'}
           </p>
         </div>
         <div className="flex items-center gap-0.5 shrink-0 mt-0.5" onClick={e => e.stopPropagation()}>
-          <IBtn icon={<I.trash />} title="Delete" danger />
+          <IBtn icon={<I.trash />} title="Delete content screen" onClick={onDelete} danger />
         </div>
       </div>
 
@@ -714,8 +1565,8 @@ function BuilderContentScreen() {
           <div>
             <label style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-wider block mb-1">Title</label>
             <input
-              value={title}
-              onChange={e => setTitle(e.target.value)}
+              value={screen.title}
+              onChange={e => onChange({ title: e.target.value })}
               placeholder="e.g. Bar's open — back in 10 minutes!"
               style={{ border: `1px solid ${C.line}`, color: C.ink }}
               className="w-full rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30 placeholder:text-sub"
@@ -724,8 +1575,8 @@ function BuilderContentScreen() {
           <div>
             <label style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-wider block mb-1">Body Copy <span className="normal-case font-normal opacity-60">(optional)</span></label>
             <textarea
-              value={body}
-              onChange={e => setBody(e.target.value)}
+              value={screen.body}
+              onChange={e => onChange({ body: e.target.value })}
               rows={2}
               placeholder="Additional text shown below the title on player screens…"
               style={{ border: `1px solid ${C.line}`, color: C.ink }}
@@ -733,27 +1584,14 @@ function BuilderContentScreen() {
             />
           </div>
           <div>
-            <div className="flex items-center justify-between mb-1">
-              <label style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-wider">Image <span className="normal-case font-normal opacity-60">(optional)</span></label>
-              {!showImage && (
-                <button onClick={() => setShowImage(true)} style={{ color: C.violet }}
-                  className="text-[11px] font-semibold hover:opacity-70">+ Add image</button>
-              )}
-            </div>
-            {showImage && (
-              <div className="flex items-center gap-2">
-                <div style={{ border: `2px dashed ${C.line}` }}
-                  className="flex-1 rounded-xl p-3 flex items-center gap-2 cursor-pointer hover:border-violet/40 transition-colors">
-                  <svg width="16" height="16" viewBox="0 0 18 14" fill="none">
-                    <rect x="1" y="1" width="16" height="12" rx="2" stroke={C.sub} strokeWidth="1.2"/>
-                    <circle cx="5.5" cy="5" r="1.5" fill={C.sub} fillOpacity="0.5"/>
-                    <path d="M1 10l4-4 3 3 2.5-2.5L17 12" stroke={C.sub} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                  <span style={{ color: C.sub }} className="text-xs">Drop image or click to upload</span>
-                </div>
-                <button onClick={() => setShowImage(false)} style={{ color: C.sub }} className="hover:text-stop transition-colors p-1">{I.x(14)}</button>
-              </div>
-            )}
+            <label style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-wider block mb-1">Image URL <span className="normal-case font-normal opacity-60">(optional)</span></label>
+            <input
+              value={screen.imageUrl ?? ''}
+              onChange={event => onChange({ imageUrl: event.target.value.trim() || null })}
+              placeholder="https://example.com/content-image.png"
+              style={{ border: `1px solid ${C.line}`, color: C.ink }}
+              className="w-full rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30 placeholder:text-sub"
+            />
           </div>
           <div className="flex justify-end">
             <button onClick={() => setExpanded(false)} style={{ color: C.violet }}
@@ -765,13 +1603,20 @@ function BuilderContentScreen() {
   )
 }
 
-function BuilderQuestion({ q, idx, onEdit, hasImage = false }: { q: typeof Qs[0]; idx: number; onEdit: () => void; hasImage?: boolean }) {
+function BuilderQuestion({ q, idx, onEdit, onReplace, onDelete, onDuplicate }: {
+  q: BuilderQuestionData
+  idx: number
+  onEdit: () => void
+  onReplace: () => void
+  onDelete: () => void
+  onDuplicate: () => void
+}) {
   return (
     <div onClick={onEdit} style={{ border: `1px solid ${C.line}`, cursor: 'pointer' }}
       className="flex items-start gap-3 px-3 py-3 rounded-xl hover:border-violet hover:shadow-sm hover:bg-violet-mist/30 transition-all group bg-white">
       <span style={{ color: C.sub }} className="mt-0.5 cursor-grab hover:text-ink transition-colors shrink-0" onClick={e => e.stopPropagation()}><I.grip /></span>
       <div className="flex-1 min-w-0">
-        {hasImage && (
+        {q.hasImage && (
           <div style={{ background: C.ground, border: `1px solid ${C.line}` }}
             className="rounded-lg h-16 mb-2 flex items-center justify-center gap-2 overflow-hidden">
             <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
@@ -779,7 +1624,7 @@ function BuilderQuestion({ q, idx, onEdit, hasImage = false }: { q: typeof Qs[0]
               <circle cx="5.5" cy="5" r="1.5" fill={C.sub} fillOpacity="0.5"/>
               <path d="M1 10l4-4 3 3 2.5-2.5L16 12" stroke={C.sub} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
-            <span style={{ color: C.sub }} className="text-xs">flag_japan.png</span>
+            <span style={{ color: C.sub }} className="text-xs">{q.imageUrl?.split('/').pop() ?? 'Question image'}</span>
           </div>
         )}
         <div className="flex items-start gap-2 mb-2">
@@ -790,16 +1635,16 @@ function BuilderQuestion({ q, idx, onEdit, hasImage = false }: { q: typeof Qs[0]
           <Chip>{q.cat}</Chip>
           <Chip color={q.diff === 'Easy' ? 'easy' : q.diff === 'Medium' ? 'medium' : 'hard'}>{q.diff}</Chip>
           <Chip color="violet">{q.type}</Chip>
-          {hasImage && <Chip color="violet">📷 Image</Chip>}
+          {q.hasImage && <Chip color="violet">📷 Image</Chip>}
           <span style={{ color: C.violet }} className="text-[11px] font-semibold opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 ml-1">
             <I.pencil /> Edit
           </span>
         </div>
       </div>
       <div className="flex items-center gap-0.5 shrink-0 mt-0.5" onClick={e => e.stopPropagation()}>
-        <IBtn icon={<I.refresh />} title="Replace" />
-        <IBtn icon={<I.copy />} title="Duplicate" />
-        <IBtn icon={<I.trash />} title="Delete" danger />
+        <IBtn icon={<I.refresh />} title="Replace" onClick={onReplace} />
+        <IBtn icon={<I.copy />} title="Duplicate" onClick={onDuplicate} />
+        <IBtn icon={<I.trash />} title="Delete" onClick={onDelete} danger />
       </div>
     </div>
   )
@@ -870,26 +1715,63 @@ function AlternatesField({ values, onChange }: { values: string[]; onChange: (v:
   )
 }
 
-function QuestionEditor({ type: initialType, onClose }: { type: 'single' | 'multi'; onClose: () => void; onToggle: () => void }) {
-  const [qtype, setQtype] = useState<QType>(initialType === 'multi' ? 'multiple-choice' : 'single')
+function acceptedAnswerGroups(value: unknown): string[][] {
+  if (!Array.isArray(value)) return []
+  return value.map(group => Array.isArray(group)
+    ? group.map(item => String(item))
+    : [String(group)])
+}
+
+function QuestionEditor({ question, title, onClose, onSave }: {
+  question: BuilderQuestionData
+  title?: string
+  onClose: () => void
+  onSave: (question: BuilderQuestionData) => void | Promise<void>
+}) {
+  const initialOptions = questionOptions(question.options)
+  const initialAnswers = asStringArray(question.correctAnswer)
+  const initialDifficulty = question.diff === 'Easy' || question.diff === 'Medium' || question.diff === 'Hard'
+    ? question.diff
+    : null
+  const [qtype, setQtype] = useState<QType>(() => editorQuestionType(question.questionType))
   const [pendingType, setPendingType] = useState<QType | null>(null)
-  const [diff, setDiff] = useState<'Easy' | 'Medium' | 'Hard' | null>('Medium')
-  const [cat, setCat] = useState('Geography')
-  const [showCat, setShowCat] = useState(true)
-  const [showDiff, setShowDiff] = useState(true)
-  const [showTags, setShowTags] = useState(false)
-  const [alternates, setAlternates] = useState(['ACT', 'Australian Capital Territory'])
-  const [multiAnswers, setMultiAnswers] = useState([
-    { text: 'Poland', alts: [] as string[] },
-    { text: 'Czech Republic', alts: ['Czechia'] as string[] },
-    { text: 'Austria', alts: [] as string[] },
-  ])
+  const [prompt, setPrompt] = useState(question.text)
+  const [singleAnswer, setSingleAnswer] = useState(() => typeof question.correctAnswer === 'string' ? question.correctAnswer : '')
+  const acceptedGroups = acceptedAnswerGroups(question.acceptedAnswers)
+  const [choiceOptions, setChoiceOptions] = useState(() => {
+    const loaded = initialOptions.map((option, index) => ({
+      key: option.key ?? String.fromCharCode(65 + index),
+      label: option.label ?? '',
+    }))
+    return loaded.length > 0 ? loaded : ['A', 'B', 'C', 'D'].map(key => ({ key, label: '' }))
+  })
+  const [correctChoice, setCorrectChoice] = useState(() => typeof question.correctAnswer === 'string' ? question.correctAnswer : 'A')
+  const [rankingItems, setRankingItems] = useState(() => initialAnswers.length ? initialAnswers : (asStringArray(question.options).length ? asStringArray(question.options) : ['', '']))
+  const [notes, setNotes] = useState(question.notes)
+  const [imageUrl, setImageUrl] = useState(question.imageUrl ?? '')
+  const [diff, setDiff] = useState<'Easy' | 'Medium' | 'Hard' | null>(initialDifficulty)
+  const [cat, setCat] = useState(question.cat === 'Uncategorised' ? '' : question.cat)
+  const [showCat, setShowCat] = useState(question.cat !== 'Uncategorised')
+  const [showDiff, setShowDiff] = useState(initialDifficulty !== null)
+  const [showTags, setShowTags] = useState(question.tags.length > 0)
+  const [tags, setTags] = useState(question.tags.join(', '))
+  const [alternates, setAlternates] = useState<string[]>(() => acceptedGroups.flat().filter(Boolean))
+  const [multiAnswers, setMultiAnswers] = useState(() => {
+    const loaded = initialAnswers.map((text, index) => ({ text, alts: acceptedGroups[index] ?? [] }))
+    return loaded.length > 0 ? loaded : [{ text: '', alts: [] as string[] }]
+  })
   const [scoring, setScoring] = useState<'each' | 'all'>('each')
-  const [parts, setParts] = useState([
-    { label: 'A', text: 'Gold Rings, Red Star Rings and Emerald Gems', ans: 'Sonic the Hedgehog', alts: [] as string[] },
-    { label: 'B', text: 'Wumpa Fruit, Coloured Gems and Time Relics', ans: 'Crash Bandicoot', alts: [] as string[] },
-    { label: 'C', text: 'Musical Notes, Red and Gold Feathers, and Blue Eggs', ans: "Banjo-Kazooie", alts: [] as string[] },
-  ])
+  const [parts, setParts] = useState(() => {
+    const loaded = initialOptions.map((option, index) => ({
+      label: option.label ?? String.fromCharCode(65 + index),
+      text: option.clue ?? '',
+      ans: initialAnswers[index] ?? '',
+      alts: acceptedGroups[index] ?? [],
+    }))
+    return loaded.length > 0 ? loaded : [{ label: 'A', text: '', ans: '', alts: [] as string[] }]
+  })
+  const [savingQuestion, setSavingQuestion] = useState(false)
+  const [questionSaveError, setQuestionSaveError] = useState<string | null>(null)
 
   const typeOrder: QType[] = ['single', 'multi-answer', 'multiple-choice', 'multi-part', 'ranking']
   const typeLabel: Record<QType, string> = {
@@ -912,6 +1794,73 @@ function QuestionEditor({ type: initialType, onClose }: { type: 'single' | 'mult
 
   const blocked = !!pendingType
 
+  async function handleSave() {
+    const normalizedImageUrl = imageUrl.trim() || null
+    const questionType: QuestionType = qtype === 'single'
+      ? normalizedImageUrl ? 'image-question' : 'single-answer'
+      : qtype
+
+    let correctAnswer: unknown = singleAnswer.trim()
+    let acceptedAnswers: unknown = alternates.map(value => value.trim()).filter(Boolean)
+    let options: unknown = null
+    let pointsMax = 1
+
+    if (qtype === 'multiple-choice') {
+      correctAnswer = correctChoice
+      options = choiceOptions.map(option => ({ key: option.key, label: option.label.trim() }))
+      acceptedAnswers = []
+    } else if (qtype === 'multi-answer') {
+      correctAnswer = multiAnswers.map(answer => answer.text.trim()).filter(Boolean)
+      acceptedAnswers = multiAnswers.filter(answer => answer.text.trim()).map(answer => answer.alts.map(value => value.trim()).filter(Boolean))
+      pointsMax = Math.max(1, asStringArray(correctAnswer).length)
+    } else if (qtype === 'multi-part') {
+      correctAnswer = parts.map(part => part.ans.trim())
+      options = parts.map(part => ({ label: part.label, clue: part.text.trim() }))
+      acceptedAnswers = parts.map(part => part.alts.map(value => value.trim()).filter(Boolean))
+      pointsMax = Math.max(1, parts.length)
+    } else if (qtype === 'ranking') {
+      correctAnswer = rankingItems.map(item => item.trim()).filter(Boolean)
+      options = correctAnswer
+      acceptedAnswers = []
+      pointsMax = Math.max(1, asStringArray(correctAnswer).length)
+    }
+
+    if ((qtype === 'single' && !String(correctAnswer).trim()) || (qtype !== 'single' && asStringArray(correctAnswer).length === 0 && qtype !== 'multiple-choice')) {
+      setQuestionSaveError('Add the required correct answer content.')
+      return
+    }
+    if (qtype === 'multiple-choice' && choiceOptions.some(option => !option.label.trim())) {
+      setQuestionSaveError('Fill every multiple-choice option.')
+      return
+    }
+
+    setSavingQuestion(true)
+    setQuestionSaveError(null)
+    try {
+      await onSave({
+        ...question,
+        text: prompt.trim(),
+        cat: showCat && cat.trim() ? cat.trim() : 'Uncategorised',
+        diff: showDiff && diff ? diff : 'Unrated',
+        type: questionTypeLabel(questionType),
+        questionType,
+        hasImage: Boolean(normalizedImageUrl),
+        correctAnswer,
+        acceptedAnswers,
+        options,
+        tags: tags.split(',').map(value => value.trim()).filter(Boolean),
+        imageUrl: normalizedImageUrl,
+        pointsMax,
+        notes: notes.trim(),
+      })
+    } catch (error) {
+      console.error('Could not save question:', error)
+      setQuestionSaveError('Could not save this question. Try again.')
+    } finally {
+      setSavingQuestion(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-stretch justify-end">
       <div style={{ background: 'rgba(12,11,24,0.4)' }} className="absolute inset-0 backdrop-blur-[2px]" onClick={onClose} />
@@ -920,7 +1869,7 @@ function QuestionEditor({ type: initialType, onClose }: { type: 'single' | 'mult
 
         {/* Header */}
         <div style={{ borderBottom: `1px solid ${C.line}` }} className="flex items-center px-6 py-4 shrink-0">
-          <h2 style={{ color: C.ink }} className="font-extrabold flex-1">Edit Question</h2>
+          <h2 style={{ color: C.ink }} className="font-extrabold flex-1">{title ?? 'Edit Question'}</h2>
           <button onClick={onClose} style={{ color: C.sub }} className="hover:text-ink transition-colors p-1">{I.x()}</button>
         </div>
 
@@ -963,13 +1912,8 @@ function QuestionEditor({ type: initialType, onClose }: { type: 'single' | 'mult
 
             <Field label="Question">
               <textarea
-                defaultValue={
-                  qtype === 'single' ? 'What is the capital city of Australia?' :
-                  qtype === 'multi-answer' ? 'Name the three countries that share a land border with Germany to the east.' :
-                  qtype === 'multiple-choice' ? 'Which film won the Academy Award for Best Picture in 2020?' :
-                  qtype === 'multi-part' ? 'Like the Coins and Mushrooms from the Super Mario series, identify the video game franchise from their collectible items:' :
-                  'Rank these four planets in order of size, largest first.'
-                }
+                value={prompt}
+                onChange={event => setPrompt(event.target.value)}
                 rows={3}
                 style={{ border: `1px solid ${C.line}`, color: C.ink }}
                 className="w-full rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30 resize-none leading-relaxed"
@@ -980,7 +1924,7 @@ function QuestionEditor({ type: initialType, onClose }: { type: 'single' | 'mult
             {qtype === 'single' && (
               <>
                 <Field label="Correct Answer">
-                  <input defaultValue="Canberra"
+                  <input value={singleAnswer} onChange={event => setSingleAnswer(event.target.value)}
                     style={{ border: `1px solid ${C.line}`, color: C.ink }}
                     className="w-full rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30" />
                 </Field>
@@ -992,24 +1936,21 @@ function QuestionEditor({ type: initialType, onClose }: { type: 'single' | 'mult
             {qtype === 'multiple-choice' && (
               <Field label="Answer Options">
                 <div className="space-y-2">
-                  {[
-                    { l: 'A', text: 'Parasite', correct: true },
-                    { l: 'B', text: '1917', correct: false },
-                    { l: 'C', text: 'Joker', correct: false },
-                    { l: 'D', text: 'Once Upon a Time in Hollywood', correct: false },
-                  ].map(opt => (
-                    <div key={opt.l}
-                      style={{ border: `1.5px solid ${opt.correct ? C.go : C.line}`, background: opt.correct ? '#f0fdf9' : C.ground }}
+                  {choiceOptions.map((option, index) => {
+                    const correct = option.key === correctChoice
+                    return (
+                    <div key={option.key}
+                      style={{ border: `1.5px solid ${correct ? C.go : C.line}`, background: correct ? '#f0fdf9' : C.ground }}
                       className="flex items-center gap-3 p-3 rounded-xl">
-                      <div style={{ background: opt.correct ? C.go : C.line }}
+                      <button type="button" onClick={() => setCorrectChoice(option.key)} style={{ background: correct ? C.go : C.line }}
                         className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0">
-                        {opt.l}
-                      </div>
-                      <input defaultValue={opt.text} style={{ color: C.ink }} className="flex-1 bg-transparent text-sm focus:outline-none" />
-                      {opt.correct && <span style={{ color: C.go }} className="text-xs font-bold shrink-0">✓ Correct</span>}
+                        {option.key}
+                      </button>
+                      <input value={option.label} onChange={event => setChoiceOptions(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))} style={{ color: C.ink }} className="flex-1 bg-transparent text-sm focus:outline-none" />
+                      {correct && <span style={{ color: C.go }} className="text-xs font-bold shrink-0">✓ Correct</span>}
                     </div>
-                  ))}
-                  <button style={{ color: C.violet }} className="text-xs font-semibold hover:underline flex items-center gap-1">
+                  )})}
+                  <button onClick={() => setChoiceOptions(current => [...current, { key: String.fromCharCode(65 + current.length), label: '' }])} style={{ color: C.violet }} className="text-xs font-semibold hover:underline flex items-center gap-1">
                     <I.plus /> Add option
                   </button>
                 </div>
@@ -1149,16 +2090,16 @@ function QuestionEditor({ type: initialType, onClose }: { type: 'single' | 'mult
               <>
                 <Field label="Correct Order (drag to reorder)">
                   <div className="space-y-2">
-                    {['Jupiter', 'Saturn', 'Uranus', 'Neptune'].map((item, i) => (
+                    {rankingItems.map((item, i) => (
                       <div key={i} style={{ border: `1px solid ${C.line}`, background: C.ground }}
                         className="flex items-center gap-3 px-3 py-2.5 rounded-xl">
                         <span style={{ color: C.sub }} className="cursor-grab"><I.grip /></span>
                         <span style={{ background: C.violetPale, color: C.violet }}
                           className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0">{i + 1}</span>
-                        <input defaultValue={item} style={{ color: C.ink }} className="flex-1 bg-transparent text-sm focus:outline-none" />
+                        <input value={item} onChange={event => setRankingItems(current => current.map((value, index) => index === i ? event.target.value : value))} style={{ color: C.ink }} className="flex-1 bg-transparent text-sm focus:outline-none" />
                       </div>
                     ))}
-                    <button style={{ color: C.violet }} className="text-xs font-semibold hover:underline flex items-center gap-1">
+                    <button onClick={() => setRankingItems(current => [...current, ''])} style={{ color: C.violet }} className="text-xs font-semibold hover:underline flex items-center gap-1">
                       <I.plus /> Add item
                     </button>
                   </div>
@@ -1207,7 +2148,7 @@ function QuestionEditor({ type: initialType, onClose }: { type: 'single' | 'mult
             <OptionalField label="Tags (Optional)" shown={showTags} onToggle={() => setShowTags(v => !v)}>
               {showTags && (
                 <>
-                  <input defaultValue="Capitals, Countries"
+                  <input value={tags} onChange={event => setTags(event.target.value)}
                     style={{ border: `1px solid ${C.line}`, color: C.ink }}
                     className="w-full rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30"
                     placeholder="e.g. Countries, Cities, Capitals…" />
@@ -1217,29 +2158,24 @@ function QuestionEditor({ type: initialType, onClose }: { type: 'single' | 'mult
             </OptionalField>
 
             <Field label="Host Notes">
-              <textarea rows={3} placeholder="Optional facts, clarifications, or notes to read while announcing the answer."
+              <textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)} placeholder="Optional facts, clarifications, or notes to read while announcing the answer."
                 style={{ border: `1px solid ${C.line}`, color: C.ink }}
                 className="w-full rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30 resize-none placeholder:text-sub" />
             </Field>
 
             <Field label="Image (Optional)">
-              <div style={{ border: `2px dashed ${C.line}` }}
-                className="rounded-xl p-6 flex flex-col items-center gap-2 hover:border-violet/40 hover:bg-violet-mist transition-all cursor-pointer">
-                <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-                  <rect x="2" y="2" width="18" height="18" rx="3" stroke={C.sub} strokeWidth="1.4"/>
-                  <circle cx="7.5" cy="7.5" r="1.5" stroke={C.sub} strokeWidth="1.3"/>
-                  <path d="M2 15l5-5 3.5 3.5 3-3 6.5 6.5" stroke={C.sub} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-                <span style={{ color: C.sub }} className="text-sm font-medium">Drop image or click to upload</span>
-                <span style={{ color: C.sub }} className="text-xs opacity-60">PNG, JPG up to 5 MB</span>
-              </div>
+              <input value={imageUrl} onChange={event => setImageUrl(event.target.value)} placeholder="https://example.com/question-image.png"
+                style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                className="w-full rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30" />
+              <p style={{ color: C.sub }} className="text-[11px] mt-1.5 opacity-70">Image uploads will be added later; existing hosted image URLs are preserved here.</p>
             </Field>
           </div>
         </div>
 
         <div style={{ borderTop: `1px solid ${C.line}` }} className="flex justify-end gap-2 px-6 py-4 shrink-0">
+          {questionSaveError && <span style={{ color: C.stop }} className="mr-auto self-center text-xs font-semibold">{questionSaveError}</span>}
           <Btn v="secondary" sz="sm" onClick={onClose}>Cancel</Btn>
-          <Btn sz="sm" onClick={onClose} disabled={blocked}>Save Question</Btn>
+          <Btn sz="sm" onClick={() => void handleSave()} disabled={blocked || !prompt.trim() || savingQuestion}>{savingQuestion ? 'Saving…' : 'Save Question'}</Btn>
         </div>
       </div>
     </div>
@@ -1490,7 +2426,13 @@ function QuizReview({ go }: { go: Go }) {
         </aside>
       </div>
 
-      {modal && <QuestionEditor type={modal} onClose={() => setModal(null)} onToggle={() => setModal(t => t === 'single' ? 'multi' : 'single')} />}
+      {modal && (
+        <QuestionEditor
+          question={prototypeEditorQuestion(modal)}
+          onClose={() => setModal(null)}
+          onSave={() => setModal(null)}
+        />
+      )}
     </div>
   )
 }
@@ -1637,75 +2579,32 @@ function HostSetup({ go }: { go: Go }) {
     setSetupError(null)
 
     try {
-      const { data: questionRows, error: questionError } = await supabase
-        .from('quiz_questions')
-        .select('question_key, position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
-        .eq('quiz_id', quiz.id)
-        .order('position', { ascending: true })
-
-      if (questionError) throw questionError
-      if (!questionRows || questionRows.length === 0) throw new Error('This quiz has no questions yet')
-
-      const code = await generateUniqueGameCode()
-      const firstQuestionKey = questionRows[0].question_key
-
       const { data: game, error: gameError } = await supabase
-        .from('games')
-        .insert({
-          code,
-          title: quiz.title,
-          status: 'lobby',
-          current_screen: 'lobby',
-          answer_phase: 'open',
-          current_question_key: firstQuestionKey,
-          quiz_id: quiz.id,
-          settings: {
+        .rpc('create_game_from_quiz', {
+          p_quiz_id: quiz.id,
+          p_settings: {
             answer_reveal: reveal,
             leaderboard_visibility: lb,
             top_prizes: topPrizes,
             bottom_prizes: botPrizes,
           },
         })
-        .select('id, code, title')
         .single()
 
       if (gameError) throw gameError
-
-      const gameQuestions = questionRows.map((question) => ({
-        game_id: game.id,
-        question_key: question.question_key,
-        position: question.position,
-        round_number: question.round_number,
-        round_position: question.round_position,
-        round_question_count: question.round_question_count,
-        round_title: question.round_title,
-        prompt: question.prompt,
-        category: question.category,
-        difficulty: question.difficulty,
-        question_type: question.question_type,
-        correct_answer: question.correct_answer,
-        options: question.options,
-        image_url: question.image_url,
-        points_max: question.points_max,
-        notes: question.notes,
-      }))
-
-      const { error: copyError } = await supabase
-        .from('game_questions')
-        .insert(gameQuestions)
-
-      if (copyError) {
-        await supabase.from('games').delete().eq('id', game.id)
-        throw copyError
-      }
-
-      localStorage.setItem('simple-trivia-host-game-id', game.id)
-      localStorage.setItem('simple-trivia-host-game-code', game.code)
-      localStorage.setItem('simple-trivia-host-game-title', game.title)
+      localStorage.setItem('simple-trivia-host-game-id', game.game_id)
+      localStorage.setItem('simple-trivia-host-game-code', game.game_code)
+      localStorage.setItem('simple-trivia-host-game-title', game.game_title)
       go('lobby')
     } catch (error) {
       console.error('Could not open lobby:', error)
-      setSetupError(error instanceof Error ? error.message : 'Could not open the lobby.')
+      setSetupError(
+        error instanceof Error
+          ? error.message
+          : typeof error === 'object' && error !== null && 'message' in error
+            ? String(error.message)
+            : 'Could not open the lobby.',
+      )
     } finally {
       setOpeningLobby(false)
     }
@@ -1913,6 +2812,7 @@ function Lobby({ go }: { go: Go }) {
         current_screen: 'round-start',
         answer_phase: 'open',
         current_question_key: firstQuestion.question_key,
+        current_content_screen_key: null,
       })
 
       go('live-question')
@@ -2103,6 +3003,7 @@ type LiveTeam = {
   id: string
   name: string
   score: number
+  prize_awards?: Json
 }
 
 type LiveSubmission = {
@@ -2117,6 +3018,7 @@ type LiveSubmission = {
 type LiveQuestionDefinition = {
   question_key: string
   position: number
+  item_position: number
   round_number: number
   round_position: number
   round_question_count: number
@@ -2130,6 +3032,27 @@ type LiveQuestionDefinition = {
   image_url: string | null
   points_max: number
   notes: string | null
+}
+
+type LiveContentScreenDefinition = {
+  screen_key: string
+  item_position: number
+  round_number: number
+  round_title: string
+  title: string
+  body: string | null
+  image_url: string | null
+}
+
+type LiveSequenceItem =
+  | { kind: 'question'; itemPosition: number; roundNumber: number; question: LiveQuestionDefinition }
+  | { kind: 'content'; itemPosition: number; roundNumber: number; content: LiveContentScreenDefinition }
+
+function liveSequenceItems(questions: LiveQuestionDefinition[], contentScreens: LiveContentScreenDefinition[]): LiveSequenceItem[] {
+  return [
+    ...questions.map(question => ({ kind: 'question' as const, itemPosition: question.item_position, roundNumber: question.round_number, question })),
+    ...contentScreens.map(content => ({ kind: 'content' as const, itemPosition: content.item_position, roundNumber: content.round_number, content })),
+  ].sort((a, b) => a.itemPosition - b.itemPosition)
 }
 
 type HostQuestionDetail = {
@@ -2259,6 +3182,10 @@ function LiveQuestion({ go }: { go: Go }) {
   const [submissions, setSubmissions] = useState<LiveSubmission[]>([])
   const [question, setQuestion] = useState<LiveQuestionDefinition | null>(null)
   const [allQuestions, setAllQuestions] = useState<LiveQuestionDefinition[]>([])
+  const [contentScreen, setContentScreen] = useState<LiveContentScreenDefinition | null>(null)
+  const [allContentScreens, setAllContentScreens] = useState<LiveContentScreenDefinition[]>([])
+  const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
+  const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
   const [liveError, setLiveError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
 
@@ -2269,7 +3196,7 @@ function LiveQuestion({ go }: { go: Go }) {
     async function loadLiveData() {
       const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('id, answer_phase, current_question_key, current_screen')
+        .select('id, answer_phase, current_question_key, current_content_screen_key, current_screen, settings')
         .eq('code', getHostGameCode())
         .maybeSingle()
 
@@ -2283,17 +3210,24 @@ function LiveQuestion({ go }: { go: Go }) {
 
       setLiveGameId(game.id)
       setGameScreen(game.current_screen ?? '')
+      setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
+      setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
 
       if (game.answer_phase === 'open' || game.answer_phase === 'closed' || game.answer_phase === 'revealed') {
         setPhase(game.answer_phase)
       }
 
-      const [{ data: questionRows, error: questionError }, { data: teamRows, error: teamError }] = await Promise.all([
+      const [questionResult, contentScreenResult, teamResult] = await Promise.all([
         supabase
           .from('game_questions')
-          .select('question_key, position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
+          .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
           .eq('game_id', game.id)
           .order('position', { ascending: true }),
+        supabase
+          .from('game_content_screens')
+          .select('screen_key, item_position, round_number, round_title, title, body, image_url')
+          .eq('game_id', game.id)
+          .order('item_position', { ascending: true }),
         supabase
           .from('teams')
           .select('id, name, score')
@@ -2303,18 +3237,22 @@ function LiveQuestion({ go }: { go: Go }) {
 
       if (!active) return
 
-      if (questionError || teamError) {
-        console.error('Could not load live question data:', questionError ?? teamError)
+      if (questionResult.error || contentScreenResult.error || teamResult.error) {
+        console.error('Could not load live question data:', questionResult.error ?? contentScreenResult.error ?? teamResult.error)
         setLiveError('Could not load the live question.')
         return
       }
 
-      const questions = (questionRows ?? []) as LiveQuestionDefinition[]
+      const questions = (questionResult.data ?? []) as LiveQuestionDefinition[]
+      const contentScreens = (contentScreenResult.data ?? []) as LiveContentScreenDefinition[]
       const currentQuestion = questions.find(item => item.question_key === game.current_question_key) ?? questions[0] ?? null
+      const currentContentScreen = contentScreens.find(item => item.screen_key === game.current_content_screen_key) ?? null
 
       setAllQuestions(questions)
+      setAllContentScreens(contentScreens)
       setQuestion(currentQuestion)
-      setTeams((teamRows ?? []) as LiveTeam[])
+      setContentScreen(currentContentScreen)
+      setTeams((teamResult.data ?? []) as LiveTeam[])
 
       if (currentQuestion) {
         const { data: submissionRows, error: submissionError } = await supabase
@@ -2375,13 +3313,32 @@ function LiveQuestion({ go }: { go: Go }) {
     setLiveError(null)
 
     try {
+      const firstRoundItem = liveSequenceItems(allQuestions, allContentScreens)
+        .find(item => item.roundNumber === question.round_number) ?? null
+
+      if (firstRoundItem?.kind === 'content') {
+        await updateLiveGame({
+          status: 'live',
+          current_screen: 'content-screen',
+          answer_phase: 'closed',
+          current_content_screen_key: firstRoundItem.content.screen_key,
+        })
+        setContentScreen(firstRoundItem.content)
+        setGameScreen('content-screen')
+        setPhase('closed')
+        return
+      }
+
+      const openingQuestion = firstRoundItem?.kind === 'question' ? firstRoundItem.question : question
       await updateLiveGame({
         status: 'live',
-        current_screen: question.question_type,
+        current_screen: openingQuestion.question_type,
         answer_phase: 'open',
-        current_question_key: question.question_key,
+        current_question_key: openingQuestion.question_key,
+        current_content_screen_key: null,
       })
-      setGameScreen(question.question_type)
+      setQuestion(openingQuestion)
+      setGameScreen(openingQuestion.question_type)
       setPhase('open')
     } catch (error) {
       console.error('Could not open question:', error)
@@ -2462,62 +3419,96 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }
 }
 
+  async function scoreCurrentQuestion(revealNow: boolean) {
+    if (!liveGameId || !question) throw new Error('Live question is not available')
+
+    const { data: freshSubmissions, error: submissionError } = await supabase
+      .from('submissions')
+      .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+      .eq('game_id', liveGameId)
+      .eq('question_key', question.question_key)
+
+    if (submissionError) throw submissionError
+
+    const results = buildRevealResults(question, (freshSubmissions ?? []) as LiveSubmission[])
+    const { error: scoringError } = await supabase.rpc('finalize_question_scoring', {
+      p_game_id: liveGameId,
+      p_question_key: question.question_key,
+      p_results: results as unknown as Json,
+      p_reveal: revealNow,
+    })
+
+    if (scoringError) throw scoringError
+  }
+
   async function handleRevealAnswer() {
     if (!liveGameId || !question || actionBusy || reviewCount > 0) return
     setActionBusy(true)
     setLiveError(null)
 
     try {
-      const [{ data: freshTeams, error: teamError }, { data: freshSubmissions, error: submissionError }] = await Promise.all([
-        supabase.from('teams').select('id, score').eq('game_id', liveGameId),
-        supabase
-          .from('submissions')
-          .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
-          .eq('game_id', liveGameId)
-          .eq('question_key', question.question_key),
-      ])
-
-      if (teamError || submissionError) throw teamError ?? submissionError
-
-      const scoreByTeam = new Map<string, number>(
-        ((freshTeams ?? []) as { id: string; score: number }[]).map(team => [team.id, team.score]),
-      )
-
-      for (const submission of (freshSubmissions ?? []) as LiveSubmission[]) {
-        if (submission.is_correct !== null) continue
-
-        const result = scoreSubmission(question, submission)
-        const fullyCorrect = result.points === result.max
-
-        const { error: markError } = await supabase
-          .from('submissions')
-          .update({ is_correct: fullyCorrect, points_awarded: result.points, grading_json: result.grading })
-          .eq('id', submission.id)
-
-        if (markError) throw markError
-
-        if (result.points > 0) {
-          const currentScore = scoreByTeam.get(submission.team_id) ?? 0
-          const { error: scoreError } = await supabase
-            .from('teams')
-            .update({ score: currentScore + result.points })
-            .eq('id', submission.team_id)
-
-          if (scoreError) throw scoreError
-          scoreByTeam.set(submission.team_id, currentScore + result.points)
-        }
-      }
-
-      const { error: phaseError } = await supabase
-        .from('games')
-        .update({ answer_phase: 'revealed' })
-        .eq('id', liveGameId)
-
-      if (phaseError) throw phaseError
+      await scoreCurrentQuestion(true)
       setPhase('revealed')
     } catch (error) {
       console.error('Could not reveal answer:', error)
       setLiveError('Could not reveal and score the answer. Please try again.')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  async function handleScoreAndContinue() {
+    if (!liveGameId || !question || actionBusy || reviewCount > 0) return
+    setActionBusy(true)
+    setLiveError(null)
+
+    try {
+      await scoreCurrentQuestion(false)
+      const nextItem = liveSequenceItems(allQuestions, allContentScreens)
+        .find(item => item.itemPosition > question.item_position) ?? null
+      const roundIsComplete = !nextItem || nextItem.roundNumber !== question.round_number
+
+      if (roundIsComplete) {
+        const firstRoundQuestion = allQuestions
+          .filter(item => item.round_number === question.round_number)
+          .sort((a, b) => a.round_position - b.round_position)[0] ?? question
+
+        await updateLiveGame({
+          status: nextItem ? 'live' : 'finished',
+          current_screen: 'delayed-reveal',
+          answer_phase: 'revealed',
+          current_question_key: firstRoundQuestion.question_key,
+          current_content_screen_key: null,
+        })
+        go('end-of-round')
+        return
+      }
+
+      if (nextItem.kind === 'content') {
+        await updateLiveGame({
+          current_screen: 'content-screen',
+          answer_phase: 'closed',
+          current_content_screen_key: nextItem.content.screen_key,
+        })
+        setContentScreen(nextItem.content)
+        setGameScreen('content-screen')
+        setPhase('closed')
+        return
+      }
+
+      await updateLiveGame({
+        current_screen: nextItem.question.question_type,
+        answer_phase: 'open',
+        current_question_key: nextItem.question.question_key,
+        current_content_screen_key: null,
+      })
+      setQuestion(nextItem.question)
+      setPhase('open')
+      setGameScreen(nextItem.question.question_type)
+      setSubmissions([])
+    } catch (error) {
+      console.error('Could not score and advance:', error)
+      setLiveError('Could not score and continue. Please try again.')
     } finally {
       setActionBusy(false)
     }
@@ -2529,40 +3520,124 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     setLiveError(null)
 
     try {
-      const nextQuestion = allQuestions.find(item => item.position > question.position) ?? null
+      const nextItem = liveSequenceItems(allQuestions, allContentScreens)
+        .find(item => item.itemPosition > question.item_position) ?? null
 
-      if (!nextQuestion) {
-        await updateLiveGame({
-          status: 'finished',
-          current_screen: 'final-result',
-          answer_phase: 'revealed',
-          current_question_key: question.question_key,
-        })
+      if (!nextItem) {
+        if (!liveGameId) throw new Error('The live game could not be found.')
+        await finalizeLiveGame(liveGameId)
         go('final-results')
         return
       }
 
-      if (nextQuestion.round_number !== question.round_number) {
+      if (nextItem.roundNumber !== question.round_number) {
         await updateLiveGame({
-          current_screen: 'round-results',
+          current_screen: roundResultsScreen(leaderboardVisibility),
           answer_phase: 'closed',
           current_question_key: question.question_key,
+          current_content_screen_key: null,
         })
         go('end-of-round')
         return
       }
 
+      if (nextItem.kind === 'content') {
+        await updateLiveGame({
+          current_screen: 'content-screen',
+          answer_phase: 'closed',
+          current_content_screen_key: nextItem.content.screen_key,
+        })
+        setContentScreen(nextItem.content)
+        setGameScreen('content-screen')
+        setPhase('closed')
+        return
+      }
+
       await updateLiveGame({
-        current_screen: nextQuestion.question_type,
+        current_screen: nextItem.question.question_type,
         answer_phase: 'open',
-        current_question_key: nextQuestion.question_key,
+        current_question_key: nextItem.question.question_key,
+        current_content_screen_key: null,
       })
-      setQuestion(nextQuestion)
+      setQuestion(nextItem.question)
       setPhase('open')
-      setGameScreen(nextQuestion.question_type)
+      setGameScreen(nextItem.question.question_type)
       setSubmissions([])
     } catch (error) {
       console.error('Could not advance the game:', error)
+      setLiveError('Could not advance the game. Please try again.')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  async function handleAdvanceContentScreen() {
+    if (!contentScreen || actionBusy) return
+    setActionBusy(true)
+    setLiveError(null)
+
+    try {
+      const nextItem = liveSequenceItems(allQuestions, allContentScreens)
+        .find(item => item.itemPosition > contentScreen.item_position) ?? null
+
+      if (answerRevealMode === 'round' && (!nextItem || nextItem.roundNumber !== contentScreen.round_number)) {
+        const firstRoundQuestion = allQuestions
+          .filter(item => item.round_number === contentScreen.round_number)
+          .sort((a, b) => a.round_position - b.round_position)[0] ?? null
+
+        if (firstRoundQuestion) {
+          await updateLiveGame({
+            status: nextItem ? 'live' : 'finished',
+            current_screen: 'delayed-reveal',
+            answer_phase: 'revealed',
+            current_question_key: firstRoundQuestion.question_key,
+            current_content_screen_key: null,
+          })
+          go('end-of-round')
+          return
+        }
+      }
+
+      if (!nextItem) {
+        if (!liveGameId) throw new Error('The live game could not be found.')
+        await finalizeLiveGame(liveGameId)
+        go('final-results')
+        return
+      }
+
+      if (nextItem.roundNumber !== contentScreen.round_number) {
+        await updateLiveGame({
+          current_screen: roundResultsScreen(leaderboardVisibility),
+          answer_phase: 'closed',
+          current_content_screen_key: null,
+        })
+        go('end-of-round')
+        return
+      }
+
+      if (nextItem.kind === 'content') {
+        await updateLiveGame({
+          current_screen: 'content-screen',
+          answer_phase: 'closed',
+          current_content_screen_key: nextItem.content.screen_key,
+        })
+        setContentScreen(nextItem.content)
+        return
+      }
+
+      await updateLiveGame({
+        current_screen: nextItem.question.question_type,
+        answer_phase: 'open',
+        current_question_key: nextItem.question.question_key,
+        current_content_screen_key: null,
+      })
+      setQuestion(nextItem.question)
+      setContentScreen(null)
+      setPhase('open')
+      setGameScreen(nextItem.question.question_type)
+      setSubmissions([])
+    } catch (error) {
+      console.error('Could not advance the content screen:', error)
       setLiveError('Could not advance the game. Please try again.')
     } finally {
       setActionBusy(false)
@@ -2596,14 +3671,58 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   )
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const totalRounds = Math.max(1, ...allQuestions.map(item => item.round_number))
-  const nextQuestion = question ? allQuestions.find(item => item.position > question.position) ?? null : null
-  const nextIsNewRound = !!question && !!nextQuestion && nextQuestion.round_number !== question.round_number
-  const isFinalQuestion = !!question && !nextQuestion
+  const sequenceItems = liveSequenceItems(allQuestions, allContentScreens)
+  const firstRoundItem = question
+    ? sequenceItems.find(item => item.roundNumber === question.round_number) ?? null
+    : null
+  const nextLiveItem = question ? sequenceItems.find(item => item.itemPosition > question.item_position) ?? null : null
+  const nextIsNewRound = !!question && !!nextLiveItem && nextLiveItem.roundNumber !== question.round_number
+  const isFinalQuestion = !!question && !nextLiveItem
   const correctDisplay = correctAnswerDisplay(question)
   const questionDetails = hostQuestionDetails(question)
   const compoundQuestion = question?.question_type === 'multi-answer'
     || question?.question_type === 'multi-part'
     || question?.question_type === 'ranking'
+
+  if (gameScreen === 'content-screen') {
+    const nextContentItem = contentScreen
+      ? sequenceItems.find(item => item.itemPosition > contentScreen.item_position) ?? null
+      : null
+    const contentButtonLabel = !nextContentItem
+      ? 'Finish Game →'
+      : nextContentItem.roundNumber !== contentScreen?.round_number
+        ? 'End Round →'
+        : nextContentItem.kind === 'content'
+          ? 'Next Content Screen →'
+          : 'Open Next Question →'
+
+    return (
+      <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
+        <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }} className="flex items-center px-6 gap-4 shrink-0">
+          <span className="font-bold text-sm" style={{ color: C.liveDim }}>Simple Trivia</span>
+          <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>
+            Round {contentScreen?.round_number ?? question?.round_number ?? 1} · {contentScreen?.round_title ?? question?.round_title ?? 'Content Screen'}
+          </div>
+          <span style={{ background: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">CONTENT SCREEN LIVE</span>
+        </header>
+
+        <main className="flex flex-1 items-center justify-center px-8 py-10">
+          <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-8 text-center shadow-2xl">
+            <p style={{ color: '#C4B5FD' }} className="mb-4 text-xs font-bold uppercase tracking-[0.2em]">Shown on every player screen</p>
+            {contentScreen?.image_url && (
+              <div role="img" aria-label="Live content screen image" className="mx-auto mb-7 h-64 max-w-2xl rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${contentScreen.image_url})` }} />
+            )}
+            <h1 className="text-5xl font-black leading-tight">{contentScreen?.title ?? 'Loading content screen…'}</h1>
+            {contentScreen?.body && <p style={{ color: C.liveDim }} className="mx-auto mt-6 max-w-2xl text-xl leading-8">{contentScreen.body}</p>}
+            {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
+            <button onClick={handleAdvanceContentScreen} disabled={actionBusy || !contentScreen} style={{ background: C.violet, boxShadow: `0 8px 32px ${C.violet}60` }} className="mx-auto mt-10 min-w-72 rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
+              {actionBusy ? 'Advancing…' : contentButtonLabel}
+            </button>
+          </section>
+        </main>
+      </div>
+    )
+  }
 
   return (
     <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
@@ -2619,13 +3738,25 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <span style={{ color: C.liveDim }} className="font-bold text-sm">Simple Trivia</span>
         </div>
         <div className="flex-1 flex items-center justify-center gap-4 text-sm">
-          <span style={{ color: C.liveDim }}>Round {question?.round_number ?? 1} of {totalRounds}</span>
-          <span style={{ color: C.liveLine }}>·</span>
-          <span style={{ color: C.liveText }} className="font-bold">
-            Question {question?.round_position ?? 1} of {question?.round_question_count ?? 1}
-          </span>
-          <span style={{ color: C.liveLine }}>·</span>
-          <span style={{ color: C.liveDim }}>{question?.round_title ?? 'Friday Night Trivia'}</span>
+          {gameScreen === 'round-start' ? (
+            <>
+              <span style={{ color: C.liveDim }}>Round {question?.round_number ?? 1} of {totalRounds}</span>
+              <span style={{ color: C.liveLine }}>·</span>
+              <span style={{ color: C.caution }} className="font-bold">Players: Round intro</span>
+              <span style={{ color: C.liveLine }}>·</span>
+              <span style={{ color: C.liveDim }}>{question?.round_title ?? 'Friday Night Trivia'}</span>
+            </>
+          ) : (
+            <>
+              <span style={{ color: C.liveDim }}>Round {question?.round_number ?? 1} of {totalRounds}</span>
+              <span style={{ color: C.liveLine }}>·</span>
+              <span style={{ color: C.liveText }} className="font-bold">
+                Question {question?.round_position ?? 1} of {question?.round_question_count ?? 1}
+              </span>
+              <span style={{ color: C.liveLine }}>·</span>
+              <span style={{ color: C.liveDim }}>{question?.round_title ?? 'Friday Night Trivia'}</span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <div className="relative">
@@ -2654,6 +3785,47 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
       <div className="flex flex-1 items-start min-h-0">
         <div className="flex-1 flex flex-col px-7 py-6 gap-5 min-w-0 pb-12">
+          {gameScreen === 'round-start' ? (
+            <>
+              <section
+                style={{ background: C.liveSurface, border: `1.5px solid ${C.caution}55` }}
+                className="rounded-3xl px-8 py-10 text-center shadow-2xl shrink-0"
+              >
+                <p style={{ color: C.caution }} className="mb-8 text-[11px] font-extrabold uppercase tracking-[0.2em]">
+                  Players are seeing
+                </p>
+                <p style={{ color: C.liveDim }} className="mb-5 text-xs font-bold uppercase tracking-[0.14em]">Starting now</p>
+                <p style={{ color: '#C4B5FD' }} className="mb-2 text-sm font-semibold">Round {question?.round_number ?? 1}</p>
+                <h1 style={{ color: C.liveText }} className="text-5xl font-black leading-tight">{question?.round_title ?? 'Loading round…'}</h1>
+                <p style={{ color: C.liveDim }} className="mt-3 text-base">{question?.round_question_count ?? 0} questions</p>
+                <div
+                  style={{ background: `${C.violet}18`, border: `1px solid ${C.violet}35`, color: '#C4B5FD' }}
+                  className="mx-auto mt-9 flex max-w-sm items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold"
+                >
+                  <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: C.violet }} />
+                  Waiting for the first question…
+                </div>
+              </section>
+
+              <section
+                style={{ background: `${C.liveSurface}B8`, border: `1px solid ${C.liveLine}` }}
+                className="rounded-2xl px-5 py-4 shrink-0"
+              >
+                <div className="flex items-start gap-5">
+                  <div className="min-w-0 flex-1">
+                    <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Host only · Up next</p>
+                    <p style={{ color: C.liveText }} className="mt-2 text-lg font-bold leading-snug">
+                      Q{question?.round_position ?? 1}: {question?.prompt ?? 'Loading question…'}
+                    </p>
+                  </div>
+                  <div className="max-w-xs shrink-0 text-right">
+                    <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Correct answer</p>
+                    <p style={{ color: '#C4B5FD' }} className="mt-1 text-sm font-extrabold">{correctDisplay}</p>
+                  </div>
+                </div>
+              </section>
+            </>
+          ) : (
           <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-6 shrink-0">
             <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">
               {(question?.category ?? 'General')} · {question?.difficulty ?? '—'} · {question?.points_max ?? 1} pts max
@@ -2820,6 +3992,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               </div>
             )}
           </div>
+          )}
 
           <div style={{
             background: gameScreen === 'round-start' ? `${C.caution}20` : phase === 'open' ? `${C.violet}20` : phase === 'closed' ? `${C.caution}20` : `${C.go}20`,
@@ -2827,7 +4000,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             color: gameScreen === 'round-start' ? C.caution : phase === 'open' ? C.violet : phase === 'closed' ? C.caution : C.go,
           }} className="flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-extrabold uppercase tracking-widest shrink-0">
             <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'currentColor' }} />
-            {gameScreen === 'round-start' ? 'Players are on the round intro' : phase === 'open' ? 'Accepting Answers' : phase === 'closed' ? 'Answers Closed' : 'Answer Revealed'}
+            {gameScreen === 'round-start'
+              ? 'Players see the round intro · Waiting for the first question'
+              : phase === 'open'
+                ? `Players see Question ${question?.round_position ?? 1} · Answer controls are open`
+                : phase === 'closed'
+                  ? 'Players see Submitted or No answer · Correct answer is still hidden'
+                  : 'Players see their result · Correct answer is revealed'}
           </div>
 
           {liveError && (
@@ -3129,7 +4308,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 <button onClick={handleOpenQuestion} disabled={actionBusy || !question}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
                   className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
-                  {actionBusy ? 'Opening…' : 'Open First Question'}
+                  {actionBusy ? 'Opening…' : firstRoundItem?.kind === 'content' ? 'Show First Content Screen' : 'Open First Question'}
                 </button>
               </div>
             ) : phase === 'open' ? (
@@ -3172,10 +4351,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 <p style={{ color: reviewCount > 0 ? C.caution : C.go }} className="text-[11px] text-center font-semibold uppercase tracking-widest">
                   {reviewCount > 0
                     ? `${reviewCount} answer${reviewCount === 1 ? '' : 's'} still need review`
-                    : 'Answers closed — ready to reveal'}
+                    : answerRevealMode === 'round'
+                      ? 'Answers closed — score now, reveal at round end'
+                      : 'Answers closed — ready to reveal'}
                 </p>
                 <button
-                  onClick={handleRevealAnswer}
+                  onClick={answerRevealMode === 'round' ? handleScoreAndContinue : handleRevealAnswer}
                   disabled={actionBusy || !question || reviewCount > 0}
                   style={{
                     background: reviewCount > 0 ? C.livePanel : C.violet,
@@ -3185,8 +4366,18 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   }}
                   className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {actionBusy ? 'Revealing…' : reviewCount > 0 ? 'Resolve Reviews First' : 'Reveal Answer'}
-                  {!actionBusy && reviewCount === 0 && <span className="block text-sm font-semibold opacity-80 mt-0.5">& Apply Points</span>}
+                  {actionBusy
+                    ? answerRevealMode === 'round' ? 'Scoring…' : 'Revealing…'
+                    : reviewCount > 0
+                      ? 'Resolve Reviews First'
+                      : answerRevealMode === 'round'
+                        ? 'Score & Continue'
+                        : 'Reveal Answer'}
+                  {!actionBusy && reviewCount === 0 && (
+                    <span className="block text-sm font-semibold opacity-80 mt-0.5">
+                      {answerRevealMode === 'round' ? 'Keep the answer hidden' : '& Apply Points'}
+                    </span>
+                  )}
                 </button>
               </div>
             ) : (
@@ -3198,7 +4389,15 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 <button onClick={handleAdvance} disabled={actionBusy}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
                   className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
-                  {actionBusy ? 'Advancing…' : isFinalQuestion ? 'Finish Game →' : nextIsNewRound ? 'End Round →' : 'Next Question →'}
+                  {actionBusy
+                    ? 'Advancing…'
+                    : isFinalQuestion
+                      ? 'Finish Game →'
+                      : nextIsNewRound
+                        ? 'End Round →'
+                        : nextLiveItem?.kind === 'content'
+                          ? 'Show Content Screen →'
+                          : 'Next Question →'}
                 </button>
               </div>
             )}
@@ -3212,10 +4411,15 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 // ─── SCREEN 10: END OF ROUND ──────────────────────────────────────────────────
 
 function EndOfRound({ go }: { go: Go }) {
+  const [gameId, setGameId] = useState('')
   const [intermission, setIntermission] = useState(false)
+  const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
+  const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
+  const [revealingAnswers, setRevealingAnswers] = useState(false)
   const [teams, setTeams] = useState<LiveTeam[]>([])
   const [currentQuestion, setCurrentQuestion] = useState<LiveQuestionDefinition | null>(null)
   const [nextQuestion, setNextQuestion] = useState<LiveQuestionDefinition | null>(null)
+  const [roundQuestions, setRoundQuestions] = useState<LiveQuestionDefinition[]>([])
   const [totalRounds, setTotalRounds] = useState(1)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -3226,7 +4430,7 @@ function EndOfRound({ go }: { go: Go }) {
     async function loadRoundSummary() {
       const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('id, current_question_key, current_screen')
+        .select('id, current_question_key, current_screen, settings')
         .eq('code', getHostGameCode())
         .maybeSingle()
 
@@ -3237,6 +4441,10 @@ function EndOfRound({ go }: { go: Go }) {
       }
 
       setIntermission(game.current_screen === 'intermission')
+      setGameId(game.id)
+      setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
+      setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
+      setRevealingAnswers(game.current_screen === 'delayed-reveal')
 
       const [{ data: questionRows }, { data: teamRows }] = await Promise.all([
         supabase
@@ -3255,10 +4463,11 @@ function EndOfRound({ go }: { go: Go }) {
 
       const questions = (questionRows ?? []) as LiveQuestionDefinition[]
       const current = questions.find(item => item.question_key === game.current_question_key) ?? null
-      const next = current ? questions.find(item => item.position > current.position) ?? null : null
+      const next = current ? questions.find(item => item.round_number > current.round_number) ?? null : null
 
       setCurrentQuestion(current)
       setNextQuestion(next)
+      setRoundQuestions(current ? questions.filter(item => item.round_number === current.round_number) : [])
       setTotalRounds(Math.max(1, ...questions.map(item => item.round_number)))
       setTeams((teamRows ?? []) as LiveTeam[])
       setError(null)
@@ -3274,7 +4483,7 @@ function EndOfRound({ go }: { go: Go }) {
     setError(null)
     try {
       const next = !intermission
-      await updateLiveGame({ current_screen: next ? 'intermission' : 'round-results' })
+      await updateLiveGame({ current_screen: next ? 'intermission' : roundResultsScreen(leaderboardVisibility) })
       setIntermission(next)
     } catch (err) {
       console.error('Could not change intermission:', err)
@@ -3292,6 +4501,7 @@ function EndOfRound({ go }: { go: Go }) {
       await updateLiveGame({
         status: 'live',
         current_question_key: nextQuestion.question_key,
+        current_content_screen_key: null,
         current_screen: 'round-start',
         answer_phase: 'open',
       })
@@ -3303,8 +4513,94 @@ function EndOfRound({ go }: { go: Go }) {
     }
   }
 
+  async function advanceDelayedReveal() {
+    if (!currentQuestion || busy) return
+    setBusy(true)
+    setError(null)
+
+    try {
+      const orderedRoundQuestions = [...roundQuestions].sort((a, b) => a.round_position - b.round_position)
+      const currentIndex = orderedRoundQuestions.findIndex(item => item.question_key === currentQuestion.question_key)
+      const nextRevealQuestion = currentIndex >= 0 ? orderedRoundQuestions[currentIndex + 1] ?? null : null
+
+      if (nextRevealQuestion) {
+        await updateLiveGame({
+          current_screen: 'delayed-reveal',
+          answer_phase: 'revealed',
+          current_question_key: nextRevealQuestion.question_key,
+          current_content_screen_key: null,
+        })
+        setCurrentQuestion(nextRevealQuestion)
+        return
+      }
+
+      if (nextQuestion) {
+        await updateLiveGame({
+          status: 'live',
+          current_screen: roundResultsScreen(leaderboardVisibility),
+          answer_phase: 'closed',
+          current_question_key: currentQuestion.question_key,
+          current_content_screen_key: null,
+        })
+        setRevealingAnswers(false)
+        return
+      }
+
+      if (!gameId) throw new Error('The live game could not be found.')
+      await finalizeLiveGame(gameId)
+      go('final-results')
+    } catch (err) {
+      console.error('Could not advance round answers:', err)
+      setError('Could not show the next answer.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const roundNumber = currentQuestion?.round_number ?? 1
+  const playersSeeRoundLeaderboard = roundResultsScreen(leaderboardVisibility) === 'round-results'
+
+  if (answerRevealMode === 'round' && revealingAnswers && currentQuestion) {
+    const orderedRoundQuestions = [...roundQuestions].sort((a, b) => a.round_position - b.round_position)
+    const revealIndex = orderedRoundQuestions.findIndex(item => item.question_key === currentQuestion.question_key)
+    const hasNextReveal = revealIndex >= 0 && revealIndex < orderedRoundQuestions.length - 1
+
+    return (
+      <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-screen flex flex-col">
+        <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}` }} className="h-12 flex items-center px-6 shrink-0">
+          <span style={{ color: C.liveDim }} className="font-bold text-sm">Simple Trivia</span>
+          <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>
+            Round {currentQuestion.round_number} answers · {revealIndex + 1} of {orderedRoundQuestions.length}
+          </div>
+          <span style={{ color: '#C4B5FD' }} className="text-xs font-bold">REVEALING TO PLAYERS</span>
+        </header>
+
+        <main className="flex flex-1 items-center justify-center px-8 py-10">
+          <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-8 text-center shadow-2xl">
+            <p style={{ color: '#C4B5FD' }} className="text-[11px] font-extrabold uppercase tracking-[0.2em]">Players are seeing</p>
+            <p style={{ color: C.liveDim }} className="mt-5 text-sm">Question {currentQuestion.round_position} of {currentQuestion.round_question_count}</p>
+            <h1 className="mx-auto mt-3 max-w-3xl text-3xl font-black leading-tight">{currentQuestion.prompt}</h1>
+            <div style={{ background: `${C.go}18`, border: `1px solid ${C.go}45` }} className="mx-auto mt-7 max-w-xl rounded-2xl px-5 py-4">
+              <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Correct answer</p>
+              <p style={{ color: C.go }} className="mt-2 text-2xl font-extrabold">{correctAnswerDisplay(currentQuestion)}</p>
+            </div>
+            <p style={{ color: C.liveDim }} className="mt-5 text-sm">Each team also sees its own submitted answer, result, and points.</p>
+            {error && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{error}</p>}
+            <button onClick={advanceDelayedReveal} disabled={busy} style={{ background: C.violet }} className="mt-8 min-w-72 rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
+              {busy
+                ? 'Advancing…'
+                : hasNextReveal
+                  ? 'Show Next Answer →'
+                  : nextQuestion
+                    ? 'Show Round Results →'
+                    : 'Show Final Results →'}
+            </button>
+          </section>
+        </main>
+      </div>
+    )
+  }
 
   return (
     <div style={{ background: C.ground }} className="min-h-screen flex flex-col">
@@ -3329,8 +4625,35 @@ function EndOfRound({ go }: { go: Go }) {
 
         {error && <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="rounded-xl px-4 py-3 mb-5 text-sm font-semibold">{error}</div>}
 
+        <section style={{ background: C.liveBg, border: `1px solid ${C.liveLine}` }} className="mb-7 overflow-hidden rounded-2xl text-center">
+          <div style={{ borderBottom: `1px solid ${C.liveLine}`, color: '#C4B5FD' }} className="px-4 py-2 text-[11px] font-extrabold uppercase tracking-[0.18em]">
+            Players are seeing
+          </div>
+          {intermission ? (
+            <div className="px-8 py-9">
+              <p style={{ color: C.liveDim }} className="text-sm">Round {roundNumber} complete</p>
+              <h2 style={{ color: C.liveText }} className="mt-2 text-3xl font-extrabold">Intermission</h2>
+              <p style={{ color: C.liveDim }} className="mt-2 text-sm">The next round will begin shortly.</p>
+              <p style={{ color: '#C4B5FD' }} className="mt-5 text-xs font-bold">Each team can still see its own score.</p>
+            </div>
+          ) : playersSeeRoundLeaderboard ? (
+            <div className="px-8 py-8">
+              <h2 style={{ color: C.liveText }} className="text-3xl font-extrabold">Round {roundNumber} Complete</h2>
+              <p style={{ color: '#C4B5FD' }} className="mt-3 text-sm font-bold">The full leaderboard and every team’s score are visible.</p>
+            </div>
+          ) : (
+            <div className="px-8 py-8">
+              <h2 style={{ color: C.liveText }} className="text-3xl font-extrabold">Round {roundNumber} Complete</h2>
+              <p style={{ color: '#C4B5FD' }} className="mt-3 text-sm font-bold">Each team sees only its own score.</p>
+              <p style={{ color: C.liveDim }} className="mt-1 text-xs">Team names, ranks, and the full standings are hidden.</p>
+            </div>
+          )}
+        </section>
+
         <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5 mb-7">
-          <p style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider mb-4">Current Standings</p>
+          <p style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider mb-4">
+            Current Standings · {playersSeeRoundLeaderboard && !intermission ? 'Also visible to players' : 'Host only'}
+          </p>
           <div className="space-y-1.5">
             {leaderboard.map((team, i) => (
               <div key={team.id} style={{ background: i < 3 ? C.ground : 'transparent' }} className="flex items-center gap-4 p-3 rounded-xl">
@@ -3356,17 +4679,6 @@ function EndOfRound({ go }: { go: Go }) {
           )}
         </div>
 
-        {intermission && (
-          <div style={{ border: `2px dashed ${C.line}` }} className="rounded-2xl overflow-hidden">
-            <div style={{ background: C.ground, borderBottom: `1px solid ${C.line}` }} className="text-center py-2">
-              <span style={{ color: C.sub }} className="text-xs font-semibold">Player screen is now showing intermission</span>
-            </div>
-            <div style={{ background: C.liveBg }} className="p-14 text-center">
-              <h2 style={{ color: C.liveText }} className="text-2xl font-extrabold mb-2">Intermission</h2>
-              <p style={{ color: C.liveDim }} className="text-sm">The next round will begin shortly.</p>
-            </div>
-          </div>
-        )}
       </main>
     </div>
   )
@@ -3376,14 +4688,18 @@ function EndOfRound({ go }: { go: Go }) {
 
 function FinalResults({ go }: { go: Go }) {
   const [teams, setTeams] = useState<LiveTeam[]>([])
+  const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
 
   useEffect(() => {
     let active = true
     async function loadFinal() {
-      const { data: game } = await supabase.from('games').select('id').eq('code', getHostGameCode()).maybeSingle()
+      const { data: game } = await supabase.from('games').select('id, settings').eq('code', getHostGameCode()).maybeSingle()
       if (!active || !game) return
-      const { data } = await supabase.from('teams').select('id, name, score').eq('game_id', game.id).order('score', { ascending: false })
-      if (active) setTeams((data ?? []) as LiveTeam[])
+      const { data } = await supabase.from('teams').select('id, name, score, prize_awards').eq('game_id', game.id).order('score', { ascending: false })
+      if (active) {
+        setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
+        setTeams((data ?? []) as LiveTeam[])
+      }
     }
     void loadFinal()
     return () => { active = false }
@@ -3391,6 +4707,16 @@ function FinalResults({ go }: { go: Go }) {
 
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const winner = leaderboard[0]
+  const prizeWinners = leaderboard.flatMap(team =>
+    prizeAwardsFromJson(team.prize_awards).map((award: PrizeAward) => ({ team, award })),
+  )
+
+  function finishAndReturn() {
+    localStorage.removeItem('simple-trivia-host-game-id')
+    localStorage.removeItem('simple-trivia-host-game-code')
+    localStorage.removeItem('simple-trivia-host-game-title')
+    go('dashboard')
+  }
 
   return (
     <div style={{ background: C.ground }} className="min-h-screen flex flex-col">
@@ -3409,6 +4735,22 @@ function FinalResults({ go }: { go: Go }) {
           <h1 style={{ color: C.ink }} className="text-5xl font-extrabold">What a night!</h1>
         </div>
 
+        <div
+          style={{
+            background: playersSeeFinalLeaderboard(leaderboardVisibility) ? '#F0FDF4' : '#FFFBEB',
+            border: `1px solid ${playersSeeFinalLeaderboard(leaderboardVisibility) ? '#BBF7D0' : '#FDE68A'}`,
+            color: playersSeeFinalLeaderboard(leaderboardVisibility) ? '#166534' : '#92400E',
+          }}
+          className="mb-7 rounded-2xl px-5 py-4 text-center"
+        >
+          <p className="text-[11px] font-extrabold uppercase tracking-[0.16em]">Players are seeing</p>
+          <p className="mt-1 text-sm font-bold">
+            {playersSeeFinalLeaderboard(leaderboardVisibility)
+              ? 'Their final place, score, and the full final standings.'
+              : 'Only their own final score. Team names, places, and standings remain hidden.'}
+          </p>
+        </div>
+
         {winner && (
           <div style={{ background: C.violet, color: 'white' }} className="rounded-3xl p-8 text-center mb-8 shadow-xl">
             <div className="text-4xl mb-2">🏆</div>
@@ -3419,14 +4761,36 @@ function FinalResults({ go }: { go: Go }) {
           </div>
         )}
 
+        {prizeWinners.length > 0 && (
+          <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }} className="rounded-2xl p-5 mb-8">
+            <p style={{ color: '#92400E' }} className="text-[11px] font-bold uppercase tracking-wider mb-3">Prize Winners</p>
+            <div className="space-y-3">
+              {prizeWinners.map(({ team, award }) => (
+                <div key={`${team.id}-${award.placement}`} className="flex items-start gap-3">
+                  <span style={{ color: '#92400E' }} className="w-20 shrink-0 text-sm font-extrabold">{award.placement}</span>
+                  <div>
+                    <p style={{ color: C.ink }} className="text-sm font-bold">{team.name}</p>
+                    <p style={{ color: C.sub }} className="text-sm">{award.message}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5 mb-8">
-          <p style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider mb-3">Final Standings</p>
+          <p style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider mb-3">
+            Final Standings · {playersSeeFinalLeaderboard(leaderboardVisibility) ? 'Also visible to players' : 'Host only'}
+          </p>
           <div style={{ borderTop: `1px solid ${C.line}` }}>
             {leaderboard.map((team, i) => (
               <div key={team.id} style={{ borderBottom: `1px solid ${C.line}` }} className="flex items-center gap-3 py-3 last:border-0">
                 <span style={{ color: i < 3 ? C.ink : C.sub }} className="w-5 text-center text-sm shrink-0 font-extrabold">{i + 1}</span>
                 <span style={{ color: C.ink }} className="flex-1 text-sm font-semibold">{team.name}</span>
                 <span style={{ color: C.ink }} className="font-extrabold tabular-nums">{team.score}</span>
+                {prizeAwardsFromJson(team.prize_awards).length > 0 && (
+                  <span style={{ background: '#FEF3C7', color: '#92400E' }} className="rounded-full px-2 py-1 text-[10px] font-extrabold">PRIZE</span>
+                )}
               </div>
             ))}
           </div>
@@ -3434,7 +4798,7 @@ function FinalResults({ go }: { go: Go }) {
 
         <div className="flex gap-3">
           <Btn v="secondary" sz="md" cls="flex-1 justify-center">View Game Summary</Btn>
-          <Btn sz="lg" cls="flex-1 justify-center" onClick={() => go('dashboard')}>Finish &amp; Return to My Quizzes</Btn>
+          <Btn sz="lg" cls="flex-1 justify-center" onClick={finishAndReturn}>Finish &amp; Return to My Quizzes</Btn>
         </div>
       </main>
     </div>
@@ -3445,8 +4809,9 @@ function FinalResults({ go }: { go: Go }) {
 
 const SCREENS: [Screen, string][] = [
   ['dashboard', '1 · Dashboard'],
-  ['create-quiz', '2 · Create Quiz'],
-  ['quiz-builder', '3 · Quiz Builder'],
+  ['questions', '2 · Questions'],
+  ['create-quiz', '3 · Create Quiz'],
+  ['quiz-builder', '4 · Quiz Builder'],
   ['auto-build', '5 · Auto-Build'],
   ['quiz-review', '6 · Quiz Review'],
   ['host-setup', '7 · Host Setup'],
@@ -3493,10 +4858,122 @@ function ScreenNav({ current, go }: { current: Screen; go: Go }) {
 
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
-export default function App() {
+export default function App({ showDevNavigator = false }: { showDevNavigator?: boolean }) {
   const [screen, setScreen] = useState<Screen>('dashboard')
+  const [restoringSession, setRestoringSession] = useState(true)
+  const [connectionLost, setConnectionLost] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+    function clearStoredGame() {
+      localStorage.removeItem('simple-trivia-host-game-id')
+      localStorage.removeItem('simple-trivia-host-game-code')
+      localStorage.removeItem('simple-trivia-host-game-title')
+    }
+
+    function retry() {
+      if (retryTimer) clearTimeout(retryTimer)
+      retryTimer = setTimeout(() => { void restore() }, 3000)
+    }
+
+    async function restore() {
+      if (retryTimer) {
+        clearTimeout(retryTimer)
+        retryTimer = null
+      }
+
+      const gameId = localStorage.getItem('simple-trivia-host-game-id')
+      const gameCode = localStorage.getItem('simple-trivia-host-game-code')
+      if (!gameId && !gameCode) {
+        if (active) {
+          setRestoringSession(false)
+          setConnectionLost(false)
+        }
+        return
+      }
+
+      if (!navigator.onLine) {
+        if (active) setConnectionLost(true)
+        retry()
+        return
+      }
+
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      let gameQuery = supabase
+        .from('games')
+        .select('id, code, title, status, current_screen, quiz_id')
+      gameQuery = gameId ? gameQuery.eq('id', gameId) : gameQuery.eq('code', gameCode as string)
+      const { data: game, error: gameError } = await gameQuery.maybeSingle()
+
+      if (!active) return
+      if (authError || gameError) {
+        console.error('Could not restore host session:', authError ?? gameError)
+        setConnectionLost(true)
+        retry()
+        return
+      }
+
+      if (!authData.user || !game?.quiz_id) {
+        clearStoredGame()
+        setScreen('dashboard')
+        setRestoringSession(false)
+        setConnectionLost(false)
+        return
+      }
+
+      const { data: quiz, error: quizError } = await supabase
+        .from('quizzes')
+        .select('owner_id')
+        .eq('id', game.quiz_id)
+        .maybeSingle()
+
+      if (!active) return
+      if (quizError) {
+        console.error('Could not verify restored host game:', quizError)
+        setConnectionLost(true)
+        retry()
+        return
+      }
+
+      if (quiz?.owner_id !== authData.user.id) {
+        clearStoredGame()
+        setScreen('dashboard')
+        setRestoringSession(false)
+        setConnectionLost(false)
+        return
+      }
+
+      localStorage.setItem('simple-trivia-host-game-id', game.id)
+      localStorage.setItem('simple-trivia-host-game-code', game.code)
+      localStorage.setItem('simple-trivia-host-game-title', game.title)
+      setScreen(hostRecoveryScreen(game.status, game.current_screen))
+      setRestoringSession(false)
+      setConnectionLost(false)
+    }
+
+    const handleOffline = () => {
+      if (!active || !localStorage.getItem('simple-trivia-host-game-id')) return
+      setConnectionLost(true)
+    }
+    const handleOnline = () => { if (active) void restore() }
+
+    window.addEventListener('offline', handleOffline)
+    window.addEventListener('online', handleOnline)
+    void restore()
+
+    return () => {
+      active = false
+      if (retryTimer) clearTimeout(retryTimer)
+      window.removeEventListener('offline', handleOffline)
+      window.removeEventListener('online', handleOnline)
+    }
+  }, [])
+
   const screens: Record<Screen, React.ReactNode> = {
     'dashboard': <Dashboard go={setScreen} />,
+    'questions': <QuestionsScreen go={setScreen} />,
     'create-quiz': <CreateQuiz go={setScreen} />,
     'quiz-builder': <QuizBuilder go={setScreen} />,
     'auto-build': <AutoBuild go={setScreen} />,
@@ -3507,10 +4984,32 @@ export default function App() {
     'end-of-round': <EndOfRound go={setScreen} />,
     'final-results': <FinalResults go={setScreen} />,
   }
+
+  if (restoringSession) {
+    return (
+      <main style={{ background: C.ground }} className="flex min-h-screen items-center justify-center px-6 text-center">
+        <div>
+          <div style={{ borderColor: C.line, borderTopColor: C.violet }} className="mx-auto mb-5 h-14 w-14 animate-spin rounded-full border-4" />
+          <h1 style={{ color: C.ink }} className="text-2xl font-extrabold">Restoring your host session…</h1>
+          <p style={{ color: C.sub }} className="mt-2 text-sm">Your live game state is saved.</p>
+        </div>
+      </main>
+    )
+  }
+
   return (
     <div>
       {screens[screen]}
-      <ScreenNav current={screen} go={setScreen} />
+      {showDevNavigator && <ScreenNav current={screen} go={setScreen} />}
+      {connectionLost && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#18171F]/80 px-6 text-center backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-8 shadow-2xl">
+            <div style={{ borderColor: C.line, borderTopColor: C.violet }} className="mx-auto mb-5 h-14 w-14 animate-spin rounded-full border-4" />
+            <h2 style={{ color: C.ink }} className="text-2xl font-extrabold">Trying to reconnect…</h2>
+            <p style={{ color: C.sub }} className="mt-2 text-sm leading-6">Host controls are paused while we restore the latest game state.</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,4 +1,8 @@
+import { notFound } from "next/navigation";
+
 export default function TeamSetupPage() {
+  if (process.env.NODE_ENV === "production") notFound();
+
   return (
     <main className="min-h-screen bg-[#f7f6ff] flex justify-center">
       <div className="w-full max-w-[430px] min-h-screen bg-[#f7f6ff] flex flex-col">

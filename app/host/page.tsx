@@ -1,5 +1,5 @@
-import HostPrototype from "../../components/host/HostPrototype";
+import HostAuthGate from "../../components/host/HostAuthGate";
 
 export default function Page() {
-  return <HostPrototype />;
+  return <HostAuthGate />;
 }
