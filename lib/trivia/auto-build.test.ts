@@ -42,6 +42,23 @@ describe('Auto-Build selection semantics', () => {
     expect(plan.rounds[0].questions.every(question => question.difficulty === 'Medium')).toBe(true)
   })
 
+  it('supports the very easy and very hard endpoints', () => {
+    const endpointQuestions = [
+      { id: 'very-easy', category: 'General Knowledge', difficulty: 'Very Easy' },
+      { id: 'very-hard', category: 'General Knowledge', difficulty: 'Very Hard' },
+    ]
+    const plan = buildAutoQuizPlan({
+      questions: endpointQuestions,
+      tiebreakers,
+      questionCount: 2,
+      roundTopics: [null],
+      difficulties: ['Very Easy', 'Very Hard'],
+      random: noShuffle,
+    })
+
+    expect(plan.rounds[0].questions.map(question => question.difficulty).sort()).toEqual(['Very Easy', 'Very Hard'])
+  })
+
   it('always includes exactly three prepared tiebreakers', () => {
     const plan = buildAutoQuizPlan({
       questions,

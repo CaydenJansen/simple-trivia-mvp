@@ -2266,7 +2266,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
 }) {
   const initialOptions = questionOptions(question.options)
   const initialAnswers = asStringArray(question.correctAnswer)
-  const initialDifficulty = question.diff === 'Easy' || question.diff === 'Medium' || question.diff === 'Hard'
+  const initialDifficulty = question.diff === 'Very Easy' || question.diff === 'Easy' || question.diff === 'Medium' || question.diff === 'Hard' || question.diff === 'Very Hard'
     ? question.diff
     : null
   const [qtype, setQtype] = useState<QType>(() => editorQuestionType(question.questionType))
@@ -2285,7 +2285,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
   const [rankingItems, setRankingItems] = useState(() => initialAnswers.length ? initialAnswers : (asStringArray(question.options).length ? asStringArray(question.options) : ['', '']))
   const [notes, setNotes] = useState(question.notes)
   const [imageUrl, setImageUrl] = useState(question.imageUrl ?? '')
-  const [diff, setDiff] = useState<'Easy' | 'Medium' | 'Hard' | null>(initialDifficulty)
+  const [diff, setDiff] = useState<'Very Easy' | 'Easy' | 'Medium' | 'Hard' | 'Very Hard' | null>(initialDifficulty)
   const [cat, setCat] = useState(question.cat === 'Uncategorised' ? '' : question.cat)
   const [showCat, setShowCat] = useState(question.cat !== 'Uncategorised')
   const [showDiff, setShowDiff] = useState(initialDifficulty !== null)
@@ -2666,15 +2666,15 @@ function QuestionEditor({ question, title, onClose, onSave }: {
 
             <OptionalField label="Difficulty (Optional)" shown={showDiff} onToggle={() => { setShowDiff(v => !v); setDiff(null) }}>
               {showDiff && (
-                <div className="flex gap-2">
-                  {(['Easy', 'Medium', 'Hard'] as const).map(d => (
+                <div className="flex flex-wrap gap-2">
+                  {(['Very Easy', 'Easy', 'Medium', 'Hard', 'Very Hard'] as const).map(d => (
                     <button key={d} onClick={() => setDiff(d)}
                       style={{
-                        border: `1.5px solid ${diff === d ? (d === 'Easy' ? C.go : d === 'Medium' ? C.caution : C.stop) : C.line}`,
-                        background: diff === d ? (d === 'Easy' ? '#f0fdf9' : d === 'Medium' ? '#fffbeb' : '#fef2f2') : 'white',
-                        color: diff === d ? (d === 'Easy' ? C.go : d === 'Medium' ? C.caution : C.stop) : C.sub,
+                        border: `1.5px solid ${diff === d ? (d === 'Very Easy' || d === 'Easy' ? C.go : d === 'Medium' ? C.caution : C.stop) : C.line}`,
+                        background: diff === d ? (d === 'Very Easy' || d === 'Easy' ? '#f0fdf9' : d === 'Medium' ? '#fffbeb' : '#fef2f2') : 'white',
+                        color: diff === d ? (d === 'Very Easy' || d === 'Easy' ? C.go : d === 'Medium' ? C.caution : C.stop) : C.sub,
                       }}
-                      className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all">{d}
+                      className="flex-1 min-w-[82px] py-2.5 rounded-xl text-xs font-semibold transition-all">{d}
                     </button>
                   ))}
                 </div>
@@ -2722,7 +2722,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
 
 function AutoBuild({ go }: { go: Go }) {
   const [mode, setMode] = useState<'mixed' | 'custom'>('mixed')
-  const [diff, setDiff] = useState<[number, number]>([0, 2])
+  const [diff, setDiff] = useState<[number, number]>([0, 4])
 
   const startDifficultyDrag = (handle: 'minimum' | 'maximum', event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault()
@@ -2760,7 +2760,7 @@ function AutoBuild({ go }: { go: Go }) {
   })
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
-  const diffLabels = ['Easy', 'Medium', 'Hard']
+  const diffLabels = ['Very Easy', 'Easy', 'Medium', 'Hard', 'Very Hard']
   const allTopics = ['General Knowledge', 'Movies', 'Sport', 'Music']
 
   const diffText = () => {
@@ -2976,13 +2976,6 @@ function AutoBuild({ go }: { go: Go }) {
             </div>
             <p style={{ color: C.sub }} className="text-sm">
               Sourcing: <span style={{ color: C.ink }} className="font-semibold">{diffText()}</span>
-            </p>
-          </div>
-
-          <div style={{ background: C.violetMist, border: `1px solid ${C.violetPale}` }} className="rounded-2xl p-5">
-            <p style={{ color: C.violet }} className="text-sm font-bold">{AUTO_BUILD_TIEBREAKER_COUNT} prepared tiebreakers included</p>
-            <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">
-              Auto-Build will add exactly {AUTO_BUILD_TIEBREAKER_COUNT} closest-answer questions, separate from the {questionCount} scored questions and estimated running time.
             </p>
           </div>
 
