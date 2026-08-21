@@ -13,6 +13,9 @@
 -- supabase/migrations/20260821190000_add_auto_build_sources.sql.
 -- The normalized Question Library metadata foundation is versioned in
 -- supabase/migrations/20260821230000_add_question_library_metadata_foundation.sql.
+-- The RLS-aware normalized catalog read model and atomic host-question save are
+-- versioned in
+-- supabase/migrations/20260821240000_add_normalized_question_catalog_api.sql.
 -- Existing deployed RLS policies and Realtime publication membership are
 -- otherwise managed by Supabase and are not replaced by this file.
 
@@ -674,3 +677,40 @@ create table if not exists public.source_question_bonus_tags (
   created_at timestamptz not null default now(),
   primary key (source_question_bonus_id, tag_id)
 );
+
+create or replace view public.source_question_catalog
+with (security_invoker = true)
+as
+select
+  source_questions.*,
+  coalesce(category_metadata.category_ids, '{}'::uuid[]) as category_ids,
+  coalesce(category_metadata.secondary_category_ids, '{}'::uuid[]) as secondary_category_ids,
+  category_metadata.primary_category_id,
+  category_metadata.primary_category_name,
+  coalesce(category_metadata.category_names, '{}'::text[]) as category_names,
+  coalesce(tag_metadata.tag_ids, '{}'::uuid[]) as tag_ids,
+  coalesce(tag_metadata.tag_names, '{}'::text[]) as tag_names
+from public.source_questions
+left join lateral (
+  select
+    array_agg(source_question_categories.category_id order by source_question_categories.role, categories.sort_order)
+      as category_ids,
+    array_agg(source_question_categories.category_id order by categories.sort_order)
+      filter (where source_question_categories.role = 'secondary') as secondary_category_ids,
+    (array_agg(source_question_categories.category_id order by categories.sort_order)
+      filter (where source_question_categories.role = 'primary'))[1] as primary_category_id,
+    max(categories.name)
+      filter (where source_question_categories.role = 'primary') as primary_category_name,
+    array_agg(categories.name order by source_question_categories.role, categories.sort_order) as category_names
+  from public.source_question_categories
+  join public.categories on categories.id = source_question_categories.category_id
+  where source_question_categories.source_question_id = source_questions.id
+) as category_metadata on true
+left join lateral (
+  select
+    array_agg(tags.id order by tags.name) as tag_ids,
+    array_agg(tags.name order by tags.name) as tag_names
+  from public.source_question_tags
+  join public.tags on tags.id = source_question_tags.tag_id
+  where source_question_tags.source_question_id = source_questions.id
+) as tag_metadata on true;

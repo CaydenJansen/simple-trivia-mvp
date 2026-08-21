@@ -37,6 +37,7 @@ import {
 } from "@/lib/trivia/tiebreakers";
 import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, type TriviaDifficulty } from "@/lib/trivia/difficulty";
+import { editorialDifficultyFromLegacy } from "@/lib/trivia/question-metadata";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -1099,19 +1100,28 @@ function blankBuilderQuestion(): BuilderQuestionData {
 }
 
 function sourceToBuilderQuestion(source: PickerSourceQuestion): BuilderQuestionData {
+  const normalizedCategory = source.category_names.length === 1
+    ? source.category_names[0]
+    : source.category_names.length > 1
+      ? 'Mixed categories'
+      : source.category ?? 'Uncategorised'
+  const normalizedDifficulty = source.editorial_difficulty
+    ? TRIVIA_DIFFICULTIES[source.editorial_difficulty - 1]
+    : source.difficulty ?? 'Unrated'
+
   return {
     id: `source-copy-${crypto.randomUUID()}`,
     questionKey: `question-${crypto.randomUUID()}`,
     text: source.prompt,
-    cat: source.category ?? 'Uncategorised',
-    diff: source.difficulty ?? 'Unrated',
+    cat: normalizedCategory,
+    diff: normalizedDifficulty,
     type: questionTypeLabel(source.question_type),
     questionType: source.question_type,
     hasImage: Boolean(source.image_url),
     correctAnswer: source.correct_answer,
     acceptedAnswers: source.accepted_answers,
     options: source.options,
-    tags: [...source.tags],
+    tags: [...source.tag_names],
     imageUrl: source.image_url,
     pointsMax: Array.isArray(source.correct_answer) ? Math.max(1, source.correct_answer.length) : 1,
     notes: source.notes ?? '',
@@ -1730,33 +1740,56 @@ function QuizBuilder({ go }: { go: Go }) {
           onSave={async question => {
             const { data: authData, error: authError } = await supabase.auth.getUser()
             if (authError || !authData.user) throw new Error('Your host session has expired.')
-            const { data: source, error } = await supabase
-              .from('source_questions')
-              .insert({
-                origin: 'user',
-                owner_id: authData.user.id,
+            const legacyCategoryAliases: Record<string, string> = {
+              Movies: 'Film & Television',
+              Film: 'Film & Television',
+              Television: 'Film & Television',
+            }
+            const requestedCategory = legacyCategoryAliases[question.cat] ?? question.cat
+            const [{ data: categories, error: categoryError }, { data: tags, error: tagError }] = await Promise.all([
+              supabase.from('categories').select('id, name').eq('is_active', true),
+              supabase.from('tags').select('id, name').eq('is_active', true),
+            ])
+            if (categoryError || tagError) throw categoryError ?? tagError
+
+            const primaryCategoryId = categories?.find(category =>
+              category.name.toLocaleLowerCase() === requestedCategory.toLocaleLowerCase()
+            )?.id ?? null
+            const requestedTags = new Set(question.tags.map(tag => tag.toLocaleLowerCase()))
+            const tagIds = (tags ?? [])
+              .filter(tag => requestedTags.has(tag.name.toLocaleLowerCase()))
+              .map(tag => tag.id)
+
+            const { data: sourceId, error: saveSourceError } = await supabase.rpc('save_my_question_with_metadata', {
+              p_question_id: null,
+              p_question: {
                 question_type: question.questionType,
                 prompt: question.text,
                 correct_answer: question.correctAnswer as Json,
                 accepted_answers: question.acceptedAnswers as Json,
                 options: question.options as Json | null,
-                category: question.cat === 'Uncategorised' ? null : question.cat,
-                difficulty: question.diff === 'Unrated' ? null : question.diff,
-                tags: question.tags,
+                editorial_difficulty: editorialDifficultyFromLegacy(question.diff),
                 image_url: question.imageUrl,
                 notes: question.notes || null,
                 status: 'active',
-              })
-              .select('id, revision')
-              .single()
-            if (error || !source) throw error ?? new Error('Could not save source question')
-            addQuestionToRound(newQuestionRoundId, {
-              ...question,
-              id: `source-copy-${crypto.randomUUID()}`,
-              questionKey: `question-${crypto.randomUUID()}`,
-              sourceQuestionId: source.id,
-              sourceRevision: source.revision,
+                stability: 'stable',
+                scoring_mode: question.questionType === 'multi-answer' || question.questionType === 'multi-part' || question.questionType === 'ranking'
+                  ? 'per-item'
+                  : 'fixed',
+              },
+              p_primary_category_id: primaryCategoryId,
+              p_secondary_category_ids: [],
+              p_tag_ids: tagIds,
             })
+            if (saveSourceError || !sourceId) throw saveSourceError ?? new Error('Could not save source question')
+
+            const { data: source, error: sourceError } = await supabase
+              .from('source_question_catalog')
+              .select('*')
+              .eq('id', sourceId)
+              .single()
+            if (sourceError || !source) throw sourceError ?? new Error('Could not load saved source question')
+            addQuestionToRound(newQuestionRoundId, sourceToBuilderQuestion(source))
             setNewQuestionRoundId(null)
           }}
         />
@@ -2293,7 +2326,10 @@ function QuestionEditor({ question, title, onClose, onSave }: {
   const [showCat, setShowCat] = useState(question.cat !== 'Uncategorised')
   const [showDiff, setShowDiff] = useState(initialDifficulty !== null)
   const [showTags, setShowTags] = useState(question.tags.length > 0)
-  const [tags, setTags] = useState(question.tags.join(', '))
+  const [tags, setTags] = useState(question.tags)
+  const [categoryOptions, setCategoryOptions] = useState<string[]>([])
+  const [tagOptions, setTagOptions] = useState<string[]>([])
+  const [tagToAdd, setTagToAdd] = useState('')
   const [alternates, setAlternates] = useState<string[]>(() => acceptedGroups.flat().filter(Boolean))
   const [multiAnswers, setMultiAnswers] = useState(() => {
     const loaded = initialAnswers.map((text, index) => ({ text, alts: acceptedGroups[index] ?? [] }))
@@ -2332,6 +2368,23 @@ function QuestionEditor({ question, title, onClose, onSave }: {
   const confirmTypeChange = () => { if (pendingType) { setQtype(pendingType); setPendingType(null) } }
 
   const blocked = !!pendingType
+
+  useEffect(() => {
+    let active = true
+    void Promise.all([
+      supabase.from('categories').select('name').eq('is_active', true).order('sort_order'),
+      supabase.from('tags').select('name').eq('is_active', true).order('name'),
+    ]).then(([categoryResult, tagResult]) => {
+      if (!active) return
+      if (categoryResult.error || tagResult.error) {
+        console.error('Could not load controlled question metadata:', categoryResult.error ?? tagResult.error)
+        return
+      }
+      setCategoryOptions((categoryResult.data ?? []).map(option => option.name))
+      setTagOptions((tagResult.data ?? []).map(option => option.name))
+    })
+    return () => { active = false }
+  }, [])
 
   async function handleSave() {
     const normalizedImageUrl = imageUrl.trim() || null
@@ -2387,7 +2440,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
         correctAnswer,
         acceptedAnswers,
         options,
-        tags: tags.split(',').map(value => value.trim()).filter(Boolean),
+        tags: showTags ? tags : [],
         imageUrl: normalizedImageUrl,
         pointsMax,
         notes: notes.trim(),
@@ -2661,9 +2714,13 @@ function QuestionEditor({ question, title, onClose, onSave }: {
 
             <OptionalField label="Category (Optional)" shown={showCat} onToggle={() => { setShowCat(v => !v); setCat('') }}>
               {showCat && (
-                <input value={cat} onChange={e => setCat(e.target.value)}
+                <select value={cat} onChange={e => setCat(e.target.value)}
                   style={{ border: `1px solid ${C.line}`, color: C.ink }}
-                  className="w-full rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30" />
+                  className="w-full rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30">
+                  <option value="">Choose a category…</option>
+                  {cat && !categoryOptions.includes(cat) ? <option value={cat}>{cat} (legacy)</option> : null}
+                  {categoryOptions.map(option => <option key={option} value={option}>{option}</option>)}
+                </select>
               )}
             </OptionalField>
 
@@ -2687,11 +2744,27 @@ function QuestionEditor({ question, title, onClose, onSave }: {
             <OptionalField label="Tags (Optional)" shown={showTags} onToggle={() => setShowTags(v => !v)}>
               {showTags && (
                 <>
-                  <input value={tags} onChange={event => setTags(event.target.value)}
+                  <select value={tagToAdd} onChange={event => {
+                    const nextTag = event.target.value
+                    setTagToAdd('')
+                    if (nextTag) setTags(current => current.includes(nextTag) ? current : [...current, nextTag])
+                  }}
                     style={{ border: `1px solid ${C.line}`, color: C.ink }}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30"
-                    placeholder="e.g. Countries, Cities, Capitals…" />
-                  <p style={{ color: C.sub }} className="text-[11px] mt-1.5 opacity-70">Comma-separated. More specific than category — used for filtering and auto-build targeting.</p>
+                    className="w-full rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30">
+                    <option value="">Add a controlled tag…</option>
+                    {tagOptions.filter(option => !tags.includes(option)).map(option => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                  {tags.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {tags.map(tag => (
+                        <button key={tag} type="button" onClick={() => setTags(current => current.filter(value => value !== tag))}
+                          style={{ background: C.violetMist, color: C.violet }} className="rounded-full px-2.5 py-1 text-[11px] font-semibold">
+                          {tag} ×
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  <p style={{ color: C.sub }} className="text-[11px] mt-1.5 opacity-70">Tags are more specific than category and help filtering and auto-build variety.</p>
                 </>
               )}
             </OptionalField>

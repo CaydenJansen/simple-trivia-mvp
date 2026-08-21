@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
-import type { Database, QuestionType } from "@/lib/supabase/database.types";
+import type { Database, QuestionMechanic } from "@/lib/supabase/database.types";
 
-export type PickerSourceQuestion = Database["public"]["Tables"]["source_questions"]["Row"];
+export type PickerSourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"];
 
 export default function BuilderQuestionPicker({
   origin,
@@ -18,7 +18,7 @@ export default function BuilderQuestionPicker({
 }) {
   const [questions, setQuestions] = useState<PickerSourceQuestion[]>([]);
   const [search, setSearch] = useState("");
-  const [type, setType] = useState<QuestionType | "all">("all");
+  const [type, setType] = useState<QuestionMechanic | "all">("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +29,7 @@ export default function BuilderQuestionPicker({
         setLoading(true);
         setError(null);
         let query = supabase
-          .from("source_questions")
+          .from("source_question_catalog")
           .select("*")
           .eq("origin", origin)
           .eq("status", "active")
@@ -37,7 +37,7 @@ export default function BuilderQuestionPicker({
           .range(0, 49);
 
         if (search.trim()) query = query.ilike("prompt", `%${search.trim()}%`);
-        if (type !== "all") query = query.eq("question_type", type);
+        if (type !== "all") query = query.eq("mechanic", type);
 
         const { data, error: queryError } = await query;
         if (!active) return;
@@ -73,10 +73,9 @@ export default function BuilderQuestionPicker({
 
         <div className="grid gap-3 border-b border-zinc-200 p-4 sm:grid-cols-[1fr_190px]">
           <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${title.toLowerCase()}…`} className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
-          <select value={type} onChange={(event) => setType(event.target.value as QuestionType | "all")} className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-600 outline-none focus:border-violet-500">
+          <select value={type} onChange={(event) => setType(event.target.value as QuestionMechanic | "all")} className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-600 outline-none focus:border-violet-500">
             <option value="all">All question types</option>
             <option value="single-answer">Single Answer</option>
-            <option value="image-question">Image Question</option>
             <option value="multiple-choice">Multiple Choice</option>
             <option value="multi-answer">Multi-Answer</option>
             <option value="multi-part">Multi-Part</option>
@@ -96,11 +95,12 @@ export default function BuilderQuestionPicker({
                   <div className="min-w-0 flex-1">
                     <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                       <span className="rounded-full bg-violet-50 px-2 py-1 font-semibold text-violet-700">{question.question_type.replaceAll("-", " ")}</span>
-                      {question.category ? <span>{question.category}</span> : null}
-                      {question.difficulty ? <span>· {question.difficulty}</span> : null}
+                      {question.category_names.length > 0 ? <span>{question.category_names.join(" · ")}</span> : null}
+                      {question.editorial_difficulty ? <span>· Difficulty {question.editorial_difficulty}/5</span> : null}
                       {question.is_verified ? <span className="rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">✓ Verified</span> : null}
                     </div>
                     <h3 className="text-sm font-bold leading-6 text-zinc-900">{question.prompt}</h3>
+                    {question.tag_names.length > 0 ? <p className="mt-2 text-xs text-zinc-500">{question.tag_names.join(" · ")}</p> : null}
                   </div>
                   <button type="button" onClick={() => onSelect(question)} className="shrink-0 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700">Add</button>
                 </article>

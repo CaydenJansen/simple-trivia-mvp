@@ -504,7 +504,12 @@ export type Database = {
         ]
       }
     }
-    Views: Record<string, never>
+    Views: {
+      source_question_catalog: {
+        Row: SourceQuestionCatalogRow
+        Relationships: []
+      }
+    }
     Functions: {
       cancel_host_game: {
         Args: {
@@ -597,6 +602,16 @@ export type Database = {
           p_questions: Json
           p_content_screens?: Json
           p_tiebreakers?: Json
+        }
+        Returns: string
+      }
+      save_my_question_with_metadata: {
+        Args: {
+          p_question_id: string | null
+          p_question: Json
+          p_primary_category_id?: string | null
+          p_secondary_category_ids?: string[]
+          p_tag_ids?: string[]
         }
         Returns: string
       }
@@ -698,6 +713,50 @@ type TiebreakerInsert = {
   answer_unit?: string | null
   notes?: string | null
   created_at?: string
+}
+
+type SourceQuestionCatalogRow = {
+  id: string
+  origin: QuestionOrigin
+  owner_id: string | null
+  question_type: QuestionType
+  mechanic: QuestionMechanic
+  prompt: string
+  correct_answer: Json
+  accepted_answers: Json
+  options: Json | null
+  category: string | null
+  difficulty: string | null
+  editorial_difficulty: number | null
+  scoring_mode: ScoringMode
+  prompt_pattern_id: string | null
+  answer_type_id: string | null
+  stability: FactualStability
+  as_of_date: string | null
+  review_due_at: string | null
+  valid_from: string | null
+  expires_at: string | null
+  media_asset_id: string | null
+  prompt_signature: string | null
+  tags: string[]
+  image_url: string | null
+  notes: string | null
+  status: QuestionStatus
+  is_verified: boolean
+  verified_at: string | null
+  verified_by: string | null
+  last_reviewed_at: string | null
+  revision: number
+  import_key: string | null
+  created_at: string
+  updated_at: string
+  category_ids: string[]
+  secondary_category_ids: string[]
+  primary_category_id: string | null
+  primary_category_name: string | null
+  category_names: string[]
+  tag_ids: string[]
+  tag_names: string[]
 }
 
 type ControlledLookupTable = {
