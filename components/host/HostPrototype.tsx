@@ -38,6 +38,13 @@ import {
 import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, type TriviaDifficulty } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy } from "@/lib/trivia/question-metadata";
+import {
+  EMPTY_SOURCE_QUESTION_BONUS,
+  estimatedQuizMinutes,
+  sourceQuestionBonusDraft,
+  sourceQuestionBonusPayload,
+  validateSourceQuestionBonus,
+} from "@/lib/trivia/source-question-bonus";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -45,7 +52,7 @@ type Screen =
   | 'auto-build' | 'quiz-review' | 'host-setup'
   | 'lobby' | 'live-question' | 'end-of-round' | 'final-results'
 type Go = (s: Screen) => void
-type AutoBuildSourceQuestion = Database["public"]["Tables"]["source_questions"]["Row"]
+type AutoBuildSourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"]
 type AutoBuildSourceTiebreaker = Database["public"]["Tables"]["source_tiebreakers"]["Row"]
 
 function getHostGameCode() {
@@ -980,6 +987,7 @@ type BuilderQuestionData = {
   tags: string[]
   imageUrl: string | null
   pointsMax: number
+  bonus: Json | null
   notes: string
   sourceQuestionId: string | null
   sourceRevision: number | null
@@ -1064,6 +1072,7 @@ function prototypeEditorQuestion(type: 'single' | 'multi'): BuilderQuestionData 
     tags: [],
     imageUrl: null,
     pointsMax: 1,
+    bonus: null,
     notes: '',
     sourceQuestionId: null,
     sourceRevision: null,
@@ -1092,6 +1101,7 @@ function blankBuilderQuestion(): BuilderQuestionData {
     tags: [],
     imageUrl: null,
     pointsMax: 1,
+    bonus: null,
     notes: '',
     sourceQuestionId: null,
     sourceRevision: null,
@@ -1124,6 +1134,7 @@ function sourceToBuilderQuestion(source: PickerSourceQuestion): BuilderQuestionD
     tags: [...source.tag_names],
     imageUrl: source.image_url,
     pointsMax: Array.isArray(source.correct_answer) ? Math.max(1, source.correct_answer.length) : 1,
+    bonus: source.bonus,
     notes: source.notes ?? '',
     sourceQuestionId: source.id,
     sourceRevision: source.revision,
@@ -1161,7 +1172,8 @@ function QuizBuilder({ go }: { go: Go }) {
   const [previewOpen, setPreviewOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const questionCount = rounds.reduce((total, round) => total + round.questions.length, 0)
-  const estimatedMinutes = Math.round(questionCount * 2.4)
+  const bonusCount = rounds.reduce((total, round) => total + round.questions.filter(question => question.bonus !== null).length, 0)
+  const estimatedMinutes = estimatedQuizMinutes(questionCount, bonusCount)
 
   useEffect(() => {
     let active = true
@@ -1193,7 +1205,7 @@ function QuizBuilder({ go }: { go: Go }) {
           .maybeSingle(),
         supabase
           .from('quiz_questions')
-          .select('id, question_key, position, item_position, round_number, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, tags, image_url, points_max, notes, source_question_id, source_revision')
+          .select('id, question_key, position, item_position, round_number, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, tags, image_url, points_max, bonus, notes, source_question_id, source_revision')
           .eq('quiz_id', selectedId)
           .order('position', { ascending: true }),
         supabase
@@ -1241,6 +1253,7 @@ function QuizBuilder({ go }: { go: Go }) {
           tags: row.tags,
           imageUrl: row.image_url,
           pointsMax: row.points_max,
+          bonus: row.bonus,
           notes: row.notes ?? '',
           sourceQuestionId: row.source_question_id,
           sourceRevision: row.source_revision,
@@ -1385,6 +1398,7 @@ function QuizBuilder({ go }: { go: Go }) {
           tags: question.tags,
           image_url: question.imageUrl,
           points_max: question.pointsMax,
+          bonus: question.bonus,
           notes: question.notes || null,
           source_question_id: question.sourceQuestionId,
           source_revision: question.sourceRevision,
@@ -1392,7 +1406,7 @@ function QuizBuilder({ go }: { go: Go }) {
       })
     })
 
-    const { data, error } = await supabase.rpc('save_quiz_with_questions', {
+    const { data, error } = await supabase.rpc('save_quiz_with_bonus_snapshots', {
       p_quiz_id: quizId,
       p_title: title.trim(),
       p_status: quizStatus,
@@ -1780,6 +1794,7 @@ function QuizBuilder({ go }: { go: Go }) {
               p_primary_category_id: primaryCategoryId,
               p_secondary_category_ids: [],
               p_tag_ids: tagIds,
+              p_bonus: question.bonus,
             })
             if (saveSourceError || !sourceId) throw saveSourceError ?? new Error('Could not save source question')
 
@@ -1980,6 +1995,7 @@ function QuizPreview({ title, rounds, onClose }: {
     ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, round, screen })),
   ].sort((a, b) => a.itemPosition - b.itemPosition))
   const active = items[activeIndex]
+  const activeBonus = active?.kind === 'question' ? sourceQuestionBonusDraft(active.question.bonus) : null
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/80 px-4 py-8 backdrop-blur-sm">
@@ -2017,6 +2033,13 @@ function QuizPreview({ title, rounds, onClose }: {
                   </p>
                 )}
               </div>
+              {activeBonus?.enabled && (
+                <div className="mx-auto mt-4 max-w-md rounded-2xl border border-amber-300/30 bg-amber-300/10 px-5 py-4 text-center">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-300">Bonus · {activeBonus.points} {activeBonus.points === 1 ? 'point' : 'points'}</p>
+                  <p className="mt-2 text-base font-bold text-white">{activeBonus.prompt}</p>
+                  <p className="mt-2 text-sm text-amber-100">Answer: {activeBonus.answer}</p>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2208,6 +2231,7 @@ function BuilderQuestion({ q, idx, onEdit, onReplace, onDelete, onDuplicate }: {
           <Chip color={q.diff === 'Easy' ? 'easy' : q.diff === 'Medium' ? 'medium' : 'hard'}>{q.diff}</Chip>
           <Chip color="violet">{q.type}</Chip>
           {q.hasImage && <Chip color="violet">📷 Image</Chip>}
+          {q.bonus !== null && <Chip color="medium">+ Bonus</Chip>}
           <span style={{ color: C.violet }} className="text-[11px] font-semibold opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 ml-1">
             <I.pencil /> Edit
           </span>
@@ -2321,6 +2345,8 @@ function QuestionEditor({ question, title, onClose, onSave }: {
   const [rankingItems, setRankingItems] = useState(() => initialAnswers.length ? initialAnswers : (asStringArray(question.options).length ? asStringArray(question.options) : ['', '']))
   const [notes, setNotes] = useState(question.notes)
   const [imageUrl, setImageUrl] = useState(question.imageUrl ?? '')
+  const [bonus, setBonus] = useState(() => sourceQuestionBonusDraft(question.bonus))
+  const [showBonus, setShowBonus] = useState(() => question.bonus !== null)
   const [diff, setDiff] = useState<TriviaDifficulty | null>(initialDifficulty)
   const [cat, setCat] = useState(question.cat === 'Uncategorised' ? '' : question.cat)
   const [showCat, setShowCat] = useState(question.cat !== 'Uncategorised')
@@ -2425,6 +2451,11 @@ function QuestionEditor({ question, title, onClose, onSave }: {
       setQuestionSaveError('Fill every multiple-choice option.')
       return
     }
+    const bonusError = validateSourceQuestionBonus(bonus)
+    if (bonusError) {
+      setQuestionSaveError(bonusError)
+      return
+    }
 
     setSavingQuestion(true)
     setQuestionSaveError(null)
@@ -2443,6 +2474,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
         tags: showTags ? tags : [],
         imageUrl: normalizedImageUrl,
         pointsMax,
+        bonus: sourceQuestionBonusPayload(bonus),
         notes: notes.trim(),
       })
     } catch (error) {
@@ -2712,6 +2744,30 @@ function QuestionEditor({ question, title, onClose, onSave }: {
               </>
             )}
 
+            <OptionalField label="Bonus Question (Optional)" shown={showBonus} onToggle={() => {
+              if (!showBonus && !bonus.enabled) setBonus({ ...EMPTY_SOURCE_QUESTION_BONUS, enabled: true })
+              setShowBonus(value => !value)
+            }}>
+              {showBonus && (
+                <div style={{ border: `1px solid ${C.violetPale}`, background: C.violetMist }} className="space-y-3 rounded-xl p-4">
+                  <p style={{ color: C.sub }} className="text-[11px] leading-5">One optional typed-answer bonus. It adds points and running time, but not another normal question.</p>
+                  <textarea value={bonus.prompt} onChange={event => setBonus({ ...bonus, prompt: event.target.value })} rows={2} placeholder="Bonus question"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+                  <div className="grid grid-cols-[1fr_7rem] gap-3">
+                    <input value={bonus.answer} onChange={event => setBonus({ ...bonus, answer: event.target.value })} placeholder="Correct bonus answer"
+                      style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+                    <input type="number" min={1} step={1} value={bonus.points} onChange={event => setBonus({ ...bonus, points: Number(event.target.value) })} aria-label="Bonus points"
+                      style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+                  </div>
+                  <input value={bonus.aliases} onChange={event => setBonus({ ...bonus, aliases: event.target.value })} placeholder="Accepted alternatives, separated by commas"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+                  <input value={bonus.imageUrl} onChange={event => setBonus({ ...bonus, imageUrl: event.target.value })} placeholder="Bonus image URL (optional)"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+                  <button type="button" onClick={() => { setBonus({ ...EMPTY_SOURCE_QUESTION_BONUS }); setShowBonus(false) }} style={{ color: C.stop }} className="text-xs font-bold hover:underline">Remove bonus</button>
+                </div>
+              )}
+            </OptionalField>
+
             <OptionalField label="Category (Optional)" shown={showCat} onToggle={() => { setShowCat(v => !v); setCat('') }}>
               {showCat && (
                 <select value={cat} onChange={e => setCat(e.target.value)}
@@ -2860,7 +2916,7 @@ function AutoBuild({ go }: { go: Go }) {
     let cancelled = false
     void Promise.all([
       supabase
-        .from('source_questions')
+        .from('source_question_catalog')
         .select('*')
         .eq('origin', 'platform')
         .eq('status', 'active')
@@ -2933,6 +2989,7 @@ function AutoBuild({ go }: { go: Go }) {
             tags: question.tags,
             image_url: question.image_url,
             points_max: Array.isArray(question.correct_answer) ? Math.max(1, question.correct_answer.length) : 1,
+            bonus: question.bonus,
             notes: question.notes,
             source_question_id: question.id,
             source_revision: question.revision,
@@ -2949,11 +3006,11 @@ function AutoBuild({ go }: { go: Go }) {
         notes: tiebreaker.notes,
       }))
       const title = 'Auto-Built Quiz'
-      const { data, error } = await supabase.rpc('save_quiz_with_questions', {
+      const { data, error } = await supabase.rpc('save_quiz_with_bonus_snapshots', {
         p_quiz_id: null,
         p_title: title,
         p_status: 'draft',
-        p_estimated_minutes: Math.round(questionCount * 2.4),
+        p_estimated_minutes: estimatedQuizMinutes(questionCount, plan.rounds.reduce((total, round) => total + round.questions.filter(question => question.bonus !== null).length, 0)),
         p_questions: questionSnapshots,
         p_content_screens: [],
         p_tiebreakers: tiebreakerSnapshots,

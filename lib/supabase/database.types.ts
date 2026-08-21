@@ -605,6 +605,18 @@ export type Database = {
         }
         Returns: string
       }
+      save_quiz_with_bonus_snapshots: {
+        Args: {
+          p_quiz_id: string | null
+          p_title: string
+          p_status: string
+          p_estimated_minutes: number
+          p_questions: Json
+          p_content_screens?: Json
+          p_tiebreakers?: Json
+        }
+        Returns: string
+      }
       save_my_question_with_metadata: {
         Args: {
           p_question_id: string | null
@@ -612,6 +624,7 @@ export type Database = {
           p_primary_category_id?: string | null
           p_secondary_category_ids?: string[]
           p_tag_ids?: string[]
+          p_bonus?: Json | null
         }
         Returns: string
       }
@@ -640,6 +653,7 @@ type QuestionRow = {
   tags: string[]
   image_url: string | null
   points_max: number
+  bonus: Json | null
   notes: string | null
   created_at: string
 }
@@ -663,6 +677,7 @@ type QuestionInsert = {
   tags?: string[]
   image_url?: string | null
   points_max?: number
+  bonus?: Json | null
   notes?: string | null
   created_at?: string
 }
@@ -757,6 +772,7 @@ type SourceQuestionCatalogRow = {
   category_names: string[]
   tag_ids: string[]
   tag_names: string[]
+  bonus: Json | null
 }
 
 type ControlledLookupTable = {
@@ -1086,6 +1102,7 @@ type SourceQuestionBonusTable = {
     correct_answer: Json
     accepted_answers: Json
     points: number
+    image_url: string | null
     prompt_pattern_id: string | null
     answer_type_id: string | null
     editorial_difficulty: number | null
@@ -1105,6 +1122,7 @@ type SourceQuestionBonusTable = {
     correct_answer: Json
     accepted_answers?: Json
     points?: number
+    image_url?: string | null
     prompt_pattern_id?: string | null
     answer_type_id?: string | null
     editorial_difficulty?: number | null

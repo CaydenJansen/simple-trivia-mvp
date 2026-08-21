@@ -12,6 +12,12 @@ import type {
   QuestionType,
 } from "@/lib/supabase/database.types";
 import { TRIVIA_DIFFICULTIES } from "@/lib/trivia/difficulty";
+import {
+  EMPTY_SOURCE_QUESTION_BONUS,
+  sourceQuestionBonusDraft,
+  sourceQuestionBonusPayload,
+  validateSourceQuestionBonus,
+} from "@/lib/trivia/source-question-bonus";
 
 type SourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"];
 type Category = Database["public"]["Tables"]["categories"]["Row"];
@@ -485,6 +491,7 @@ function QuestionCard({
   onChanged: () => void;
 }) {
   const [deleting, setDeleting] = useState(false);
+  const bonus = sourceQuestionBonusDraft(question.bonus);
   const statusColors: Record<QuestionStatus, string> = {
     active: "bg-emerald-50 text-emerald-700",
     draft: "bg-amber-50 text-amber-700",
@@ -513,10 +520,12 @@ function QuestionCard({
             {question.category_names.length > 0 ? <span className="text-xs text-zinc-500">{question.category_names.length === 1 ? question.category_names[0] : "Mixed categories"}</span> : null}
             {difficultyLabel(question.editorial_difficulty) ? <span className="text-xs text-zinc-500">· {difficultyLabel(question.editorial_difficulty)}</span> : null}
             {question.is_verified ? <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">✓ Verified</span> : null}
+            {bonus.enabled ? <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">+ {bonus.points} pt bonus</span> : null}
             {editable ? <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${statusColors[question.status]}`}>{question.status.replace("_", " ")}</span> : null}
           </div>
           <h2 className="text-[15px] font-bold leading-6 text-zinc-900">{question.prompt}</h2>
           <p className="mt-2 truncate text-sm text-zinc-500"><span className="font-medium text-zinc-700">Answer:</span> {answerSummary(question)}</p>
+          {bonus.enabled ? <p className="mt-1 truncate text-sm text-amber-700"><span className="font-medium">Bonus:</span> {bonus.prompt}</p> : null}
           {question.tag_names.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-1.5">
               {question.tag_names.map((tag) => <span key={tag} className="rounded-md bg-zinc-100 px-2 py-1 text-[11px] text-zinc-500">{tag}</span>)}
@@ -629,12 +638,23 @@ function QuestionEditor({
   onSaved: () => void;
 }) {
   const [draft, setDraft] = useState<QuestionDraft>(() => question ? draftFromQuestion(question) : { ...EMPTY_DRAFT });
+  const [bonus, setBonus] = useState(() => sourceQuestionBonusDraft(question?.bonus));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCategory, setShowCategory] = useState(() => Boolean(question && (question.primary_category_id || question.secondary_category_ids.length > 0)));
   const [showDifficulty, setShowDifficulty] = useState(() => Boolean(question?.editorial_difficulty));
   const [showTags, setShowTags] = useState(() => Boolean(question && question.tag_ids.length > 0));
   const [showImage, setShowImage] = useState(() => Boolean(question?.image_url));
+  const [showBonus, setShowBonus] = useState(() => bonus.enabled);
+  const [showBonusDetails, setShowBonusDetails] = useState(() => Boolean(
+    bonus.primaryCategoryId
+    || bonus.secondaryCategoryIds.length > 0
+    || bonus.editorialDifficulty
+    || bonus.tagIds.length > 0
+    || bonus.promptPatternId
+    || bonus.answerTypeId
+    || bonus.stability !== "stable"
+  ));
   const [showMetadata, setShowMetadata] = useState(() => Boolean(question && (
     question.prompt_pattern_id
     || question.answer_type_id
@@ -658,6 +678,15 @@ function QuestionEditor({
   const metadataSummary = draft.status !== "active" || draft.stability !== "stable" || draft.promptPatternId || draft.answerTypeId
     ? `${draft.status.replace("_", " ")} · ${draft.stability.replace("_", " ")}`
     : null;
+  const bonusSummary = bonus.enabled
+    ? `${bonus.points} ${bonus.points === 1 ? "point" : "points"}${bonus.prompt.trim() ? ` · ${bonus.prompt.trim()}` : " · Incomplete bonus"}`
+    : null;
+  const bonusPrimaryCategoryName = taxonomy.categories.find((category) => category.id === bonus.primaryCategoryId)?.name;
+  const bonusDetailsSummary = [
+    bonusPrimaryCategoryName,
+    bonus.editorialDifficulty ? TRIVIA_DIFFICULTIES[bonus.editorialDifficulty - 1] : null,
+    bonus.tagIds.length ? `${bonus.tagIds.length} ${bonus.tagIds.length === 1 ? "tag" : "tags"}` : null,
+  ].filter(Boolean).join(" · ") || null;
 
   function updateAnswer(index: number, value: string) {
     setDraft((current) => ({ ...current, answers: current.answers.map((answer, row) => row === index ? value : answer) }));
@@ -681,7 +710,7 @@ function QuestionEditor({
   }
 
   async function saveQuestion() {
-    const validationError = validateDraft(draft);
+    const validationError = validateDraft(draft) ?? validateSourceQuestionBonus(bonus);
     if (validationError) {
       setError(validationError);
       return;
@@ -696,6 +725,7 @@ function QuestionEditor({
       p_primary_category_id: draft.primaryCategoryId || null,
       p_secondary_category_ids: draft.secondaryCategoryIds,
       p_tag_ids: draft.tagIds,
+      p_bonus: sourceQuestionBonusPayload(bonus),
     });
 
     setSaving(false);
@@ -734,7 +764,7 @@ function QuestionEditor({
           </div>
 
           <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-            <OptionalEditorField label="Question image (Optional)" shown={showImage} summary={draft.imageUrl ? "Image URL added" : null} onToggle={() => setShowImage((value) => !value)}>
+            <OptionalEditorField label="Image (Optional)" shown={showImage} summary={draft.imageUrl ? "Image URL added" : null} onToggle={() => setShowImage((value) => !value)}>
               <input type="url" value={draft.imageUrl} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="https://…" />
             </OptionalEditorField>
           </div>
@@ -775,6 +805,67 @@ function QuestionEditor({
                 <input value={draft.aliases[0] ?? ""} onChange={(event) => updateAlias(0, event.target.value)} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-violet-500" placeholder="Accepted alternatives, separated by commas" />
               </div>
             )}
+          </div>
+
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
+            <OptionalEditorField
+              label="Bonus question (Optional)"
+              shown={showBonus}
+              summary={bonusSummary}
+              onToggle={() => {
+                if (!showBonus && !bonus.enabled) setBonus({ ...EMPTY_SOURCE_QUESTION_BONUS, enabled: true });
+                setShowBonus((value) => !value);
+              }}
+            >
+              <div className="space-y-4">
+                <p className="text-xs leading-5 text-amber-800">Add one optional bonus worth its own points. It stays attached to this question but does not increase the normal question count.</p>
+                <label className="block">
+                  <span className="text-sm font-semibold text-zinc-700">Bonus question text</span>
+                  <textarea value={bonus.prompt} onChange={(event) => setBonus({ ...bonus, prompt: event.target.value })} rows={2} className="mt-2 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" placeholder="What extra question would you like to ask?" />
+                </label>
+                <div className="grid gap-4 md:grid-cols-[1fr_8rem]">
+                  <label className="block">
+                    <span className="text-sm font-semibold text-zinc-700">Correct answer</span>
+                    <input value={bonus.answer} onChange={(event) => setBonus({ ...bonus, answer: event.target.value })} className="mt-2 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" />
+                  </label>
+                  <label className="block">
+                    <span className="text-sm font-semibold text-zinc-700">Points</span>
+                    <input type="number" min={1} step={1} value={bonus.points} onChange={(event) => setBonus({ ...bonus, points: Number(event.target.value) })} className="mt-2 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" />
+                  </label>
+                </div>
+                <input value={bonus.aliases} onChange={(event) => setBonus({ ...bonus, aliases: event.target.value })} className="w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" placeholder="Accepted alternatives, separated by commas" />
+                <label className="block">
+                  <span className="text-sm font-semibold text-zinc-700">Image (Optional)</span>
+                  <input type="url" value={bonus.imageUrl} onChange={(event) => setBonus({ ...bonus, imageUrl: event.target.value })} className="mt-2 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" placeholder="https://…" />
+                </label>
+
+                <div className="rounded-xl border border-amber-200 bg-white p-4">
+                  <OptionalEditorField label="Bonus details (Optional)" shown={showBonusDetails} summary={bonusDetailsSummary} onToggle={() => setShowBonusDetails((value) => !value)}>
+                    <div className="space-y-4">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <label className="block">
+                          <span className="text-sm font-semibold text-zinc-700">Primary category</span>
+                          <select value={bonus.primaryCategoryId} onChange={(event) => setBonus({ ...bonus, primaryCategoryId: event.target.value, secondaryCategoryIds: bonus.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
+                            <option value="">Not set</option>
+                            {taxonomy.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                          </select>
+                        </label>
+                        <CategoryPicker label="Secondary categories" categories={taxonomy.categories.filter((category) => category.id !== bonus.primaryCategoryId)} selectedIds={bonus.secondaryCategoryIds} onChange={(secondaryCategoryIds) => setBonus({ ...bonus, secondaryCategoryIds })} />
+                      </div>
+                      <label className="block">
+                        <span className="text-sm font-semibold text-zinc-700">Difficulty</span>
+                        <select value={bonus.editorialDifficulty} onChange={(event) => setBonus({ ...bonus, editorialDifficulty: event.target.value ? Number(event.target.value) : "" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
+                          <option value="">Not set</option>{TRIVIA_DIFFICULTIES.map((option, index) => <option key={option} value={index + 1}>{index + 1} · {option}</option>)}
+                        </select>
+                      </label>
+                      <TagPicker tags={taxonomy.tags} selectedIds={bonus.tagIds} onChange={(tagIds) => setBonus({ ...bonus, tagIds })} />
+                    </div>
+                  </OptionalEditorField>
+                </div>
+
+                <button type="button" onClick={() => { setBonus({ ...EMPTY_SOURCE_QUESTION_BONUS }); setShowBonus(false); setShowBonusDetails(false); }} className="rounded-lg px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50">Remove bonus</button>
+              </div>
+            </OptionalEditorField>
           </div>
 
           <div className="space-y-5 rounded-2xl border border-zinc-200 bg-zinc-50/70 p-5">
