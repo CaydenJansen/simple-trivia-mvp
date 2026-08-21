@@ -154,6 +154,48 @@ export type Database = {
           },
         ]
       }
+      source_tiebreakers: {
+        Row: {
+          id: string
+          prompt: string
+          correct_value: number
+          answer_unit: string | null
+          notes: string | null
+          status: QuestionStatus
+          is_verified: boolean
+          last_reviewed_at: string | null
+          import_key: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          prompt: string
+          correct_value: number
+          answer_unit?: string | null
+          notes?: string | null
+          status?: QuestionStatus
+          is_verified?: boolean
+          last_reviewed_at?: string | null
+          import_key?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          prompt?: string
+          correct_value?: number
+          answer_unit?: string | null
+          notes?: string | null
+          status?: QuestionStatus
+          is_verified?: boolean
+          last_reviewed_at?: string | null
+          import_key?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       quiz_questions: {
         Row: QuestionRow & {
           quiz_id: string

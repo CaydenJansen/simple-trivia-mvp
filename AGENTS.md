@@ -20,6 +20,7 @@
 - Never regress to using `728461` or another hard-coded code as the normal hosting path.
 - Preserve the `quiz_questions` → `game_questions` snapshot boundary so later quiz edits cannot alter an active or completed game.
 - Preserve the separate `quiz_tiebreakers` → `game_tiebreakers` snapshot boundary. Prepared tiebreakers are not ordinary scored questions.
+- Auto-Build draws from platform-owned `source_questions` and `source_tiebreakers`, then creates independent quiz snapshots through the same atomic save boundary as manual authoring.
 - Supabase is the source of truth for live game state. Do not replace working database or Realtime behaviour with fake local state.
 - Players follow host progression automatically; players do not advance questions themselves.
 - Correct answers must not be exposed to players before reveal.
@@ -45,6 +46,7 @@
 - Only joinable lobby games should accept new teams.
 - Host live controls and question content must remain usable on small laptop screens.
 - Prepared tiebreakers are optional for manually built quizzes; recommend at least two without blocking save or hosting. Automatically built quizzes must prepare exactly three.
+- Auto-Build must fail clearly when active source content cannot satisfy the requested count, topics, difficulty range, or three-tiebreaker requirement. Never silently duplicate questions or reduce the requested quiz.
 - Tiebreakers are numeric closest-answer questions used only to resolve a consequential final-placement tie. Normal round and in-game ties are allowed.
 - Do not include tiebreakers in normal question counts, running-time estimates, or game points. Resolving a tie must never change a team's trivia score.
 - A future final-results resolution must offer tiebreaker, allowed-tie, and manual ordering methods, and store the decision and placement separately from score.

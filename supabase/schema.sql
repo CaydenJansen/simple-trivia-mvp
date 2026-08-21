@@ -9,6 +9,8 @@
 -- supabase/migrations/20260820200000_add_hidden_question_scoring.sql.
 -- Prepared-tiebreaker authoring and game snapshots are versioned in
 -- supabase/migrations/20260821170000_add_prepared_tiebreakers.sql.
+-- Auto-Build source content is versioned in
+-- supabase/migrations/20260821190000_add_auto_build_sources.sql.
 -- Existing deployed RLS policies and Realtime publication membership are
 -- otherwise managed by Supabase and are not replaced by this file.
 
@@ -67,6 +69,21 @@ create table if not exists public.source_questions (
       and verified_by is null
     )
   )
+);
+
+create table if not exists public.source_tiebreakers (
+  id uuid primary key default gen_random_uuid(),
+  prompt text not null check (length(btrim(prompt)) > 0),
+  correct_value numeric not null,
+  answer_unit text,
+  notes text,
+  status text not null default 'draft'
+    check (status in ('draft', 'needs_review', 'active', 'archived')),
+  is_verified boolean not null default false,
+  last_reviewed_at timestamptz,
+  import_key text unique,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists public.quiz_questions (
@@ -256,6 +273,9 @@ create index if not exists source_questions_tags_idx
 
 create index if not exists source_questions_prompt_search_idx
   on public.source_questions using gin (to_tsvector('simple', prompt));
+
+create index if not exists source_tiebreakers_status_idx
+  on public.source_tiebreakers (status, updated_at desc);
 
 create index if not exists quiz_questions_source_question_idx
   on public.quiz_questions (source_question_id)

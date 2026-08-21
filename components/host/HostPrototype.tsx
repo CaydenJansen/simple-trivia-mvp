@@ -35,6 +35,7 @@ import {
   isValidTiebreakerNumericValue,
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
+import { buildAutoQuizPlan } from "@/lib/trivia/auto-build";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -849,6 +850,9 @@ function CreateQuiz({ go }: { go: Go }) {
       localStorage.removeItem('simple-trivia-selected-quiz-id')
       localStorage.removeItem('simple-trivia-selected-quiz-title')
     }
+    if (id === 'auto') {
+      localStorage.setItem('simple-trivia-auto-question-count', String(n))
+    }
     go(next)
   }
 
@@ -877,7 +881,7 @@ function CreateQuiz({ go }: { go: Go }) {
               id: 'auto' as const,
               icon: <I.star />,
               title: 'Build it for me',
-              desc: "We'll assemble a quiz from our verified library. Review and change everything before saving.",
+              desc: "We'll assemble a draft from the Question Library. Review and change everything in Quiz Builder.",
               cta: 'Build my quiz',
               next: 'auto-build' as Screen,
             },
@@ -2718,14 +2722,118 @@ function QuestionEditor({ question, title, onClose, onSave }: {
 
 function AutoBuild({ go }: { go: Go }) {
   const [mode, setMode] = useState<'mixed' | 'custom'>('mixed')
-  const [diff, setDiff] = useState<[number, number]>([1, 3])
-  const diffLabels = ['Super-Easy', 'Easy', 'Medium', 'Hard', 'Super-Hard']
-  const topics = ['General Knowledge', 'Movies', 'Sport', 'Music']
-  const allTopics = ['General Knowledge', 'Movies', 'Sport', 'Music', 'Geography', 'Science', 'History', 'Technology', 'Mixed']
+  const [diff, setDiff] = useState<[number, number]>([0, 2])
+  const [topics, setTopics] = useState(['General Knowledge', 'Movies', 'Sport', 'Music'])
+  const [questionCount] = useState(() => {
+    if (typeof window === 'undefined') return 30
+    const storedCount = Number(localStorage.getItem('simple-trivia-auto-question-count'))
+    return Number.isInteger(storedCount) && storedCount > 0 ? storedCount : 30
+  })
+  const [generating, setGenerating] = useState(false)
+  const [generateError, setGenerateError] = useState<string | null>(null)
+  const diffLabels = ['Easy', 'Medium', 'Hard']
+  const allTopics = ['General Knowledge', 'Movies', 'Sport', 'Music']
 
   const diffText = () => {
     const [lo, hi] = diff
     return lo === hi ? `${diffLabels[lo]} only` : `${diffLabels[lo]} through ${diffLabels[hi]}`
+  }
+
+  async function generateQuiz() {
+    if (generating) return
+    setGenerating(true)
+    setGenerateError(null)
+
+    const [questionResult, tiebreakerResult] = await Promise.all([
+      supabase
+        .from('source_questions')
+        .select('*')
+        .eq('origin', 'platform')
+        .eq('status', 'active')
+        .eq('is_verified', true)
+        .range(0, 999),
+      supabase
+        .from('source_tiebreakers')
+        .select('*')
+        .eq('status', 'active')
+        .eq('is_verified', true)
+        .range(0, 99),
+    ])
+
+    if (questionResult.error || tiebreakerResult.error) {
+      console.error('Could not load Auto-Build sources:', questionResult.error ?? tiebreakerResult.error)
+      setGenerateError('Could not load the Question Library. Try again in a moment.')
+      setGenerating(false)
+      return
+    }
+
+    try {
+      const plan = buildAutoQuizPlan({
+        questions: questionResult.data ?? [],
+        tiebreakers: tiebreakerResult.data ?? [],
+        questionCount,
+        roundTopics: mode === 'mixed' ? [null, null, null, null] : topics,
+        difficulties: diffLabels.slice(diff[0], diff[1] + 1),
+      })
+      const questionSnapshots: Json[] = []
+      let position = 0
+
+      plan.rounds.forEach((round, roundIndex) => {
+        round.questions.forEach((question, roundIndexPosition) => {
+          position += 1
+          questionSnapshots.push({
+            question_key: `question-${crypto.randomUUID()}`,
+            position,
+            item_position: position,
+            round_number: roundIndex + 1,
+            round_position: roundIndexPosition + 1,
+            round_question_count: round.questions.length,
+            round_title: round.title,
+            prompt: question.prompt,
+            category: question.category,
+            difficulty: question.difficulty,
+            question_type: question.question_type,
+            correct_answer: question.correct_answer,
+            accepted_answers: question.accepted_answers,
+            options: question.options,
+            tags: question.tags,
+            image_url: question.image_url,
+            points_max: Array.isArray(question.correct_answer) ? Math.max(1, question.correct_answer.length) : 1,
+            notes: question.notes,
+            source_question_id: question.id,
+            source_revision: question.revision,
+          })
+        })
+      })
+
+      const tiebreakerSnapshots: Json[] = plan.tiebreakers.map((tiebreaker, index) => ({
+        tiebreaker_key: `tiebreaker-${crypto.randomUUID()}`,
+        position: index + 1,
+        prompt: tiebreaker.prompt,
+        correct_value: String(tiebreaker.correct_value),
+        answer_unit: tiebreaker.answer_unit,
+        notes: tiebreaker.notes,
+      }))
+      const title = 'Auto-Built Quiz'
+      const { data, error } = await supabase.rpc('save_quiz_with_questions', {
+        p_quiz_id: null,
+        p_title: title,
+        p_status: 'draft',
+        p_estimated_minutes: Math.round(questionCount * 2.4),
+        p_questions: questionSnapshots,
+        p_content_screens: [],
+        p_tiebreakers: tiebreakerSnapshots,
+      })
+
+      if (error || !data) throw error ?? new Error('No quiz id returned')
+      localStorage.setItem('simple-trivia-selected-quiz-id', data)
+      localStorage.setItem('simple-trivia-selected-quiz-title', title)
+      go('quiz-builder')
+    } catch (error) {
+      console.error('Could not generate quiz:', error)
+      setGenerateError(error instanceof Error ? error.message : 'Could not generate this quiz. Try again.')
+      setGenerating(false)
+    }
   }
 
   return (
@@ -2742,7 +2850,7 @@ function AutoBuild({ go }: { go: Go }) {
           {/* Count */}
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
             <div className="grid grid-cols-2 gap-6">
-              {[{ label: 'Questions', val: 30 }, { label: 'Rounds', val: 4 }].map(f => (
+              {[{ label: 'Questions', val: questionCount }, { label: 'Rounds', val: 4 }].map(f => (
                 <div key={f.label}>
                   <label style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider block mb-2">{f.label}</label>
                   <div className="flex items-baseline gap-1.5">
@@ -2775,7 +2883,7 @@ function AutoBuild({ go }: { go: Go }) {
                 {topics.map((t, i) => (
                   <div key={i} className="flex items-center gap-3">
                     <span style={{ color: C.sub }} className="text-xs font-mono w-14 shrink-0">Round {i + 1}</span>
-                    <select defaultValue={t} style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                    <select value={t} onChange={event => setTopics(current => current.map((topic, topicIndex) => topicIndex === i ? event.target.value : topic))} style={{ border: `1px solid ${C.line}`, color: C.ink }}
                       className="flex-1 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30">
                       {allTopics.map(o => <option key={o}>{o}</option>)}
                     </select>
@@ -2795,25 +2903,25 @@ function AutoBuild({ go }: { go: Go }) {
                 {/* Filled range */}
                 <div style={{
                   position: 'absolute',
-                  left: `${(diff[0] / 4) * 100}%`,
-                  right: `${((4 - diff[1]) / 4) * 100}%`,
+                  left: `${(diff[0] / (diffLabels.length - 1)) * 100}%`,
+                  right: `${(((diffLabels.length - 1) - diff[1]) / (diffLabels.length - 1)) * 100}%`,
                   height: '100%',
                   background: C.violet,
                   borderRadius: 4,
                 }} />
               </div>
               {/* Two range inputs stacked */}
-              <input type="range" min={0} max={4} step={1} value={diff[0]}
+              <input type="range" min={0} max={diffLabels.length - 1} step={1} value={diff[0]}
                 onChange={e => { const v = Math.min(+e.target.value, diff[1]); setDiff([v, diff[1]]) }}
                 className="absolute inset-0 w-full opacity-0 cursor-pointer" style={{ height: 6, top: 0 }} />
-              <input type="range" min={0} max={4} step={1} value={diff[1]}
+              <input type="range" min={0} max={diffLabels.length - 1} step={1} value={diff[1]}
                 onChange={e => { const v = Math.max(+e.target.value, diff[0]); setDiff([diff[0], v]) }}
                 className="absolute inset-0 w-full opacity-0 cursor-pointer" style={{ height: 6, top: 0 }} />
               {/* Thumb dots */}
               {[0, 1].map(hi => (
                 <div key={hi} style={{
                   position: 'absolute',
-                  left: `calc(${(diff[hi] / 4) * 100}% - 10px)`,
+                  left: `calc(${(diff[hi] / (diffLabels.length - 1)) * 100}% - 10px)`,
                   top: -7,
                   width: 20, height: 20,
                   background: 'white',
@@ -2830,7 +2938,7 @@ function AutoBuild({ go }: { go: Go }) {
                 <span key={l} style={{
                   color: i >= diff[0] && i <= diff[1] ? C.violet : C.sub,
                   fontWeight: (i === diff[0] || i === diff[1]) ? 700 : 400,
-                }} className="text-[11px] text-center w-[18%]">{l}</span>
+                }} className="flex-1 text-center text-[11px]">{l}</span>
               ))}
             </div>
             <p style={{ color: C.sub }} className="text-sm">
@@ -2841,11 +2949,12 @@ function AutoBuild({ go }: { go: Go }) {
           <div style={{ background: C.violetMist, border: `1px solid ${C.violetPale}` }} className="rounded-2xl p-5">
             <p style={{ color: C.violet }} className="text-sm font-bold">{AUTO_BUILD_TIEBREAKER_COUNT} prepared tiebreakers included</p>
             <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">
-              Auto-build will add exactly {AUTO_BUILD_TIEBREAKER_COUNT} closest-answer questions, separate from the 30 scored questions and estimated running time.
+              Auto-Build will add exactly {AUTO_BUILD_TIEBREAKER_COUNT} closest-answer questions, separate from the {questionCount} scored questions and estimated running time.
             </p>
           </div>
 
-          <Btn sz="lg" cls="w-full" onClick={() => go('quiz-review')}>Generate Quiz →</Btn>
+          {generateError && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{generateError}</p>}
+          <Btn sz="lg" cls="w-full" disabled={generating} onClick={() => void generateQuiz()}>{generating ? 'Generating Draft…' : 'Generate Draft Quiz →'}</Btn>
         </div>
       </main>
     </div>
