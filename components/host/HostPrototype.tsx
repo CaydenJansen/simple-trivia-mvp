@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase/client";
 import QuestionsArea from "@/components/host/QuestionsArea";
@@ -41,6 +47,7 @@ import {
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
 import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
+import { reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, type TriviaDifficulty } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy } from "@/lib/trivia/question-metadata";
 import {
@@ -997,6 +1004,7 @@ type BuilderQuestionData = {
   notes: string
   sourceQuestionId: string | null
   sourceRevision: number | null
+  sourceOrigin: 'user' | 'platform' | null
   itemPosition: number
 }
 
@@ -1082,6 +1090,7 @@ function prototypeEditorQuestion(type: 'single' | 'multi'): BuilderQuestionData 
     notes: '',
     sourceQuestionId: null,
     sourceRevision: null,
+    sourceOrigin: null,
     itemPosition: 1,
   }
 }
@@ -1111,6 +1120,7 @@ function blankBuilderQuestion(): BuilderQuestionData {
     notes: '',
     sourceQuestionId: null,
     sourceRevision: null,
+    sourceOrigin: null,
     itemPosition: 1,
   }
 }
@@ -1144,8 +1154,23 @@ function sourceToBuilderQuestion(source: PickerSourceQuestion): BuilderQuestionD
     notes: source.notes ?? '',
     sourceQuestionId: source.id,
     sourceRevision: source.revision,
+    sourceOrigin: source.origin,
     itemPosition: 1,
   }
+}
+
+function libraryReplacementFit(question: BuilderQuestionData, candidate: PickerSourceQuestion) {
+  const candidateDifficulty = candidate.editorial_difficulty
+    ? TRIVIA_DIFFICULTIES[candidate.editorial_difficulty - 1]
+    : candidate.difficulty ?? 'Unrated'
+  let score = 0
+
+  if (candidate.category_names.some(category => category.toLocaleLowerCase() === question.cat.toLocaleLowerCase())) score += 4
+  if (candidateDifficulty.toLocaleLowerCase() === question.diff.toLocaleLowerCase()) score += 2
+
+  const currentTags = new Set(question.tags.map(tag => tag.toLocaleLowerCase()))
+  score += candidate.tag_names.filter(tag => currentTags.has(tag.toLocaleLowerCase())).length
+  return score
 }
 
 function nextRoundItemPosition(round: BuilderRoundData) {
@@ -1175,6 +1200,11 @@ function QuizBuilder({ go }: { go: Go }) {
   const [picker, setPicker] = useState<{ roundId: number; origin: 'user' | 'platform' } | null>(null)
   const [replaceTarget, setReplaceTarget] = useState<{ roundId: number; questionId: string } | null>(null)
   const [replaceOrigin, setReplaceOrigin] = useState<'user' | 'platform' | null>(null)
+  const [replacingLibraryQuestionId, setReplacingLibraryQuestionId] = useState<string | null>(null)
+  const [replacementError, setReplacementError] = useState<string | null>(null)
+  const replacementHistoryRef = useRef(new Map<string, Set<string>>())
+  const [draggedRoundId, setDraggedRoundId] = useState<number | null>(null)
+  const [roundDropTarget, setRoundDropTarget] = useState<{ id: number; placement: DropPlacement } | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const questionCount = rounds.reduce((total, round) => total + round.questions.length, 0)
@@ -1235,6 +1265,25 @@ function QuizBuilder({ go }: { go: Go }) {
         return
       }
 
+      const sourceQuestionIds = [...new Set((questionResult.data ?? [])
+        .map(row => row.source_question_id)
+        .filter((id): id is string => Boolean(id)))]
+      const sourceOriginsById = new Map<string, 'user' | 'platform'>()
+
+      if (sourceQuestionIds.length > 0) {
+        const { data: sourceRows, error: sourceOriginError } = await supabase
+          .from('source_questions')
+          .select('id, origin')
+          .in('id', sourceQuestionIds)
+
+        if (!active) return
+        if (sourceOriginError) {
+          console.warn('Could not load quiz question provenance:', sourceOriginError)
+        } else {
+          for (const sourceRow of sourceRows ?? []) sourceOriginsById.set(sourceRow.id, sourceRow.origin)
+        }
+      }
+
       const groupedRounds = new Map<number, BuilderRoundData>()
       for (const row of questionResult.data ?? []) {
         const round = groupedRounds.get(row.round_number) ?? {
@@ -1263,6 +1312,7 @@ function QuizBuilder({ go }: { go: Go }) {
           notes: row.notes ?? '',
           sourceQuestionId: row.source_question_id,
           sourceRevision: row.source_revision,
+          sourceOrigin: row.source_question_id ? sourceOriginsById.get(row.source_question_id) ?? null : null,
           itemPosition: row.item_position,
         })
         groupedRounds.set(row.round_number, round)
@@ -1316,6 +1366,124 @@ function QuizBuilder({ go }: { go: Go }) {
       ? { ...round, questions: [...round.questions, { ...question, itemPosition: nextRoundItemPosition(round) }] }
       : round))
     setDirty(true)
+  }
+
+  async function cycleLibraryQuestion(roundId: number, questionId: string) {
+    if (replacingLibraryQuestionId) return
+    const currentQuestion = rounds
+      .find(round => round.id === roundId)
+      ?.questions.find(question => question.id === questionId)
+
+    if (!currentQuestion || currentQuestion.sourceOrigin !== 'platform' || !currentQuestion.sourceQuestionId) return
+
+    setReplacingLibraryQuestionId(questionId)
+    setReplacementError(null)
+
+    const mechanic = currentQuestion.questionType === 'image-question'
+      ? 'single-answer'
+      : currentQuestion.questionType
+    const { data, error } = await supabase
+      .from('source_question_catalog')
+      .select('*')
+      .eq('origin', 'platform')
+      .eq('status', 'active')
+      .eq('mechanic', mechanic)
+      .neq('id', currentQuestion.sourceQuestionId)
+      .range(0, 199)
+
+    if (error) {
+      console.error('Could not replace library question:', error)
+      setReplacementError('Could not find another library question. Try again in a moment.')
+      setReplacingLibraryQuestionId(null)
+      return
+    }
+
+    const usedSourceIds = new Set(rounds.flatMap(round => round.questions
+      .map(question => question.sourceQuestionId)
+      .filter((id): id is string => Boolean(id))))
+    const candidates = (data ?? [])
+      .filter(candidate => !usedSourceIds.has(candidate.id))
+      .sort((a, b) => libraryReplacementFit(currentQuestion, b) - libraryReplacementFit(currentQuestion, a)
+        || a.id.localeCompare(b.id))
+
+    let history = replacementHistoryRef.current.get(currentQuestion.questionKey)
+      ?? new Set([currentQuestion.sourceQuestionId])
+    let replacement = candidates.find(candidate => !history.has(candidate.id))
+
+    if (!replacement && candidates.length > 0) {
+      history = new Set([currentQuestion.sourceQuestionId])
+      replacement = candidates[0]
+    }
+
+    if (!replacement) {
+      setReplacementError('There are no other unused library questions of this type yet. You can still choose one manually.')
+      setReplacingLibraryQuestionId(null)
+      return
+    }
+
+    history.add(replacement.id)
+    replacementHistoryRef.current.set(currentQuestion.questionKey, history)
+    const replacementSnapshot = sourceToBuilderQuestion(replacement)
+    setRounds(current => current.map(round => round.id === roundId ? {
+      ...round,
+      questions: round.questions.map(question => question.id === questionId ? {
+        ...replacementSnapshot,
+        id: question.id,
+        questionKey: question.questionKey,
+        itemPosition: question.itemPosition,
+      } : question),
+    } : round))
+    setDirty(true)
+    setReplacingLibraryQuestionId(null)
+  }
+
+  function reorderRound(draggedId: number, targetId: number, placement: DropPlacement) {
+    setRounds(current => {
+      const orderedIds = reorderKeys(current.map(round => String(round.id)), String(draggedId), String(targetId), placement)
+      const roundsById = new Map(current.map(round => [String(round.id), round]))
+      return orderedIds.map(id => roundsById.get(id)).filter((round): round is BuilderRoundData => Boolean(round))
+    })
+    setDirty(true)
+  }
+
+  function startRoundDrag(roundId: number, event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    const pointerId = event.pointerId
+    let latestTarget: { id: number; placement: DropPlacement } | null = null
+    setDraggedRoundId(roundId)
+    setRoundDropTarget(null)
+
+    const updateTarget = (clientX: number, clientY: number) => {
+      const target = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('[data-builder-round-id]')
+      const targetId = Number(target?.dataset.builderRoundId)
+      if (!target || !Number.isInteger(targetId) || targetId === roundId) {
+        latestTarget = null
+        setRoundDropTarget(null)
+        return
+      }
+      const bounds = target.getBoundingClientRect()
+      latestTarget = { id: targetId, placement: clientY < bounds.top + bounds.height / 2 ? 'before' : 'after' }
+      setRoundDropTarget(latestTarget)
+    }
+    const move = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId === pointerId) updateTarget(moveEvent.clientX, moveEvent.clientY)
+    }
+    const finish = (finishEvent: PointerEvent) => {
+      if (finishEvent.pointerId !== pointerId) return
+      if (finishEvent.type === 'pointerup' && latestTarget) reorderRound(roundId, latestTarget.id, latestTarget.placement)
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      setDraggedRoundId(null)
+      setRoundDropTarget(null)
+    }
+
+    updateTarget(event.clientX, event.clientY)
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
   }
 
   async function saveQuiz() {
@@ -1544,13 +1712,29 @@ function QuizBuilder({ go }: { go: Go }) {
               {saveError}
             </div>
           )}
+          {replacementError && (
+            <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="rounded-xl px-4 py-3 text-sm font-semibold">
+              {replacementError}
+            </div>
+          )}
           {loading && <div style={{ color: C.sub }} className="py-24 text-center text-sm">Loading quiz…</div>}
-          {!loading && !loadError && rounds.map((round) => (
-            <BuilderRound
+          {!loading && !loadError && rounds.map((round, roundIndex) => {
+            const roundDropPlacement = roundDropTarget?.id === round.id ? roundDropTarget.placement : null
+            return (
+            <div
               key={round.id}
+              data-builder-round-id={round.id}
+              className={`relative rounded-2xl ${draggedRoundId === round.id ? 'opacity-45' : ''}`}
+            >
+              {roundDropPlacement === 'before' && <div className="absolute -top-1.5 left-4 right-4 z-10 h-1 rounded-full bg-violet" />}
+              <BuilderRound
               round={round}
+              roundNumber={roundIndex + 1}
               onEdit={questionId => setEditingQuestionId(questionId)}
               onReplace={questionId => setReplaceTarget({ roundId: round.id, questionId })}
+              replacingLibraryQuestionId={replacingLibraryQuestionId}
+              onCycleLibrary={questionId => void cycleLibraryQuestion(round.id, questionId)}
+              onRoundPointerDown={event => startRoundDrag(round.id, event)}
               onTitleChange={nextTitle => {
                 setRounds(current => current.map(item => item.id === round.id ? { ...item, title: nextTitle } : item))
                 setDirty(true)
@@ -1603,8 +1787,25 @@ function QuizBuilder({ go }: { go: Go }) {
                 }))
                 setDirty(true)
               }}
+              onReorderItems={orderedKeys => {
+                const positions = new Map(orderedKeys.map((key, index) => [key, index + 1]))
+                setRounds(current => current.map(item => item.id === round.id ? {
+                  ...item,
+                  questions: item.questions.map(question => ({
+                    ...question,
+                    itemPosition: positions.get(`question:${question.id}`) ?? question.itemPosition,
+                  })),
+                  contentScreens: item.contentScreens.map(screen => ({
+                    ...screen,
+                    itemPosition: positions.get(`content:${screen.id}`) ?? screen.itemPosition,
+                  })),
+                } : item))
+                setDirty(true)
+              }}
             />
-          ))}
+              {roundDropPlacement === 'after' && <div className="absolute -bottom-1.5 left-4 right-4 z-10 h-1 rounded-full bg-violet" />}
+            </div>
+          )})}
           <button
             onClick={() => {
               const nextId = Math.max(0, ...rounds.map(round => round.id)) + 1
@@ -1653,10 +1854,10 @@ function QuizBuilder({ go }: { go: Go }) {
             {sidebarOpen && (
               <>
                 <div className="space-y-0.5">
-                  {rounds.map(round => (
+                  {rounds.map((round, index) => (
                     <div key={round.id} style={{ color: C.sub }}
                       className="flex items-center justify-between py-2 px-2 rounded-lg hover:bg-ground cursor-pointer transition-colors hover:text-ink text-xs">
-                      <span className="truncate"><span className="font-mono opacity-60 mr-1.5">R{round.id}</span>{round.title}</span>
+                      <span className="truncate"><span className="font-mono opacity-60 mr-1.5">R{index + 1}</span>{round.title}</span>
                       <span className="font-mono ml-1 shrink-0">{round.questions.length}</span>
                     </div>
                   ))}
@@ -2059,10 +2260,14 @@ function QuizPreview({ title, rounds, onClose }: {
   )
 }
 
-function BuilderRound({ round, onEdit, onReplace, onTitleChange, onAddQuestion, onAddContentScreen, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen }: {
+function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, onReplace, onCycleLibrary, onRoundPointerDown, onTitleChange, onAddQuestion, onAddContentScreen, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onReorderItems }: {
   round: BuilderRoundData
+  roundNumber: number
+  replacingLibraryQuestionId: string | null
   onEdit: (questionId: string) => void
   onReplace: (questionId: string) => void
+  onCycleLibrary: (questionId: string) => void
+  onRoundPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
   onTitleChange: (title: string) => void
   onAddQuestion: () => void
   onAddContentScreen: () => void
@@ -2070,18 +2275,76 @@ function BuilderRound({ round, onEdit, onReplace, onTitleChange, onAddQuestion, 
   onDuplicateQuestion: (questionId: string) => void
   onUpdateContentScreen: (screenId: string, updates: Partial<BuilderContentScreenData>) => void
   onDeleteContentScreen: (screenId: string) => void
+  onReorderItems: (orderedKeys: string[]) => void
 }) {
   const [open, setOpen] = useState(true)
+  const [draggedItemKey, setDraggedItemKey] = useState<string | null>(null)
+  const [itemDropTarget, setItemDropTarget] = useState<{ key: string; placement: DropPlacement } | null>(null)
   const items = [
     ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, question })),
     ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, screen })),
   ].sort((a, b) => a.itemPosition - b.itemPosition)
+
+  function startItemDrag(itemKey: string, event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    const pointerId = event.pointerId
+    let latestTarget: { key: string; placement: DropPlacement } | null = null
+    setDraggedItemKey(itemKey)
+    setItemDropTarget(null)
+
+    const updateTarget = (clientX: number, clientY: number) => {
+      const target = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('[data-builder-item-key]')
+      const targetKey = target?.dataset.builderItemKey
+      if (!target || !targetKey || targetKey === itemKey) {
+        latestTarget = null
+        setItemDropTarget(null)
+        return
+      }
+      const bounds = target.getBoundingClientRect()
+      latestTarget = { key: targetKey, placement: clientY < bounds.top + bounds.height / 2 ? 'before' : 'after' }
+      setItemDropTarget(latestTarget)
+    }
+    const move = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId === pointerId) updateTarget(moveEvent.clientX, moveEvent.clientY)
+    }
+    const finish = (finishEvent: PointerEvent) => {
+      if (finishEvent.pointerId !== pointerId) return
+      if (finishEvent.type === 'pointerup' && latestTarget) {
+        onReorderItems(reorderKeys(
+          items.map(roundItem => roundItem.kind === 'question' ? `question:${roundItem.question.id}` : `content:${roundItem.screen.id}`),
+          itemKey,
+          latestTarget.key,
+          latestTarget.placement,
+        ))
+      }
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      setDraggedItemKey(null)
+      setItemDropTarget(null)
+    }
+
+    updateTarget(event.clientX, event.clientY)
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+  }
+
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl overflow-hidden">
       <div style={{ background: C.ground, borderBottom: open ? `1px solid ${C.line}` : 'none' }}
         className="flex items-center gap-3 px-4 py-3">
-        <span style={{ color: C.sub }} className="cursor-grab hover:text-ink transition-colors"><I.grip /></span>
-        <span style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-widest shrink-0">Round {round.id}</span>
+        <button
+          type="button"
+          aria-label={`Drag Round ${roundNumber} to reorder`}
+          title="Drag to reorder round"
+          onPointerDown={onRoundPointerDown}
+          style={{ color: C.sub }}
+          className="cursor-grab hover:text-ink active:cursor-grabbing transition-colors"
+        ><I.grip /></button>
+        <span style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-widest shrink-0">Round {roundNumber}</span>
         <input
           value={round.title}
           onChange={e => onTitleChange(e.target.value)}
@@ -2095,24 +2358,39 @@ function BuilderRound({ round, onEdit, onReplace, onTitleChange, onAddQuestion, 
       </div>
       {open && (
         <div className="p-3 space-y-2">
-          {items.map(item => item.kind === 'question' ? (
-            <BuilderQuestion
-              key={`question-${item.question.id}`}
+          {items.map(item => {
+            const itemKey = item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`
+            const dropPlacement = itemDropTarget?.key === itemKey ? itemDropTarget.placement : null
+            return (
+            <div
+              key={itemKey}
+              data-builder-item-key={itemKey}
+              className={`relative rounded-xl ${draggedItemKey === itemKey ? 'opacity-45' : ''}`}
+            >
+              {dropPlacement === 'before' && <div className="absolute -top-1 left-3 right-3 z-10 h-1 rounded-full bg-violet" />}
+              {item.kind === 'question' ? (
+              <BuilderQuestion
               q={item.question}
               idx={round.questions.filter(question => question.itemPosition <= item.question.itemPosition).length - 1}
               onEdit={() => onEdit(item.question.id)}
               onReplace={() => onReplace(item.question.id)}
+              onCycleLibrary={() => onCycleLibrary(item.question.id)}
+              replacing={replacingLibraryQuestionId === item.question.id}
               onDelete={() => onDeleteQuestion(item.question.id)}
               onDuplicate={() => onDuplicateQuestion(item.question.id)}
+              onPointerDown={event => startItemDrag(itemKey, event)}
             />
           ) : (
             <BuilderContentScreen
-              key={`content-${item.screen.id}`}
               screen={item.screen}
               onChange={updates => onUpdateContentScreen(item.screen.id, updates)}
               onDelete={() => onDeleteContentScreen(item.screen.id)}
+              onPointerDown={event => startItemDrag(itemKey, event)}
             />
-          ))}
+          )}
+              {dropPlacement === 'after' && <div className="absolute -bottom-1 left-3 right-3 z-10 h-1 rounded-full bg-violet" />}
+            </div>
+          )})}
           <div className="flex gap-1 pt-1">
             <button onClick={onAddQuestion} style={{ color: C.sub }}
               className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
@@ -2129,10 +2407,11 @@ function BuilderRound({ round, onEdit, onReplace, onTitleChange, onAddQuestion, 
   )
 }
 
-function BuilderContentScreen({ screen, onChange, onDelete }: {
+function BuilderContentScreen({ screen, onChange, onDelete, onPointerDown }: {
   screen: BuilderContentScreenData
   onChange: (updates: Partial<BuilderContentScreenData>) => void
   onDelete: () => void
+  onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
 }) {
   const [expanded, setExpanded] = useState(() => screen.id.startsWith('content-'))
 
@@ -2142,8 +2421,10 @@ function BuilderContentScreen({ screen, onChange, onDelete }: {
       {/* Header row — click anywhere to expand */}
       <div className="flex items-start gap-3 px-3 py-3 group cursor-pointer hover:bg-violet/5 transition-colors"
         onClick={() => setExpanded(v => !v)}>
-        <span style={{ color: C.sub }} className="mt-0.5 cursor-grab hover:text-ink transition-colors shrink-0"
-          onClick={e => e.stopPropagation()}><I.grip /></span>
+        <button type="button" aria-label="Drag content screen to reorder" title="Drag to reorder"
+          onPointerDown={onPointerDown}
+          style={{ color: C.sub }} className="mt-0.5 cursor-grab hover:text-ink active:cursor-grabbing transition-colors shrink-0"
+          onClick={e => e.stopPropagation()}><I.grip /></button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5">
             <span style={{ background: C.violetPale, color: C.violet }}
@@ -2204,19 +2485,39 @@ function BuilderContentScreen({ screen, onChange, onDelete }: {
   )
 }
 
-function BuilderQuestion({ q, idx, onEdit, onReplace, onDelete, onDuplicate }: {
+function BuilderQuestion({ q, idx, replacing, onEdit, onReplace, onCycleLibrary, onDelete, onDuplicate, onPointerDown }: {
   q: BuilderQuestionData
   idx: number
+  replacing: boolean
   onEdit: () => void
   onReplace: () => void
+  onCycleLibrary: () => void
   onDelete: () => void
   onDuplicate: () => void
+  onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
 }) {
+  const isLibraryQuestion = q.sourceOrigin === 'platform'
+
   return (
-    <div onClick={onEdit} style={{ border: `1px solid ${C.line}`, cursor: 'pointer' }}
-      className="flex items-start gap-3 px-3 py-3 rounded-xl hover:border-violet hover:shadow-sm hover:bg-violet-mist/30 transition-all group bg-white">
-      <span style={{ color: C.sub }} className="mt-0.5 cursor-grab hover:text-ink transition-colors shrink-0" onClick={e => e.stopPropagation()}><I.grip /></span>
+    <div onClick={onEdit} style={{
+      border: `1px solid ${isLibraryQuestion ? '#C4B5FD' : C.line}`,
+      background: isLibraryQuestion ? '#F7F5FF' : 'white',
+      boxShadow: isLibraryQuestion ? `inset 3px 0 0 ${C.violet}` : undefined,
+      cursor: 'pointer',
+      opacity: replacing ? 0.6 : 1,
+    }}
+      className="flex items-start gap-3 px-3 py-3 rounded-xl hover:border-violet hover:shadow-sm transition-all group">
+      <button type="button" aria-label={`Drag question ${idx + 1} to reorder`} title="Drag to reorder"
+        onPointerDown={onPointerDown}
+        style={{ color: C.sub }} className="mt-0.5 cursor-grab hover:text-ink active:cursor-grabbing transition-colors shrink-0"
+        onClick={e => e.stopPropagation()}><I.grip /></button>
       <div className="flex-1 min-w-0">
+        {isLibraryQuestion && (
+          <div className="mb-2 flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-violet-700">
+            <span className="flex h-5 w-5 items-center justify-center rounded-md bg-violet-100">★</span>
+            Question Library
+          </div>
+        )}
         {q.hasImage && (
           <div style={{ background: C.ground, border: `1px solid ${C.line}` }}
             className="rounded-lg h-16 mb-2 flex items-center justify-center gap-2 overflow-hidden">
@@ -2243,8 +2544,19 @@ function BuilderQuestion({ q, idx, onEdit, onReplace, onDelete, onDuplicate }: {
           </span>
         </div>
       </div>
-      <div className="flex items-center gap-0.5 shrink-0 mt-0.5" onClick={e => e.stopPropagation()}>
-        <IBtn icon={<I.refresh />} title="Replace" onClick={onReplace} />
+      <div className="flex items-center gap-1 shrink-0 mt-0.5" onClick={e => e.stopPropagation()}>
+        {isLibraryQuestion && (
+          <button
+            type="button"
+            disabled={replacing}
+            onClick={onCycleLibrary}
+            title="Automatically find another similar unused library question"
+            className="flex items-center gap-1.5 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700 shadow-sm transition hover:border-violet-400 hover:bg-violet-50 disabled:cursor-wait disabled:opacity-60"
+          >
+            <I.refresh /> {replacing ? 'Finding…' : 'Try another'}
+          </button>
+        )}
+        <IBtn icon={<I.refresh />} title={isLibraryQuestion ? 'Choose replacement manually' : 'Replace'} onClick={onReplace} />
         <IBtn icon={<I.copy />} title="Duplicate" onClick={onDuplicate} />
         <IBtn icon={<I.trash />} title="Delete" onClick={onDelete} danger />
       </div>
