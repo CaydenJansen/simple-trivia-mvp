@@ -31,7 +31,7 @@ import { hostRecoveryScreen } from "@/lib/trivia/session-recovery";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
-  | 'dashboard' | 'questions' | 'create-quiz' | 'quiz-builder'
+  | 'dashboard' | 'questions' | 'recent-games' | 'create-quiz' | 'quiz-builder'
   | 'auto-build' | 'quiz-review' | 'host-setup'
   | 'lobby' | 'live-question' | 'end-of-round' | 'final-results'
 type Go = (s: Screen) => void
@@ -231,7 +231,7 @@ function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
         {[
           { label: 'My Quizzes', screen: 'dashboard' as Screen },
           { label: 'Questions', screen: 'questions' as Screen },
-          { label: 'Recent Games', screen: 'dashboard' as Screen },
+          { label: 'Recent Games', screen: 'recent-games' as Screen },
         ].map(({ label, screen }) => (
           <button
             key={label}
@@ -258,6 +258,170 @@ function QuestionsScreen({ go }: { go: Go }) {
     <div style={{ background: C.ground }} className="min-h-screen">
       <Nav go={go} active="Questions" />
       <QuestionsArea />
+    </div>
+  )
+}
+
+type RecentGameSummary = {
+  id: string
+  code: string
+  title: string
+  status: string
+  current_screen: string
+  answer_phase: string
+  created_at: string
+  quiz_id: string | null
+  team_count: number
+}
+
+function formatGameDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value))
+}
+
+function RecentGamesScreen({ go }: { go: Go }) {
+  const [games, setGames] = useState<RecentGameSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+
+    async function loadRecentGames() {
+      setLoading(true)
+      setLoadError(null)
+
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (!active) return
+      if (authError || !authData.user) {
+        setLoadError('Could not verify your host account.')
+        setLoading(false)
+        return
+      }
+
+      const { data: ownedQuizzes, error: quizError } = await supabase
+        .from('quizzes')
+        .select('id')
+        .eq('owner_id', authData.user.id)
+
+      if (!active) return
+      if (quizError) {
+        console.error('Could not load owned quizzes for game history:', quizError)
+        setLoadError('Could not load recent games.')
+        setLoading(false)
+        return
+      }
+
+      const quizIds = (ownedQuizzes ?? []).map(quiz => quiz.id)
+      if (quizIds.length === 0) {
+        setGames([])
+        setLoading(false)
+        return
+      }
+
+      const { data: gameRows, error: gameError } = await supabase
+        .from('games')
+        .select('id, code, title, status, current_screen, answer_phase, created_at, quiz_id')
+        .in('quiz_id', quizIds)
+        .order('created_at', { ascending: false })
+        .limit(50)
+
+      if (!active) return
+      if (gameError) {
+        console.error('Could not load recent games:', gameError)
+        setLoadError('Could not load recent games.')
+        setLoading(false)
+        return
+      }
+
+      const gameIds = (gameRows ?? []).map(game => game.id)
+      const teamResult = gameIds.length > 0
+        ? await supabase.from('teams').select('game_id').in('game_id', gameIds)
+        : { data: [], error: null }
+
+      if (!active) return
+      if (teamResult.error) console.error('Could not load recent game team counts:', teamResult.error)
+
+      const teamCounts = new Map<string, number>()
+      for (const team of teamResult.data ?? []) {
+        teamCounts.set(team.game_id, (teamCounts.get(team.game_id) ?? 0) + 1)
+      }
+
+      setGames((gameRows ?? []).map(game => ({
+        ...game,
+        team_count: teamCounts.get(game.id) ?? 0,
+      })))
+      setLoading(false)
+    }
+
+    void loadRecentGames()
+    return () => { active = false }
+  }, [])
+
+  function openGame(game: RecentGameSummary) {
+    localStorage.setItem('simple-trivia-host-game-id', game.id)
+    localStorage.setItem('simple-trivia-host-game-code', game.code)
+    localStorage.setItem('simple-trivia-host-game-title', game.title)
+    go(hostRecoveryScreen(game.status, game.current_screen))
+  }
+
+  return (
+    <div style={{ background: C.ground }} className="min-h-screen">
+      <Nav go={go} active="Recent Games" />
+      <main className="max-w-5xl mx-auto px-6 py-10">
+        <div className="mb-8">
+          <h1 style={{ color: C.ink }} className="text-3xl font-extrabold">Recent Games</h1>
+          <p style={{ color: C.sub }} className="mt-2 text-sm">Resume an active session or revisit completed results.</p>
+        </div>
+
+        {loadError && (
+          <div style={{ background: '#FEF2F2', border: '1px solid #FECACA' }} className="rounded-xl px-4 py-3 mb-5">
+            <p style={{ color: C.stop }} className="text-sm font-semibold">{loadError}</p>
+          </div>
+        )}
+
+        {loading ? (
+          <div style={{ color: C.sub }} className="py-24 text-center text-sm">Loading recent games…</div>
+        ) : games.length === 0 ? (
+          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-3xl px-6 py-20 text-center">
+            <h2 style={{ color: C.ink }} className="text-xl font-bold">No games hosted yet</h2>
+            <p style={{ color: C.sub }} className="mt-2 text-sm">Your live and completed games will appear here.</p>
+            <Btn cls="mt-6" onClick={() => go('dashboard')}>Choose a Quiz</Btn>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {games.map(game => {
+              const live = game.status === 'live'
+              const lobby = game.status === 'lobby'
+              const finished = game.status === 'finished'
+              const label = lobby ? 'Lobby' : live ? 'Live' : finished ? 'Completed' : game.status
+              const action = lobby ? 'Return to Lobby' : live ? 'Resume Game' : finished ? 'View Results' : 'Open Game'
+              const badgeStyle = lobby
+                ? { background: '#FFFBEB', color: '#B45309' }
+                : live
+                  ? { background: '#FEF2F2', color: C.stop }
+                  : { background: '#F0FDF4', color: C.go }
+
+              return (
+                <article key={game.id} style={{ background: C.panel, border: `1px solid ${C.line}` }} className="flex flex-col gap-5 rounded-2xl p-5 sm:flex-row sm:items-center">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 style={{ color: C.ink }} className="truncate text-base font-bold">{game.title}</h2>
+                      <span style={badgeStyle} className="rounded-full px-2.5 py-1 text-[11px] font-extrabold uppercase tracking-wide">{label}</span>
+                    </div>
+                    <p style={{ color: C.sub }} className="mt-2 text-sm">
+                      Code {game.code} · {game.team_count} team{game.team_count === 1 ? '' : 's'} · {formatGameDate(game.created_at)}
+                    </p>
+                  </div>
+                  <Btn v={finished ? 'secondary' : 'primary'} onClick={() => openGame(game)} cls="shrink-0">{action}</Btn>
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </main>
     </div>
   )
 }
@@ -4797,7 +4961,7 @@ function FinalResults({ go }: { go: Go }) {
         </div>
 
         <div className="flex gap-3">
-          <Btn v="secondary" sz="md" cls="flex-1 justify-center">View Game Summary</Btn>
+          <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={() => go('recent-games')}>View Game Summary</Btn>
           <Btn sz="lg" cls="flex-1 justify-center" onClick={finishAndReturn}>Finish &amp; Return to My Quizzes</Btn>
         </div>
       </main>
@@ -4810,15 +4974,16 @@ function FinalResults({ go }: { go: Go }) {
 const SCREENS: [Screen, string][] = [
   ['dashboard', '1 · Dashboard'],
   ['questions', '2 · Questions'],
-  ['create-quiz', '3 · Create Quiz'],
-  ['quiz-builder', '4 · Quiz Builder'],
-  ['auto-build', '5 · Auto-Build'],
-  ['quiz-review', '6 · Quiz Review'],
-  ['host-setup', '7 · Host Setup'],
-  ['lobby', '8 · Lobby'],
-  ['live-question', '9 · Live Console'],
-  ['end-of-round', '10 · End of Round'],
-  ['final-results', '11 · Final Results'],
+  ['recent-games', '3 · Recent Games'],
+  ['create-quiz', '4 · Create Quiz'],
+  ['quiz-builder', '5 · Quiz Builder'],
+  ['auto-build', '6 · Auto-Build'],
+  ['quiz-review', '7 · Quiz Review'],
+  ['host-setup', '8 · Host Setup'],
+  ['lobby', '9 · Lobby'],
+  ['live-question', '10 · Live Console'],
+  ['end-of-round', '11 · End of Round'],
+  ['final-results', '12 · Final Results'],
 ]
 
 function ScreenNav({ current, go }: { current: Screen; go: Go }) {
@@ -4974,6 +5139,7 @@ export default function App({ showDevNavigator = false }: { showDevNavigator?: b
   const screens: Record<Screen, React.ReactNode> = {
     'dashboard': <Dashboard go={setScreen} />,
     'questions': <QuestionsScreen go={setScreen} />,
+    'recent-games': <RecentGamesScreen go={setScreen} />,
     'create-quiz': <CreateQuiz go={setScreen} />,
     'quiz-builder': <QuizBuilder go={setScreen} />,
     'auto-build': <AutoBuild go={setScreen} />,
