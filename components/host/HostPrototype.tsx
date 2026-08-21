@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase/client";
 import QuestionsArea from "@/components/host/QuestionsArea";
@@ -2723,6 +2723,35 @@ function QuestionEditor({ question, title, onClose, onSave }: {
 function AutoBuild({ go }: { go: Go }) {
   const [mode, setMode] = useState<'mixed' | 'custom'>('mixed')
   const [diff, setDiff] = useState<[number, number]>([0, 2])
+
+  const startDifficultyDrag = (handle: 'minimum' | 'maximum', event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    const track = event.currentTarget.parentElement?.getBoundingClientRect()
+    if (!track) return
+    const pointerId = event.pointerId
+
+    const updateFromPointer = (clientX: number) => {
+      const ratio = Math.max(0, Math.min(1, (clientX - track.left) / track.width))
+      const value = Math.round(ratio * (diffLabels.length - 1))
+      setDiff(current => handle === 'minimum'
+        ? [Math.min(value, current[1]), current[1]]
+        : [current[0], Math.max(value, current[0])])
+    }
+    const move = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId === pointerId) updateFromPointer(moveEvent.clientX)
+    }
+    const stop = (stopEvent: PointerEvent) => {
+      if (stopEvent.pointerId !== pointerId) return
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', stop)
+      window.removeEventListener('pointercancel', stop)
+    }
+
+    updateFromPointer(event.clientX)
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', stop)
+    window.addEventListener('pointercancel', stop)
+  }
   const [topics, setTopics] = useState(['General Knowledge', 'Movies', 'Sport', 'Music'])
   const [questionCount] = useState(() => {
     if (typeof window === 'undefined') return 30
@@ -2910,27 +2939,31 @@ function AutoBuild({ go }: { go: Go }) {
                   borderRadius: 4,
                 }} />
               </div>
-              {/* Two range inputs stacked */}
-              <input type="range" min={0} max={diffLabels.length - 1} step={1} value={diff[0]}
-                onChange={e => { const v = Math.min(+e.target.value, diff[1]); setDiff([v, diff[1]]) }}
-                className="absolute inset-0 w-full opacity-0 cursor-pointer" style={{ height: 6, top: 0 }} />
-              <input type="range" min={0} max={diffLabels.length - 1} step={1} value={diff[1]}
-                onChange={e => { const v = Math.max(+e.target.value, diff[0]); setDiff([diff[0], v]) }}
-                className="absolute inset-0 w-full opacity-0 cursor-pointer" style={{ height: 6, top: 0 }} />
-              {/* Thumb dots */}
-              {[0, 1].map(hi => (
-                <div key={hi} style={{
-                  position: 'absolute',
-                  left: `calc(${(diff[hi] / (diffLabels.length - 1)) * 100}% - 10px)`,
-                  top: -7,
-                  width: 20, height: 20,
-                  background: 'white',
-                  border: `2px solid ${C.violet}`,
-                  borderRadius: '50%',
-                  pointerEvents: 'none',
-                  boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
-                }} />
-              ))}
+              {/* Two independently draggable slider handles */}
+              <button type="button" role="slider"
+                aria-label="Minimum difficulty"
+                aria-valuemin={0} aria-valuemax={diffLabels.length - 1} aria-valuenow={diff[0]} aria-valuetext={diffLabels[diff[0]]}
+                onPointerDown={e => startDifficultyDrag('minimum', e)}
+                onKeyDown={e => {
+                  if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+                  e.preventDefault()
+                  const value = e.key === 'Home' ? 0 : e.key === 'End' ? diff[1] : diff[0] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
+                  setDiff(current => [Math.max(0, Math.min(value, current[1])), current[1]])
+                }}
+                className="dual-range-thumb absolute p-0"
+                style={{ left: `calc(${(diff[0] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: diff[0] === diff[1] ? 3 : 2 }} />
+              <button type="button" role="slider"
+                aria-label="Maximum difficulty"
+                aria-valuemin={0} aria-valuemax={diffLabels.length - 1} aria-valuenow={diff[1]} aria-valuetext={diffLabels[diff[1]]}
+                onPointerDown={e => startDifficultyDrag('maximum', e)}
+                onKeyDown={e => {
+                  if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+                  e.preventDefault()
+                  const value = e.key === 'Home' ? diff[0] : e.key === 'End' ? diffLabels.length - 1 : diff[1] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
+                  setDiff(current => [current[0], Math.min(diffLabels.length - 1, Math.max(value, current[0]))])
+                }}
+                className="dual-range-thumb absolute p-0"
+                style={{ left: `calc(${(diff[1] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: 2 }} />
             </div>
             {/* Labels */}
             <div className="flex justify-between mb-3">

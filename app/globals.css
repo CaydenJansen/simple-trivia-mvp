@@ -70,6 +70,26 @@ input[type="range"] {
   accent-color: #7C3AED;
 }
 
+.dual-range-thumb {
+  width: 20px;
+  height: 20px;
+  background: white;
+  border: 2px solid #7C3AED;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 15%);
+  cursor: grab;
+  touch-action: none;
+}
+
+.dual-range-thumb:active {
+  cursor: grabbing;
+}
+
+.dual-range-thumb:focus-visible {
+  outline: 3px solid rgb(124 58 237 / 25%);
+  outline-offset: 2px;
+}
+
 textarea,
 input,
 select,
