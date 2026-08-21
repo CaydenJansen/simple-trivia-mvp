@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import {
   leaderboardVisibilityFromSettings,
@@ -13,6 +13,7 @@ import {
 } from "@/lib/trivia/answer-reveal";
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { PLAYER_SESSION_KEYS } from "@/lib/trivia/session-recovery";
+import { gameCodeFromSearch } from "@/lib/trivia/join-code";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -966,34 +967,55 @@ function HostAdvance({ label, to, go }: { label: string; to: PlayerScreen; go: (
 export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
   const [code, setCode] = useState('')
   const [invalid, setInvalid] = useState(false)
+  const [joining, setJoining] = useState(false)
+  const handledQrCode = useRef(false)
 
-async function handleJoin() {
-  setInvalid(false);
+  const handleJoin = useCallback(async (selectedCode = code) => {
+    setInvalid(false)
+    setJoining(true)
 
-  const { data: game, error } = await supabase
-    .from("games")
-    .select("id, code, title, status")
-    .eq("code", code)
-    .eq("status", "lobby")
-    .maybeSingle();
+    const { data: game, error } = await supabase
+      .from('games')
+      .select('id, code, title, status')
+      .eq('code', selectedCode)
+      .eq('status', 'lobby')
+      .maybeSingle()
 
-  if (error) {
-    console.error("Error finding game:", error);
-    setInvalid(true);
-    return;
-  }
+    if (error) {
+      console.error('Error finding game:', error)
+      setInvalid(true)
+      setJoining(false)
+      return
+    }
 
-  if (!game) {
-    setInvalid(true);
-    return;
-  }
+    if (!game) {
+      setInvalid(true)
+      setJoining(false)
+      return
+    }
 
-  localStorage.setItem("simple-trivia-game-id", game.id);
-  localStorage.setItem("simple-trivia-game-code", game.code);
-  localStorage.setItem("simple-trivia-game-title", game.title);
+    localStorage.setItem('simple-trivia-game-id', game.id)
+    localStorage.setItem('simple-trivia-game-code', game.code)
+    localStorage.setItem('simple-trivia-game-title', game.title)
 
-  go("team-setup");
-}
+    go('team-setup')
+  }, [code, go])
+
+  useEffect(() => {
+    if (handledQrCode.current) return
+
+    const qrCode = gameCodeFromSearch(window.location.search)
+    if (!qrCode) return
+
+    const timer = window.setTimeout(() => {
+      if (handledQrCode.current) return
+      handledQrCode.current = true
+      setCode(qrCode)
+      void handleJoin(qrCode)
+    }, 0)
+
+    return () => window.clearTimeout(timer)
+  }, [handleJoin])
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -1054,7 +1076,7 @@ async function handleJoin() {
           )}
 
           <div style={{ marginTop: 16 }}>
-            <Btn onClick={handleJoin} disabled={code.length < 6}>Join Game</Btn>
+            <Btn onClick={() => { void handleJoin() }} disabled={code.length < 6 || joining}>{joining ? 'Joining…' : 'Join Game'}</Btn>
           </div>
 
           <p style={{ color: C.sub, fontSize: 12, marginTop: 12 }} className="text-center">

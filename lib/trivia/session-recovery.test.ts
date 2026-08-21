@@ -23,5 +23,6 @@ describe('host session recovery', () => {
 
   it('falls back safely when no live state is recognizable', () => {
     expect(hostRecoveryScreen(null, null)).toBe('dashboard')
+    expect(hostRecoveryScreen('cancelled', 'game-ended')).toBe('dashboard')
   })
 })

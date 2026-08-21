@@ -364,6 +364,12 @@ export type Database = {
     }
     Views: Record<string, never>
     Functions: {
+      cancel_host_game: {
+        Args: {
+          p_game_code: string
+        }
+        Returns: string
+      }
       get_player_game_question: {
         Args: {
           p_game_id: string

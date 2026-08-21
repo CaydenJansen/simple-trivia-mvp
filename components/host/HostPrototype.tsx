@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase/client";
 import QuestionsArea from "@/components/host/QuestionsArea";
 import BuilderQuestionPicker, { type PickerSourceQuestion } from "@/components/host/BuilderQuestionPicker";
@@ -28,6 +29,7 @@ import {
 } from "@/lib/trivia/leaderboard-visibility";
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { hostRecoveryScreen } from "@/lib/trivia/session-recovery";
+import { buildGameJoinUrl } from "@/lib/trivia/join-code";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -183,6 +185,181 @@ function Chip({
     <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${colors[color]}`}>
       {children}
     </span>
+  )
+}
+
+function useGameJoinQr(gameCode: string) {
+  const [qr, setQr] = useState({ dataUrl: '', joinUrl: '' })
+
+  useEffect(() => {
+    let active = true
+
+    async function generateQr() {
+      if (!gameCode) return
+      const joinUrl = buildGameJoinUrl(window.location.origin, gameCode)
+
+      try {
+        const dataUrl = await QRCode.toDataURL(joinUrl, {
+          width: 720,
+          margin: 2,
+          errorCorrectionLevel: 'M',
+          color: { dark: C.ink, light: '#FFFFFF' },
+        })
+        if (active) setQr({ dataUrl, joinUrl })
+      } catch (error) {
+        console.error('Could not create game QR code:', error)
+      }
+    }
+
+    void generateQr()
+    return () => { active = false }
+  }, [gameCode])
+
+  return qr
+}
+
+function QrGraphic({ dataUrl, size = 176 }: { dataUrl: string; size?: number }) {
+  return (
+    <div
+      role="img"
+      aria-label="QR code for joining this game"
+      style={{
+        width: size,
+        height: size,
+        backgroundColor: '#FFFFFF',
+        backgroundImage: dataUrl ? `url(${dataUrl})` : undefined,
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
+        backgroundSize: 'contain',
+      }}
+      className="flex items-center justify-center rounded-2xl"
+    >
+      {!dataUrl && <span style={{ color: C.sub }} className="text-xs font-semibold">Creating QR…</span>}
+    </div>
+  )
+}
+
+function downloadGameQr(dataUrl: string, gameCode: string) {
+  if (!dataUrl) return
+  const link = document.createElement('a')
+  link.href = dataUrl
+  link.download = `simple-trivia-${gameCode}-qr.png`
+  link.click()
+}
+
+function JoinCodeButton({
+  dark = false,
+  label,
+  className = '',
+}: {
+  dark?: boolean
+  label?: string
+  className?: string
+}) {
+  const gameCode = getHostGameCode()
+  const [open, setOpen] = useState(false)
+  const { dataUrl, joinUrl } = useGameJoinQr(gameCode)
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        style={{ border: `1px solid ${dark ? C.liveLine : C.line}`, color: dark ? C.liveText : C.ink }}
+        className={`rounded-lg px-3 py-2 text-xs font-bold transition-colors hover:border-violet hover:text-violet ${className}`}
+      >
+        {label ?? `Join code ${gameCode}`}
+      </button>
+
+      {open && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#080713]/80 px-5 py-8 backdrop-blur-sm">
+          <section style={{ background: C.panel }} className="w-full max-w-lg rounded-3xl p-7 text-center shadow-2xl">
+            <div className="flex items-start justify-between gap-4 text-left">
+              <div>
+                <p style={{ color: C.violet }} className="text-xs font-extrabold uppercase tracking-widest">Join this game</p>
+                <h2 style={{ color: C.ink }} className="mt-1 text-2xl font-black">Scan or enter the code</h2>
+              </div>
+              <button type="button" onClick={() => setOpen(false)} style={{ color: C.sub }} className="rounded-lg p-2 text-xl hover:bg-ground" aria-label="Close join code">×</button>
+            </div>
+
+            <div className="mt-7 flex justify-center">
+              <QrGraphic dataUrl={dataUrl} size={280} />
+            </div>
+            <p style={{ color: C.sub }} className="mt-6 text-xs font-bold uppercase tracking-widest">Game code</p>
+            <p style={{ color: C.ink, letterSpacing: '0.16em' }} className="mt-1 text-5xl font-black tabular-nums">{gameCode}</p>
+            <p style={{ color: C.sub }} className="mt-4 break-all text-xs">{joinUrl}</p>
+            <p style={{ color: C.caution }} className="mt-4 text-xs font-semibold">New teams can only join while the lobby is open.</p>
+            <div className="mt-6 flex justify-center gap-3">
+              <Btn v="secondary" onClick={() => downloadGameQr(dataUrl, gameCode)} disabled={!dataUrl}>Download QR</Btn>
+              <Btn onClick={() => setOpen(false)}>Done</Btn>
+            </div>
+          </section>
+        </div>
+      )}
+    </>
+  )
+}
+
+function CancelGameButton({
+  go,
+  dark = false,
+  className = '',
+}: {
+  go: Go
+  dark?: boolean
+  className?: string
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleCancel() {
+    if (cancelling) return
+    setCancelling(true)
+    setError(null)
+
+    const { error: cancelError } = await supabase.rpc('cancel_host_game', {
+      p_game_code: getHostGameCode(),
+    })
+
+    if (cancelError) {
+      console.error('Could not cancel game:', cancelError)
+      setError('Could not cancel the game. Please try again.')
+      setCancelling(false)
+      return
+    }
+
+    exitHostSession(go)
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        style={{ color: dark ? '#FCA5A5' : C.stop }}
+        className={`rounded-lg px-3 py-2 text-xs font-bold transition-colors hover:bg-red-500/10 ${className}`}
+      >
+        Cancel game
+      </button>
+
+      {confirming && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#080713]/80 px-5 backdrop-blur-sm">
+          <section style={{ background: C.panel }} className="w-full max-w-md rounded-3xl p-7 text-center shadow-2xl">
+            <div style={{ background: '#FEF2F2', color: C.stop }} className="mx-auto flex h-14 w-14 items-center justify-center rounded-full text-2xl">!</div>
+            <h2 style={{ color: C.ink }} className="mt-5 text-2xl font-black">Cancel this game?</h2>
+            <p style={{ color: C.sub }} className="mt-3 text-sm leading-6">
+              The game will end immediately for every player. Scores and answers will stay saved, but the session cannot be resumed.
+            </p>
+            {error && <p style={{ color: C.stop }} className="mt-4 text-sm font-semibold">{error}</p>}
+            <div className="mt-7 flex gap-3">
+              <Btn v="secondary" cls="flex-1" onClick={() => { setConfirming(false); setError(null) }} disabled={cancelling}>Keep playing</Btn>
+              <Btn v="danger" cls="flex-1" onClick={handleCancel} disabled={cancelling}>{cancelling ? 'Cancelling…' : 'Cancel game'}</Btn>
+            </div>
+          </section>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -403,13 +580,16 @@ function RecentGamesScreen({ go }: { go: Go }) {
               const live = game.status === 'live'
               const lobby = game.status === 'lobby'
               const finished = game.status === 'finished'
-              const label = lobby ? 'Lobby' : live ? 'Live' : finished ? 'Completed' : game.status
+              const cancelled = game.status === 'cancelled'
+              const label = lobby ? 'Lobby' : live ? 'Live' : finished ? 'Completed' : cancelled ? 'Cancelled' : game.status
               const action = lobby ? 'Return to Lobby' : live ? 'Resume Game' : finished ? 'View Results' : 'Open Game'
               const badgeStyle = lobby
                 ? { background: '#FFFBEB', color: '#B45309' }
                 : live
                   ? { background: '#FEF2F2', color: C.stop }
-                  : { background: '#F0FDF4', color: C.go }
+                  : cancelled
+                    ? { background: C.ground, color: C.sub }
+                    : { background: '#F0FDF4', color: C.go }
 
               return (
                 <article key={game.id} style={{ background: C.panel, border: `1px solid ${C.line}` }} className="flex flex-col gap-5 rounded-2xl p-5 sm:flex-row sm:items-center">
@@ -422,7 +602,11 @@ function RecentGamesScreen({ go }: { go: Go }) {
                       Code {game.code} · {game.team_count} team{game.team_count === 1 ? '' : 's'} · {formatGameDate(game.created_at)}
                     </p>
                   </div>
-                  <Btn v={finished ? 'secondary' : 'primary'} onClick={() => openGame(game)} cls="shrink-0">{action}</Btn>
+                  {cancelled ? (
+                    <span style={{ color: C.sub }} className="shrink-0 px-3 py-2 text-sm font-semibold">Session ended</span>
+                  ) : (
+                    <Btn v={finished ? 'secondary' : 'primary'} onClick={() => openGame(game)} cls="shrink-0">{action}</Btn>
+                  )}
                 </article>
               )
             })}
@@ -2930,6 +3114,7 @@ type LobbyTeam = {
 function Lobby({ go }: { go: Go }) {
   const [lobbyCode] = useState(() => getHostGameCode())
   const [lobbyTitle] = useState(() => getHostGameTitle())
+  const { dataUrl: lobbyQrDataUrl } = useGameJoinQr(lobbyCode)
   const [teams, setTeams] = useState<LobbyTeam[]>([])
   const [lobbyError, setLobbyError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
@@ -3086,6 +3271,7 @@ function Lobby({ go }: { go: Go }) {
         </Chip>
         <Btn v="ghost" sz="sm" onClick={() => go('host-setup')}>Settings</Btn>
         <Btn v="ghost" sz="sm" onClick={() => exitHostSession(go)}>Exit to My Quizzes</Btn>
+        <CancelGameButton go={go} />
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-10">
@@ -3101,19 +3287,13 @@ function Lobby({ go }: { go: Go }) {
             <div style={{ color: C.ink, letterSpacing: '0.2em' }} className="text-6xl font-extrabold mb-7 tabular-nums">
               {lobbyCode}
             </div>
-            {/* QR Placeholder */}
             <div style={{ background: C.ground, border: `1px solid ${C.line}` }}
               className="w-44 h-44 rounded-2xl mb-6 flex items-center justify-center overflow-hidden">
-              <div className="grid gap-[2.5px] p-3" style={{ gridTemplateColumns: 'repeat(9, 1fr)' }}>
-                {Array.from({ length: 81 }).map((_, i) => {
-                  const filled = [0,1,2,3,4,5,6,9,15,18,24,27,33,36,37,38,39,40,41,42,44,46,48,54,57,63,66,72,73,74,75,76,77,78,10,12,20,22,58,60,68,70,79,80,7,8,14,71].includes(i)
-                  return <div key={i} style={{ background: filled ? C.ink : 'transparent', width: 11, height: 11, borderRadius: 1 }} />
-                })}
-              </div>
+              <QrGraphic dataUrl={lobbyQrDataUrl} size={176} />
             </div>
             <div className="flex gap-2">
-              <Btn v="secondary" sz="sm">Display QR</Btn>
-              <Btn v="secondary" sz="sm">Download QR</Btn>
+              <JoinCodeButton label="Display QR" />
+              <Btn v="secondary" sz="sm" onClick={() => downloadGameQr(lobbyQrDataUrl, lobbyCode)} disabled={!lobbyQrDataUrl}>Download QR</Btn>
             </div>
           </div>
 
@@ -3875,6 +4055,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>
             Round {contentScreen?.round_number ?? question?.round_number ?? 1} · {contentScreen?.round_title ?? question?.round_title ?? 'Content Screen'}
           </div>
+          <JoinCodeButton dark />
+          <CancelGameButton go={go} dark />
           <span style={{ background: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">CONTENT SCREEN LIVE</span>
         </header>
 
@@ -3931,6 +4113,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          <JoinCodeButton dark />
           <div className="relative">
             <button onClick={() => setEmergency(e => !e)}
               style={{ border: `1px solid ${C.liveLine}`, color: C.liveDim }}
@@ -3955,6 +4138,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   >
                     Exit to My Quizzes
                   </button>
+                  <CancelGameButton go={go} dark className="w-full text-left" />
                 </div>
               </div>
             )}
@@ -4756,6 +4940,8 @@ function EndOfRound({ go }: { go: Go }) {
           </div>
           <div className="flex items-center gap-4">
             <span style={{ color: '#C4B5FD' }} className="text-xs font-bold">REVEALING TO PLAYERS</span>
+            <JoinCodeButton dark />
+            <CancelGameButton go={go} dark />
             <button onClick={() => exitHostSession(go)} style={{ color: C.liveDim }} className="text-xs font-semibold hover:text-white">Exit to My Quizzes</button>
           </div>
         </header>
@@ -4794,7 +4980,11 @@ function EndOfRound({ go }: { go: Go }) {
           <span style={{ color: '#ffffff80' }} className="font-bold text-sm">Simple Trivia</span>
         </div>
         <div className="flex-1 text-center"><span style={{ color: '#ffffff50' }} className="text-sm">Friday Night Trivia</span></div>
-        <button onClick={() => exitHostSession(go)} style={{ color: '#ffffff80' }} className="text-xs font-semibold hover:text-white">Exit to My Quizzes</button>
+        <div className="flex items-center gap-3">
+          <JoinCodeButton dark />
+          <CancelGameButton go={go} dark />
+          <button onClick={() => exitHostSession(go)} style={{ color: '#ffffff80' }} className="text-xs font-semibold hover:text-white">Exit to My Quizzes</button>
+        </div>
       </header>
 
       <main className="flex-1 max-w-2xl mx-auto w-full px-6 py-12">
