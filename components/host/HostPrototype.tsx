@@ -304,10 +304,12 @@ function CancelGameButton({
   go,
   dark = false,
   className = '',
+  description,
 }: {
   go: Go
   dark?: boolean
   className?: string
+  description?: string
 }) {
   const [confirming, setConfirming] = useState(false)
   const [cancelling, setCancelling] = useState(false)
@@ -338,9 +340,10 @@ function CancelGameButton({
         type="button"
         onClick={() => setConfirming(true)}
         style={{ color: dark ? '#FCA5A5' : C.stop }}
-        className={`rounded-lg px-3 py-2 text-xs font-bold transition-colors hover:bg-red-500/10 ${className}`}
+        className={`rounded-lg px-3 py-2 font-bold transition-colors hover:bg-red-500/10 ${description ? 'text-left text-sm' : 'text-xs'} ${className}`}
       >
-        Cancel game
+        <span className="block">Cancel game</span>
+        {description && <span className="mt-0.5 block text-[10px] font-medium opacity-70">{description}</span>}
       </button>
 
       {confirming && (
@@ -4121,7 +4124,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               Controls
             </button>
             {emergency && (
-              <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, right: 0, top: '100%', marginTop: 6, width: 200, zIndex: 50 }}
+              <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, right: 0, top: '100%', marginTop: 6, width: 240, zIndex: 50 }}
                 className="absolute rounded-xl shadow-2xl p-2 space-y-0.5">
                 <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest px-2 py-1">Game Controls</p>
                 {['Pause Game', 'Reopen Answers', 'Go Back to Previous'].map(label => (
@@ -4131,14 +4134,16 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   </button>
                 ))}
                 <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="mt-1 pt-1">
+                  <p style={{ color: C.liveDim }} className="px-2 pb-1 pt-1 text-[10px] font-bold uppercase tracking-widest">Leave this session</p>
                   <button
                     onClick={() => exitHostSession(go)}
-                    style={{ color: C.liveDim }}
+                    style={{ color: C.liveText }}
                     className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold hover:bg-live-surface hover:text-white transition-colors text-left"
                   >
-                    Exit to My Quizzes
+                    <span className="block">Exit to My Quizzes</span>
+                    <span style={{ color: C.liveDim }} className="mt-0.5 block text-[10px] font-medium">Game keeps running</span>
                   </button>
-                  <CancelGameButton go={go} dark className="w-full text-left" />
+                  <CancelGameButton go={go} dark className="w-full" description="Ends the game for everyone" />
                 </div>
               </div>
             )}
