@@ -733,6 +733,12 @@ function QuestionEditor({
             </label>
           </div>
 
+          <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+            <OptionalEditorField label="Question image (Optional)" shown={showImage} summary={draft.imageUrl ? "Image URL added" : null} onToggle={() => setShowImage((value) => !value)}>
+              <input type="url" value={draft.imageUrl} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="https://…" />
+            </OptionalEditorField>
+          </div>
+
           <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-5">
             <h3 className="mb-4 text-sm font-bold text-zinc-900">Answer setup</h3>
 
@@ -798,10 +804,6 @@ function QuestionEditor({
 
             <OptionalEditorField label="Tags (Optional)" shown={showTags} summary={tagSummary} onToggle={() => setShowTags((value) => !value)}>
               <TagPicker tags={taxonomy.tags} selectedIds={draft.tagIds} onChange={(tagIds) => setDraft({ ...draft, tagIds })} />
-            </OptionalEditorField>
-
-            <OptionalEditorField label="Image (Optional)" shown={showImage} summary={draft.imageUrl ? "Image URL added" : null} onToggle={() => setShowImage((value) => !value)}>
-              <input type="url" value={draft.imageUrl} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="https://…" />
             </OptionalEditorField>
 
             <OptionalEditorField label="Publishing & metadata" shown={showMetadata} summary={metadataSummary} onToggle={() => setShowMetadata((value) => !value)}>
