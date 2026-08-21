@@ -46,6 +46,13 @@ function getHostGameTitle() {
   return localStorage.getItem('simple-trivia-host-game-title') || 'Friday Night Trivia'
 }
 
+function exitHostSession(go: Go) {
+  localStorage.removeItem('simple-trivia-host-game-id')
+  localStorage.removeItem('simple-trivia-host-game-code')
+  localStorage.removeItem('simple-trivia-host-game-title')
+  go('dashboard')
+}
+
 async function updateLiveGame(values: {
   status?: 'lobby' | 'live' | 'finished'
   current_screen?: string
@@ -3078,6 +3085,7 @@ function Lobby({ go }: { go: Go }) {
           Lobby Open
         </Chip>
         <Btn v="ghost" sz="sm" onClick={() => go('host-setup')}>Settings</Btn>
+        <Btn v="ghost" sz="sm" onClick={() => exitHostSession(go)}>Exit to My Quizzes</Btn>
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-10">
@@ -3939,6 +3947,15 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     {label}
                   </button>
                 ))}
+                <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="mt-1 pt-1">
+                  <button
+                    onClick={() => exitHostSession(go)}
+                    style={{ color: C.liveDim }}
+                    className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold hover:bg-live-surface hover:text-white transition-colors text-left"
+                  >
+                    Exit to My Quizzes
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -4737,7 +4754,10 @@ function EndOfRound({ go }: { go: Go }) {
           <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>
             Round {currentQuestion.round_number} answers · {revealIndex + 1} of {orderedRoundQuestions.length}
           </div>
-          <span style={{ color: '#C4B5FD' }} className="text-xs font-bold">REVEALING TO PLAYERS</span>
+          <div className="flex items-center gap-4">
+            <span style={{ color: '#C4B5FD' }} className="text-xs font-bold">REVEALING TO PLAYERS</span>
+            <button onClick={() => exitHostSession(go)} style={{ color: C.liveDim }} className="text-xs font-semibold hover:text-white">Exit to My Quizzes</button>
+          </div>
         </header>
 
         <main className="flex flex-1 items-center justify-center px-8 py-10">
@@ -4774,7 +4794,7 @@ function EndOfRound({ go }: { go: Go }) {
           <span style={{ color: '#ffffff80' }} className="font-bold text-sm">Simple Trivia</span>
         </div>
         <div className="flex-1 text-center"><span style={{ color: '#ffffff50' }} className="text-sm">Friday Night Trivia</span></div>
-        <div style={{ width: 80 }} />
+        <button onClick={() => exitHostSession(go)} style={{ color: '#ffffff80' }} className="text-xs font-semibold hover:text-white">Exit to My Quizzes</button>
       </header>
 
       <main className="flex-1 max-w-2xl mx-auto w-full px-6 py-12">
