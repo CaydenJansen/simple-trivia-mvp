@@ -584,6 +584,39 @@ function TagPicker({ tags, selectedIds, onChange }: { tags: Tag[]; selectedIds: 
   );
 }
 
+function OptionalEditorField({
+  label,
+  shown,
+  summary,
+  onToggle,
+  children,
+}: {
+  label: string;
+  shown: boolean;
+  summary?: string | null;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <span className="text-sm font-semibold text-zinc-700">{label}</span>
+          {!shown && summary ? <p className="mt-1 text-xs text-zinc-400">{summary}</p> : null}
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50"
+        >
+          {shown ? "Done" : summary ? "Edit" : "+ Add"}
+        </button>
+      </div>
+      {shown ? <div className="mt-3">{children}</div> : null}
+    </div>
+  );
+}
+
 function QuestionEditor({
   question,
   taxonomy,
@@ -598,9 +631,33 @@ function QuestionEditor({
   const [draft, setDraft] = useState<QuestionDraft>(() => question ? draftFromQuestion(question) : { ...EMPTY_DRAFT });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showCategory, setShowCategory] = useState(() => Boolean(question && (question.primary_category_id || question.secondary_category_ids.length > 0)));
+  const [showDifficulty, setShowDifficulty] = useState(() => Boolean(question?.editorial_difficulty));
+  const [showTags, setShowTags] = useState(() => Boolean(question && question.tag_ids.length > 0));
+  const [showImage, setShowImage] = useState(() => Boolean(question?.image_url));
+  const [showMetadata, setShowMetadata] = useState(() => Boolean(question && (
+    question.prompt_pattern_id
+    || question.answer_type_id
+    || question.stability !== "stable"
+    || question.status !== "active"
+  )));
+  const [showNotes, setShowNotes] = useState(() => Boolean(question?.notes));
   const isCompound = draft.questionType === "multi-answer" || draft.questionType === "multi-part" || draft.questionType === "ranking";
 
   const rowCount = useMemo(() => Math.max(1, draft.answers.length), [draft.answers.length]);
+  const primaryCategoryName = taxonomy.categories.find((category) => category.id === draft.primaryCategoryId)?.name;
+  const secondaryCategoryCount = draft.secondaryCategoryIds.length;
+  const categorySummary = primaryCategoryName
+    ? `${primaryCategoryName}${secondaryCategoryCount ? ` + ${secondaryCategoryCount} secondary` : ""}`
+    : secondaryCategoryCount ? `${secondaryCategoryCount} secondary ${secondaryCategoryCount === 1 ? "category" : "categories"}` : null;
+  const difficultySummary = draft.editorialDifficulty ? TRIVIA_DIFFICULTIES[draft.editorialDifficulty - 1] : null;
+  const selectedTagNames = taxonomy.tags.filter((tag) => draft.tagIds.includes(tag.id)).map((tag) => tag.name);
+  const tagSummary = selectedTagNames.length > 0
+    ? `${selectedTagNames.slice(0, 3).join(", ")}${selectedTagNames.length > 3 ? ` + ${selectedTagNames.length - 3} more` : ""}`
+    : null;
+  const metadataSummary = draft.status !== "active" || draft.stability !== "stable" || draft.promptPatternId || draft.answerTypeId
+    ? `${draft.status.replace("_", " ")} · ${draft.stability.replace("_", " ")}`
+    : null;
 
   function updateAnswer(index: number, value: string) {
     setDraft((current) => ({ ...current, answers: current.answers.map((answer, row) => row === index ? value : answer) }));
@@ -667,40 +724,13 @@ function QuestionEditor({
             <textarea value={draft.prompt} onChange={(event) => setDraft({ ...draft, prompt: event.target.value })} rows={3} className="mt-2 w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100" placeholder="What would you like to ask?" />
           </label>
 
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="max-w-sm">
             <label className="block">
               <span className="text-sm font-semibold text-zinc-700">Question type</span>
               <select value={draft.questionType} onChange={(event) => setDraft({ ...draft, questionType: event.target.value as EditableQuestionType, answers: [""], aliases: [""], options: ["", "", "", ""], clues: [""], correctOption: 0 })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
                 {QUESTION_TYPES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
-            <label className="block">
-              <span className="text-sm font-semibold text-zinc-700">Primary category</span>
-              <select value={draft.primaryCategoryId} onChange={(event) => setDraft({ ...draft, primaryCategoryId: event.target.value, secondaryCategoryIds: draft.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
-                <option value="">Not set</option>
-                {taxonomy.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-              </select>
-            </label>
-            <label className="block">
-              <span className="text-sm font-semibold text-zinc-700">Editorial difficulty</span>
-              <select value={draft.editorialDifficulty} onChange={(event) => setDraft({ ...draft, editorialDifficulty: event.target.value ? Number(event.target.value) : "" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
-                <option value="">Not set</option>{TRIVIA_DIFFICULTIES.map((option, index) => <option key={option} value={index + 1}>{index + 1} · {option}</option>)}
-              </select>
-            </label>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <CategoryPicker
-              label="Secondary categories"
-              categories={taxonomy.categories.filter((category) => category.id !== draft.primaryCategoryId)}
-              selectedIds={draft.secondaryCategoryIds}
-              onChange={(secondaryCategoryIds) => setDraft({ ...draft, secondaryCategoryIds })}
-            />
-            <TagPicker
-              tags={taxonomy.tags}
-              selectedIds={draft.tagIds}
-              onChange={(tagIds) => setDraft({ ...draft, tagIds })}
-            />
           </div>
 
           <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-5">
@@ -741,17 +771,52 @@ function QuestionEditor({
             )}
           </div>
 
-          <label className="block"><span className="text-sm font-semibold text-zinc-700">Image URL <span className="font-normal text-zinc-400">(optional media)</span></span><input type="url" value={draft.imageUrl} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="https://…" /></label>
+          <div className="space-y-5 rounded-2xl border border-zinc-200 bg-zinc-50/70 p-5">
+            <OptionalEditorField label="Category (Optional)" shown={showCategory} summary={categorySummary} onToggle={() => setShowCategory((value) => !value)}>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block">
+                  <span className="text-sm font-semibold text-zinc-700">Primary category</span>
+                  <select value={draft.primaryCategoryId} onChange={(event) => setDraft({ ...draft, primaryCategoryId: event.target.value, secondaryCategoryIds: draft.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
+                    <option value="">Not set</option>
+                    {taxonomy.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  </select>
+                </label>
+                <CategoryPicker
+                  label="Secondary categories"
+                  categories={taxonomy.categories.filter((category) => category.id !== draft.primaryCategoryId)}
+                  selectedIds={draft.secondaryCategoryIds}
+                  onChange={(secondaryCategoryIds) => setDraft({ ...draft, secondaryCategoryIds })}
+                />
+              </div>
+            </OptionalEditorField>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            <label className="block"><span className="text-sm font-semibold text-zinc-700">Prompt pattern</span><select value={draft.promptPatternId} onChange={(event) => setDraft({ ...draft, promptPatternId: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="">Not set</option>{taxonomy.promptPatterns.map((pattern) => <option key={pattern.id} value={pattern.id}>{pattern.name}</option>)}</select></label>
-            <label className="block"><span className="text-sm font-semibold text-zinc-700">Answer type</span><select value={draft.answerTypeId} onChange={(event) => setDraft({ ...draft, answerTypeId: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="">Not set</option>{taxonomy.answerTypes.map((answerType) => <option key={answerType.id} value={answerType.id}>{answerType.name}</option>)}</select></label>
-            <label className="block"><span className="text-sm font-semibold text-zinc-700">Factual stability</span><select value={draft.stability} onChange={(event) => setDraft({ ...draft, stability: event.target.value as FactualStability })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="stable">Stable</option><option value="review_periodically">Review periodically</option><option value="volatile">Volatile</option></select></label>
+            <OptionalEditorField label="Difficulty (Optional)" shown={showDifficulty} summary={difficultySummary} onToggle={() => setShowDifficulty((value) => !value)}>
+              <select value={draft.editorialDifficulty} onChange={(event) => setDraft({ ...draft, editorialDifficulty: event.target.value ? Number(event.target.value) : "" })} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
+                <option value="">Not set</option>{TRIVIA_DIFFICULTIES.map((option, index) => <option key={option} value={index + 1}>{index + 1} · {option}</option>)}
+              </select>
+            </OptionalEditorField>
+
+            <OptionalEditorField label="Tags (Optional)" shown={showTags} summary={tagSummary} onToggle={() => setShowTags((value) => !value)}>
+              <TagPicker tags={taxonomy.tags} selectedIds={draft.tagIds} onChange={(tagIds) => setDraft({ ...draft, tagIds })} />
+            </OptionalEditorField>
+
+            <OptionalEditorField label="Image (Optional)" shown={showImage} summary={draft.imageUrl ? "Image URL added" : null} onToggle={() => setShowImage((value) => !value)}>
+              <input type="url" value={draft.imageUrl} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="https://…" />
+            </OptionalEditorField>
+
+            <OptionalEditorField label="Publishing & metadata" shown={showMetadata} summary={metadataSummary} onToggle={() => setShowMetadata((value) => !value)}>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block"><span className="text-sm font-semibold text-zinc-700">Prompt pattern</span><select value={draft.promptPatternId} onChange={(event) => setDraft({ ...draft, promptPatternId: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="">Not set</option>{taxonomy.promptPatterns.map((pattern) => <option key={pattern.id} value={pattern.id}>{pattern.name}</option>)}</select></label>
+                <label className="block"><span className="text-sm font-semibold text-zinc-700">Answer type</span><select value={draft.answerTypeId} onChange={(event) => setDraft({ ...draft, answerTypeId: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="">Not set</option>{taxonomy.answerTypes.map((answerType) => <option key={answerType.id} value={answerType.id}>{answerType.name}</option>)}</select></label>
+                <label className="block"><span className="text-sm font-semibold text-zinc-700">Factual stability</span><select value={draft.stability} onChange={(event) => setDraft({ ...draft, stability: event.target.value as FactualStability })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="stable">Stable</option><option value="review_periodically">Review periodically</option><option value="volatile">Volatile</option></select></label>
+                <label className="block"><span className="text-sm font-semibold text-zinc-700">Status</span><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as QuestionStatus })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="active">Active</option><option value="draft">Draft</option><option value="needs_review">Needs review</option><option value="archived">Archived</option></select></label>
+              </div>
+            </OptionalEditorField>
+
+            <OptionalEditorField label="Host notes (Optional)" shown={showNotes} summary={draft.notes ? "Notes added" : null} onToggle={() => setShowNotes((value) => !value)}>
+              <textarea value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} rows={2} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="Optional context for the host" />
+            </OptionalEditorField>
           </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="block"><span className="text-sm font-semibold text-zinc-700">Status</span><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as QuestionStatus })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="active">Active</option><option value="draft">Draft</option><option value="needs_review">Needs review</option><option value="archived">Archived</option></select></label>
-          </div>
-          <label className="block"><span className="text-sm font-semibold text-zinc-700">Host notes</span><textarea value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} rows={2} className="mt-2 w-full rounded-xl border border-zinc-200 px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="Optional context for the host" /></label>
 
           {error ? <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</p> : null}
         </div>
