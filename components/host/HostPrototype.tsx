@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase/client";
 import QuestionsArea from "@/components/host/QuestionsArea";
 import BuilderQuestionPicker, { type PickerSourceQuestion } from "@/components/host/BuilderQuestionPicker";
-import type { Json, QuestionType } from "@/lib/supabase/database.types";
+import type { Database, Json, QuestionType } from "@/lib/supabase/database.types";
 import {
   asStringArray,
   gradingPoints,
@@ -35,7 +35,8 @@ import {
   isValidTiebreakerNumericValue,
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
-import { buildAutoQuizPlan } from "@/lib/trivia/auto-build";
+import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
+import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, type TriviaDifficulty } from "@/lib/trivia/difficulty";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -43,6 +44,8 @@ type Screen =
   | 'auto-build' | 'quiz-review' | 'host-setup'
   | 'lobby' | 'live-question' | 'end-of-round' | 'final-results'
 type Go = (s: Screen) => void
+type AutoBuildSourceQuestion = Database["public"]["Tables"]["source_questions"]["Row"]
+type AutoBuildSourceTiebreaker = Database["public"]["Tables"]["source_tiebreakers"]["Row"]
 
 function getHostGameCode() {
   if (typeof window === 'undefined') return ''
@@ -2266,7 +2269,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
 }) {
   const initialOptions = questionOptions(question.options)
   const initialAnswers = asStringArray(question.correctAnswer)
-  const initialDifficulty = question.diff === 'Very Easy' || question.diff === 'Easy' || question.diff === 'Medium' || question.diff === 'Hard' || question.diff === 'Very Hard'
+  const initialDifficulty = isTriviaDifficulty(question.diff)
     ? question.diff
     : null
   const [qtype, setQtype] = useState<QType>(() => editorQuestionType(question.questionType))
@@ -2285,7 +2288,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
   const [rankingItems, setRankingItems] = useState(() => initialAnswers.length ? initialAnswers : (asStringArray(question.options).length ? asStringArray(question.options) : ['', '']))
   const [notes, setNotes] = useState(question.notes)
   const [imageUrl, setImageUrl] = useState(question.imageUrl ?? '')
-  const [diff, setDiff] = useState<'Very Easy' | 'Easy' | 'Medium' | 'Hard' | 'Very Hard' | null>(initialDifficulty)
+  const [diff, setDiff] = useState<TriviaDifficulty | null>(initialDifficulty)
   const [cat, setCat] = useState(question.cat === 'Uncategorised' ? '' : question.cat)
   const [showCat, setShowCat] = useState(question.cat !== 'Uncategorised')
   const [showDiff, setShowDiff] = useState(initialDifficulty !== null)
@@ -2667,7 +2670,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
             <OptionalField label="Difficulty (Optional)" shown={showDiff} onToggle={() => { setShowDiff(v => !v); setDiff(null) }}>
               {showDiff && (
                 <div className="flex flex-wrap gap-2">
-                  {(['Very Easy', 'Easy', 'Medium', 'Hard', 'Very Hard'] as const).map(d => (
+                  {TRIVIA_DIFFICULTIES.map(d => (
                     <button key={d} onClick={() => setDiff(d)}
                       style={{
                         border: `1.5px solid ${diff === d ? (d === 'Very Easy' || d === 'Easy' ? C.go : d === 'Medium' ? C.caution : C.stop) : C.line}`,
@@ -2760,20 +2763,29 @@ function AutoBuild({ go }: { go: Go }) {
   })
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
-  const diffLabels = ['Very Easy', 'Easy', 'Medium', 'Hard', 'Very Hard']
+  const [sourceQuestions, setSourceQuestions] = useState<AutoBuildSourceQuestion[]>([])
+  const [sourceTiebreakers, setSourceTiebreakers] = useState<AutoBuildSourceTiebreaker[]>([])
+  const [sourcesLoading, setSourcesLoading] = useState(true)
+  const [sourcesError, setSourcesError] = useState<string | null>(null)
+  const diffLabels = TRIVIA_DIFFICULTIES
   const allTopics = ['General Knowledge', 'Movies', 'Sport', 'Music']
+  const selectedDifficulties = useMemo(() => TRIVIA_DIFFICULTIES.slice(diff[0], diff[1] + 1), [diff])
+  const selectedRoundTopics = useMemo(() => mode === 'mixed' ? [null, null, null, null] : topics, [mode, topics])
+  const availability = useMemo(() => getAutoBuildAvailability({
+    questions: sourceQuestions,
+    questionCount,
+    roundTopics: selectedRoundTopics,
+    difficulties: selectedDifficulties,
+  }), [questionCount, selectedDifficulties, selectedRoundTopics, sourceQuestions])
+  const firstShortage = availability.shortages[0]
+  const canGenerate = !sourcesLoading
+    && !sourcesError
+    && availability.canBuild
+    && sourceTiebreakers.length >= AUTO_BUILD_TIEBREAKER_COUNT
 
-  const diffText = () => {
-    const [lo, hi] = diff
-    return lo === hi ? `${diffLabels[lo]} only` : `${diffLabels[lo]} through ${diffLabels[hi]}`
-  }
-
-  async function generateQuiz() {
-    if (generating) return
-    setGenerating(true)
-    setGenerateError(null)
-
-    const [questionResult, tiebreakerResult] = await Promise.all([
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all([
       supabase
         .from('source_questions')
         .select('*')
@@ -2787,22 +2799,42 @@ function AutoBuild({ go }: { go: Go }) {
         .eq('status', 'active')
         .eq('is_verified', true)
         .range(0, 99),
-    ])
+    ]).then(([questionResult, tiebreakerResult]) => {
+      if (cancelled) return
+      if (questionResult.error || tiebreakerResult.error) {
+        console.error('Could not load Auto-Build sources:', questionResult.error ?? tiebreakerResult.error)
+        setSourcesError('Could not check the Question Library. Refresh the page to try again.')
+      } else {
+        setSourceQuestions(questionResult.data ?? [])
+        setSourceTiebreakers(tiebreakerResult.data ?? [])
+      }
+    }).catch(error => {
+      if (cancelled) return
+      console.error('Could not load Auto-Build sources:', error)
+      setSourcesError('Could not check the Question Library. Refresh the page to try again.')
+    }).finally(() => {
+      if (!cancelled) setSourcesLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [])
 
-    if (questionResult.error || tiebreakerResult.error) {
-      console.error('Could not load Auto-Build sources:', questionResult.error ?? tiebreakerResult.error)
-      setGenerateError('Could not load the Question Library. Try again in a moment.')
-      setGenerating(false)
-      return
-    }
+  const diffText = () => {
+    const [lo, hi] = diff
+    return lo === hi ? `${diffLabels[lo]} only` : `${diffLabels[lo]} through ${diffLabels[hi]}`
+  }
+
+  async function generateQuiz() {
+    if (generating || !canGenerate) return
+    setGenerating(true)
+    setGenerateError(null)
 
     try {
       const plan = buildAutoQuizPlan({
-        questions: questionResult.data ?? [],
-        tiebreakers: tiebreakerResult.data ?? [],
+        questions: sourceQuestions,
+        tiebreakers: sourceTiebreakers,
         questionCount,
-        roundTopics: mode === 'mixed' ? [null, null, null, null] : topics,
-        difficulties: diffLabels.slice(diff[0], diff[1] + 1),
+        roundTopics: selectedRoundTopics,
+        difficulties: selectedDifficulties,
       })
       const questionSnapshots: Json[] = []
       let position = 0
@@ -2977,10 +3009,21 @@ function AutoBuild({ go }: { go: Go }) {
             <p style={{ color: C.sub }} className="text-sm">
               Sourcing: <span style={{ color: C.ink }} className="font-semibold">{diffText()}</span>
             </p>
+            <p aria-live="polite" style={{ color: sourcesError || firstShortage ? C.stop : C.sub }} className="mt-2 text-xs leading-5">
+              {sourcesLoading
+                ? 'Checking Question Library availability…'
+                : sourcesError
+                  ? sourcesError
+                  : firstShortage
+                    ? `Not enough ${firstShortage.topic ?? 'matching'} questions: ${firstShortage.available} available, ${firstShortage.required} needed.`
+                    : sourceTiebreakers.length < AUTO_BUILD_TIEBREAKER_COUNT
+                      ? 'Auto-Build is temporarily unavailable while the prepared content is updated.'
+                      : `${availability.matchingQuestionCount} matching questions available for this setup.`}
+            </p>
           </div>
 
           {generateError && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{generateError}</p>}
-          <Btn sz="lg" cls="w-full" disabled={generating} onClick={() => void generateQuiz()}>{generating ? 'Generating Draft…' : 'Generate Draft Quiz →'}</Btn>
+          <Btn sz="lg" cls="w-full" disabled={generating || !canGenerate} onClick={() => void generateQuiz()}>{generating ? 'Generating Draft…' : sourcesLoading ? 'Checking Question Library…' : 'Generate Draft Quiz →'}</Btn>
         </div>
       </main>
     </div>

@@ -23,6 +23,18 @@ export type AutoBuildPlan<
   tiebreakers: TTiebreaker[]
 }
 
+export type AutoBuildShortage = {
+  topic: string | null
+  available: number
+  required: number
+}
+
+export type AutoBuildAvailability = {
+  canBuild: boolean
+  matchingQuestionCount: number
+  shortages: AutoBuildShortage[]
+}
+
 export function distributeQuestionCount(questionCount: number, roundCount: number) {
   if (!Number.isInteger(questionCount) || questionCount < 1) {
     throw new Error('Question count must be a positive whole number.')
@@ -47,6 +59,50 @@ function shuffled<T>(items: readonly T[], random: () => number) {
   return result
 }
 
+export function getAutoBuildAvailability({
+  questions,
+  questionCount,
+  roundTopics,
+  difficulties,
+}: {
+  questions: readonly AutoBuildQuestion[]
+  questionCount: number
+  roundTopics: readonly (string | null)[]
+  difficulties: readonly string[]
+}): AutoBuildAvailability {
+  if (roundTopics.length === 0) throw new Error('Choose at least one round.')
+  if (difficulties.length === 0) throw new Error('Choose at least one difficulty.')
+
+  const allowedDifficulties = new Set(difficulties.map(value => value.toLocaleLowerCase()))
+  const eligibleQuestions = questions.filter(question => (
+    question.difficulty && allowedDifficulties.has(question.difficulty.toLocaleLowerCase())
+  ))
+  const requirements = new Map<string, { topic: string | null; required: number }>()
+
+  distributeQuestionCount(questionCount, roundTopics.length).forEach((needed, roundIndex) => {
+    const topic = roundTopics[roundIndex]
+    const key = topic?.toLocaleLowerCase() ?? '__mixed__'
+    const current = requirements.get(key)
+    requirements.set(key, { topic, required: (current?.required ?? 0) + needed })
+  })
+
+  let matchingQuestionCount = 0
+  const shortages: AutoBuildShortage[] = []
+  requirements.forEach(({ topic, required }) => {
+    const available = eligibleQuestions.filter(question => (
+      topic === null || question.category?.toLocaleLowerCase() === topic.toLocaleLowerCase()
+    )).length
+    matchingQuestionCount += available
+    if (available < required) shortages.push({ topic, available, required })
+  })
+
+  return {
+    canBuild: shortages.length === 0,
+    matchingQuestionCount,
+    shortages,
+  }
+}
+
 export function buildAutoQuizPlan<
   TQuestion extends AutoBuildQuestion,
   TTiebreaker extends AutoBuildTiebreaker,
@@ -69,6 +125,13 @@ export function buildAutoQuizPlan<
   if (difficulties.length === 0) throw new Error('Choose at least one difficulty.')
   if (tiebreakers.length < AUTO_BUILD_TIEBREAKER_COUNT) {
     throw new Error(`Auto-Build needs at least ${AUTO_BUILD_TIEBREAKER_COUNT} active prepared tiebreakers.`)
+  }
+
+  const availability = getAutoBuildAvailability({ questions, questionCount, roundTopics, difficulties })
+  const firstShortage = availability.shortages[0]
+  if (firstShortage) {
+    const label = firstShortage.topic ?? 'the selected mix'
+    throw new Error(`Question Library has ${firstShortage.available} matching questions for ${label}, but this quiz needs ${firstShortage.required}.`)
   }
 
   const allowedDifficulties = new Set(difficulties.map(value => value.toLocaleLowerCase()))

@@ -9,6 +9,7 @@ import type {
   QuestionStatus,
   QuestionType,
 } from "@/lib/supabase/database.types";
+import { TRIVIA_DIFFICULTIES } from "@/lib/trivia/difficulty";
 
 type SourceQuestion = Database["public"]["Tables"]["source_questions"]["Row"];
 type QuestionTab = "mine" | "library";
@@ -322,11 +323,7 @@ export default function QuestionsArea() {
           className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-600 outline-none focus:border-violet-500"
         >
           <option value="">All difficulties</option>
-          <option>Very Easy</option>
-          <option>Easy</option>
-          <option>Medium</option>
-          <option>Hard</option>
-          <option>Very Hard</option>
+          {TRIVIA_DIFFICULTIES.map((option) => <option key={option}>{option}</option>)}
         </select>
         {tab === "mine" ? (
           <select
@@ -557,7 +554,7 @@ function QuestionEditor({
             <label className="block">
               <span className="text-sm font-semibold text-zinc-700">Difficulty</span>
               <select value={draft.difficulty} onChange={(event) => setDraft({ ...draft, difficulty: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
-                <option value="">Not set</option><option>Very Easy</option><option>Easy</option><option>Medium</option><option>Hard</option><option>Very Hard</option>
+                <option value="">Not set</option>{TRIVIA_DIFFICULTIES.map((option) => <option key={option}>{option}</option>)}
               </select>
             </label>
           </div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAutoQuizPlan, distributeQuestionCount } from './auto-build'
+import { buildAutoQuizPlan, distributeQuestionCount, getAutoBuildAvailability } from './auto-build'
 
 const questions = [
   ...Array.from({ length: 8 }, (_, index) => ({ id: `music-${index}`, category: 'Music', difficulty: 'Easy' })),
@@ -8,6 +8,11 @@ const questions = [
 ]
 const tiebreakers = Array.from({ length: 5 }, (_, index) => ({ id: `tie-${index}` }))
 const noShuffle = () => 0.999999
+const expandedQuestions = ['General Knowledge', 'Movies', 'Sport', 'Music'].flatMap(category => (
+  ['Hard', 'Very Hard'].flatMap(difficulty => (
+    Array.from({ length: 6 }, (_, index) => ({ id: `${category}-${difficulty}-${index}`, category, difficulty }))
+  ))
+))
 
 describe('Auto-Build selection semantics', () => {
   it('distributes 30 questions across four rounds without changing the total', () => {
@@ -59,6 +64,50 @@ describe('Auto-Build selection semantics', () => {
     expect(plan.rounds[0].questions.map(question => question.difficulty).sort()).toEqual(['Very Easy', 'Very Hard'])
   })
 
+  it('reports shortages before generation and aggregates repeated topics', () => {
+    const availability = getAutoBuildAvailability({
+      questions,
+      questionCount: 12,
+      roundTopics: ['Music', 'Music'],
+      difficulties: ['Easy'],
+    })
+
+    expect(availability).toEqual({
+      canBuild: false,
+      matchingQuestionCount: 8,
+      shortages: [{ topic: 'Music', available: 8, required: 12 }],
+    })
+  })
+
+  it('builds a complete 30-question mixed draft from a narrower range', () => {
+    const plan = buildAutoQuizPlan({
+      questions: expandedQuestions,
+      tiebreakers,
+      questionCount: 30,
+      roundTopics: [null, null, null, null],
+      difficulties: ['Hard', 'Very Hard'],
+      random: noShuffle,
+    })
+
+    expect(plan.rounds.map(round => round.questions.length)).toEqual([8, 8, 7, 7])
+    expect(new Set(plan.rounds.flatMap(round => round.questions.map(question => question.id))).size).toBe(30)
+  })
+
+  it('builds a complete 30-question custom-topic draft from a narrower range', () => {
+    const topics = ['General Knowledge', 'Movies', 'Sport', 'Music']
+    const plan = buildAutoQuizPlan({
+      questions: expandedQuestions,
+      tiebreakers,
+      questionCount: 30,
+      roundTopics: topics,
+      difficulties: ['Hard', 'Very Hard'],
+      random: noShuffle,
+    })
+
+    expect(plan.rounds.map(round => round.questions.length)).toEqual([8, 8, 7, 7])
+    expect(plan.rounds.every(round => round.questions.every(question => question.category === round.title))).toBe(true)
+  })
+
   it('always includes exactly three prepared tiebreakers', () => {
     const plan = buildAutoQuizPlan({
       questions,
@@ -80,7 +129,7 @@ describe('Auto-Build selection semantics', () => {
       roundTopics: ['Music'],
       difficulties: ['Easy'],
       random: noShuffle,
-    })).toThrow('Question Library has 8 matching questions for Music, but this round needs 9.')
+    })).toThrow('Question Library has 8 matching questions for Music, but this quiz needs 9.')
 
     expect(() => buildAutoQuizPlan({
       questions,
