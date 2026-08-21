@@ -65,6 +65,7 @@
 - A future final-results resolution must offer tiebreaker, allowed-tie, and manual ordering methods, and store the decision and placement separately from score.
 - Never expose a prepared tiebreaker's correct numeric value to players before the relevant tiebreaker reveal.
 - The host must be able to reopen answers after closing them but before reveal.
+- Reopening answers must return submitted teams to an editable form with their previous response preserved; resubmission replaces the existing response rather than creating a duplicate.
 - Do not add post-reveal undo without safely reversing awarded points.
 - Review-required answers sort first, then graded submissions, then waiting teams. Keep ordering stable within each group.
 - Leaderboard visibility rules must not leak prohibited team names, scores, or ranks. A team may still see its own score.

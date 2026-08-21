@@ -448,6 +448,8 @@ type PlayerSnapshot = {
   teamName: string
   score: number
   answer: string
+  rawAnswer: unknown
+  hasSubmission: boolean
   isCorrect: boolean | null
   pointsAwarded: number
   pointsMax: number
@@ -460,6 +462,7 @@ type PlayerSnapshot = {
   missingAnswers: string[]
   prizeAwards: PrizeAward[]
   bonusAnswer: string
+  hasBonusSubmission: boolean
   bonusCorrectAnswer: string
   bonusPointsAwarded: number
   bonusPointsMax: number
@@ -714,9 +717,10 @@ function PlayerBonusResult({ snapshot }: { snapshot: PlayerSnapshot }) {
 
 function usePlayerSnapshot(): PlayerSnapshot {
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>({
-    teamName: '', score: 0, answer: '', isCorrect: null, pointsAwarded: 0, pointsMax: 1,
+    teamName: '', score: 0, answer: '', rawAnswer: null, hasSubmission: false,
+    isCorrect: null, pointsAwarded: 0, pointsMax: 1,
     prompt: '', correctAnswer: '—', roundLabel: '', questionLabel: '', questionType: null,
-    reviewItems: [], missingAnswers: [], prizeAwards: [], bonusAnswer: '', bonusCorrectAnswer: '',
+    reviewItems: [], missingAnswers: [], prizeAwards: [], bonusAnswer: '', hasBonusSubmission: false, bonusCorrectAnswer: '',
     bonusPointsAwarded: 0, bonusPointsMax: 0,
   })
 
@@ -773,6 +777,8 @@ function usePlayerSnapshot(): PlayerSnapshot {
         teamName: team?.name ?? fallbackName,
         score: team?.score ?? 0,
         answer: submission ? submittedAnswerLabel(submission.answer_text, question) : '',
+        rawAnswer: submission ? parseStoredAnswer(submission.answer_text) : null,
+        hasSubmission: Boolean(submission),
         isCorrect: submission?.is_correct ?? null,
         pointsAwarded: submission?.points_awarded ?? 0,
         pointsMax: question?.points_max ?? 1,
@@ -785,6 +791,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
         missingAnswers,
         prizeAwards: prizeAwardsFromJson(team?.prize_awards),
         bonusAnswer: bonusSubmission?.answer_text ?? '',
+        hasBonusSubmission: Boolean(bonusSubmission),
         bonusCorrectAnswer: revealedBonus?.correctAnswer ?? '',
         bonusPointsAwarded: bonusSubmission?.points_awarded ?? 0,
         bonusPointsMax: revealedBonus?.points ?? playerBonusFromJson(question?.bonus)?.points ?? 0,
@@ -1587,6 +1594,13 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'single-answer')
+  const storedAnswer = typeof snapshot.rawAnswer === 'string' ? snapshot.rawAnswer : ''
+
+  useEffect(() => {
+    // Restore the team's previous response when the host reopens answers.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAnswer(storedAnswer)
+  }, [question?.question_key, storedAnswer])
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -1603,7 +1617,7 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
-      <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : 'Submit Answer'}</Btn></StickyBottom>
+      <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></StickyBottom>
     </div>
   )
 }
@@ -1614,6 +1628,14 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'image-question')
+  const storedAnswer = typeof snapshot.rawAnswer === 'string' ? snapshot.rawAnswer : ''
+
+  useEffect(() => {
+    // Restore the team's previous response when the host reopens answers.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAnswer(storedAnswer)
+  }, [question?.question_key, storedAnswer])
+
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score}
@@ -1629,7 +1651,7 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
-      <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : 'Submit Answer'}</Btn></StickyBottom>
+      <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></StickyBottom>
     </div>
   )
 }
@@ -1641,6 +1663,14 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'multiple-choice')
   const choices = optionObjects(question?.options)
+  const storedSelection = typeof snapshot.rawAnswer === 'string' ? snapshot.rawAnswer : ''
+
+  useEffect(() => {
+    // Restore the team's previous response when the host reopens answers.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelected(storedSelection || null)
+  }, [question?.question_key, storedSelection])
+
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score}
@@ -1661,7 +1691,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
-      <StickyBottom><Btn onClick={() => selected && void submit(selected)} disabled={!selected || submitting}>{submitting ? 'Submitting…' : 'Submit Answer'}</Btn></StickyBottom>
+      <StickyBottom><Btn onClick={() => selected && void submit(selected)} disabled={!selected || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></StickyBottom>
     </div>
   )
 }
@@ -1673,12 +1703,14 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const count = Math.max(1, asStringArray(question?.correct_answer).length || 3)
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-answer')
+  const storedAnswersKey = JSON.stringify(asStringArray(snapshot.rawAnswer))
 
   useEffect(() => {
-    // Resize local inputs when the live question definition arrives.
+    const storedAnswers = JSON.parse(storedAnswersKey) as string[]
+    // Resize local inputs and restore the team's previous response when answers reopen.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAnswers(current => Array.from({ length: count }, (_, i) => current[i] ?? ''))
-  }, [count])
+    setAnswers(Array.from({ length: count }, (_, i) => storedAnswers[i] ?? ''))
+  }, [count, question?.question_key, storedAnswersKey])
   const setA = (i: number, value: string) => setAnswers(current => current.map((answer, index) => index === i ? value : answer))
   const anyFilled = answers.some(answer => answer.trim())
 
@@ -1699,7 +1731,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
-      <StickyBottom><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : 'Submit Answers'}</Btn></StickyBottom>
+      <StickyBottom><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></StickyBottom>
     </div>
   )
 }
@@ -1712,12 +1744,14 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
   const count = Math.max(1, parts.length || 3)
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-part')
+  const storedAnswersKey = JSON.stringify(asStringArray(snapshot.rawAnswer))
 
   useEffect(() => {
-    // Resize local inputs when the live question definition arrives.
+    const storedAnswers = JSON.parse(storedAnswersKey) as string[]
+    // Resize local inputs and restore the team's previous response when answers reopen.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAnswers(current => Array.from({ length: count }, (_, i) => current[i] ?? ''))
-  }, [count])
+    setAnswers(Array.from({ length: count }, (_, i) => storedAnswers[i] ?? ''))
+  }, [count, question?.question_key, storedAnswersKey])
   const anyFilled = answers.some(answer => answer.trim())
 
   return (
@@ -1739,7 +1773,7 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
         <div style={{ height: 90 }} />
       </div>
-      <StickyBottom><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : 'Submit Answers'}</Btn></StickyBottom>
+      <StickyBottom><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></StickyBottom>
     </div>
   )
 }
@@ -1753,16 +1787,20 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
   const [justMoved, setJustMoved] = useState<string | null>(null)
   const [justDisplaced, setJustDisplaced] = useState<string | null>(null)
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'ranking')
+  const optionItemsKey = JSON.stringify(Array.isArray(question?.options) ? question.options.map(String) : [])
+  const storedItemsKey = JSON.stringify(asStringArray(snapshot.rawAnswer))
 
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const snapshots = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
-    const next = Array.isArray(question?.options) ? question.options.map(String) : []
-    // Reset the order when the host advances to a new live ranking question.
+    const optionItems = JSON.parse(optionItemsKey) as string[]
+    const storedItems = JSON.parse(storedItemsKey) as string[]
+    const next = storedItems.length ? storedItems : optionItems
+    // Reset the order for a new question, or restore it when answers reopen.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (next.length) setItems(next)
-  }, [question?.question_key, question?.options])
+  }, [question?.question_key, optionItemsKey, storedItemsKey])
 
   function move(i: number, dir: -1 | 1) {
     const j = i + dir
@@ -1926,7 +1964,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
 
       <StickyBottom>
         <Btn onClick={() => void submit(items)} disabled={submitting}>
-          {submitting ? 'Submitting…' : 'Lock In Order'}
+          {submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Order' : 'Lock In Order'}
         </Btn>
       </StickyBottom>
     </div>
@@ -1939,6 +1977,12 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const bonus = playerBonusFromJson(question?.bonus)
   const { submit, submitting, submitError } = useSubmitBonusAnswer(go)
+
+  useEffect(() => {
+    // Restore the team's previous bonus response when the host reopens answers.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAnswer(snapshot.bonusAnswer)
+  }, [question?.question_key, snapshot.bonusAnswer])
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -1962,7 +2006,7 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
-      <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : 'Submit Bonus Answer'}</Btn></StickyBottom>
+      <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasBonusSubmission ? 'Update Bonus Answer' : 'Submit Bonus Answer'}</Btn></StickyBottom>
     </div>
   )
 }

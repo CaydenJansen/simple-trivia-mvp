@@ -32,6 +32,6 @@ export function playerQuestionStageScreen(input: {
   }
 
   if (answerPhase === 'closed') return coreSubmission || bonusSubmission ? 'submitted' : 'no-answer'
-  if (questionStage === 'bonus') return bonusSubmission ? 'bonus-submitted' : 'bonus-answer'
-  return coreSubmission ? 'submitted' : baseScreen
+  if (questionStage === 'bonus') return 'bonus-answer'
+  return baseScreen
 }
