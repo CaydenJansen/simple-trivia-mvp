@@ -14,12 +14,16 @@ import {
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { PLAYER_SESSION_KEYS } from "@/lib/trivia/session-recovery";
 import { gameCodeFromSearch } from "@/lib/trivia/join-code";
+import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
+import type { Json } from "@/lib/supabase/database.types";
+import { playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
   | 'join' | 'team-setup' | 'waiting' | 'round-start'
   | 'single-answer' | 'image-question' | 'multiple-choice'
   | 'multi-answer' | 'multi-part' | 'ranking'
+  | 'bonus-answer' | 'bonus-submitted'
   | 'submitted' | 'no-answer' | 'correct' | 'incorrect'
   | 'partial-correct'
   | 'content-screen' | 'intermission' | 'round-results' | 'round-results-hidden'
@@ -31,6 +35,7 @@ const PlayerDevControlsContext = createContext(false)
 const LIVE_PLAYER_SCREENS = new Set<PlayerScreen>([
   'waiting', 'round-start', 'single-answer', 'image-question', 'multiple-choice',
   'multi-answer', 'multi-part', 'ranking', 'submitted', 'no-answer', 'correct',
+  'bonus-answer', 'bonus-submitted',
   'incorrect', 'partial-correct', 'content-screen', 'intermission', 'round-results',
   'round-results-hidden', 'delayed-reveal', 'winner', 'final-result', 'reconnecting', 'game-ended',
 ])
@@ -42,6 +47,7 @@ const QUESTION_SCREENS = new Set<PlayerScreen>([
 type RemoteGameState = {
   current_screen: string | null
   answer_phase: string | null
+  question_stage: string | null
   current_question_key: string | null
   current_content_screen_key: string | null
 }
@@ -62,6 +68,8 @@ type LiveQuestionDefinition = {
   image_url: string | null
   points_max: number
   notes: string | null
+  has_bonus: boolean
+  bonus: Json | null
 }
 
 type LiveContentScreenDefinition = {
@@ -107,6 +115,18 @@ function optionObjects(value: unknown): { key?: string; label?: string; clue?: s
   return Array.isArray(value) ? value.filter(item => item && typeof item === 'object') as { key?: string; label?: string; clue?: string }[] : []
 }
 
+function playerBonusFromJson(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const bonus = value as Record<string, unknown>
+  const prompt = String(bonus.prompt ?? '').trim()
+  if (!prompt) return null
+  return {
+    prompt,
+    points: Math.max(1, Number(bonus.points) || 1),
+    imageUrl: String(bonus.image_url ?? '').trim() || null,
+  }
+}
+
 function correctAnswerLabel(question: LiveQuestionDefinition | null) {
   if (!question) return '—'
   if (question.question_type === 'multiple-choice') {
@@ -138,7 +158,7 @@ async function resolveLivePlayerScreen(gameId: string, teamId: string, gameState
   if (QUESTION_SCREENS.has(remoteScreen)) {
     const questionKey = gameState.current_question_key || 'q1'
 
-    const [{ data: submission, error }, { data: question }] = await Promise.all([
+    const [{ data: submission, error }, { data: bonusSubmission, error: bonusError }, { data: question }] = await Promise.all([
       supabase
         .from('submissions')
         .select('id, is_correct, points_awarded')
@@ -146,22 +166,28 @@ async function resolveLivePlayerScreen(gameId: string, teamId: string, gameState
         .eq('team_id', teamId)
         .eq('question_key', questionKey)
         .maybeSingle(),
+      supabase
+        .rpc('get_player_bonus_submission', {
+          p_game_id: gameId,
+          p_team_id: teamId,
+          p_question_key: questionKey,
+        })
+        .maybeSingle(),
       loadPlayerQuestion(gameId, questionKey),
     ])
 
     if (error) console.error('Could not check player submission:', error)
+    if (bonusError) console.error('Could not check player bonus submission:', bonusError)
 
-    if (gameState.answer_phase === 'revealed') {
-      if (!submission) return 'no-answer'
-      const points = submission.points_awarded ?? 0
-      const max = question?.points_max ?? 1
-      if (points <= 0) return 'incorrect'
-      if (points < max) return 'partial-correct'
-      return 'correct'
-    }
-
-    if (gameState.answer_phase === 'closed') return submission ? 'submitted' : 'no-answer'
-    return submission ? 'submitted' : remoteScreen
+    return playerQuestionStageScreen({
+      answerPhase: gameState.answer_phase,
+      questionStage: gameState.question_stage,
+      baseScreen: remoteScreen,
+      coreSubmission: submission,
+      bonusSubmission,
+      corePointsMax: question?.points_max ?? 1,
+      bonusPointsMax: runtimeBonusFromJson(question?.bonus)?.points ?? 0,
+    }) as PlayerScreen
   }
 
   return remoteScreen
@@ -196,7 +222,7 @@ function useLivePlayerSync(
       }
       const { data, error } = await supabase
         .from('games')
-        .select('current_screen, answer_phase, current_question_key, current_content_screen_key')
+        .select('current_screen, answer_phase, question_stage, current_question_key, current_content_screen_key')
         .eq('id', activeGameId)
         .maybeSingle()
       if (error) {
@@ -364,6 +390,51 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
   return { submit, submitting, submitError }
 }
 
+function useSubmitBonusAnswer(go: (s: PlayerScreen) => void) {
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+
+  async function submit(value: string) {
+    if (submitting) return
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    const teamId = localStorage.getItem('simple-trivia-team-id')
+    if (!gameId || !teamId) return go('join')
+
+    setSubmitting(true)
+    setSubmitError(null)
+
+    const { data: game, error: gameError } = await supabase
+      .from('games')
+      .select('answer_phase, question_stage')
+      .eq('id', gameId)
+      .maybeSingle()
+
+    if (gameError || !game || game.answer_phase !== 'open' || game.question_stage !== 'bonus') {
+      setSubmitError('Bonus answers have closed.')
+      setSubmitting(false)
+      return
+    }
+
+    const answerText = value.trim()
+    const { error } = await supabase.rpc('submit_player_bonus_answer', {
+      p_game_id: gameId,
+      p_team_id: teamId,
+      p_answer_text: answerText,
+    })
+
+    if (error) {
+      console.error('Could not submit bonus answer:', error)
+      setSubmitError('Could not submit your bonus answer. Please try again.')
+      setSubmitting(false)
+      return
+    }
+
+    go('bonus-submitted')
+  }
+
+  return { submit, submitting, submitError }
+}
+
 type PlayerReviewStatus = 'correct' | 'incorrect' | 'review'
 
 type PlayerReviewItem = {
@@ -388,6 +459,10 @@ type PlayerSnapshot = {
   reviewItems: PlayerReviewItem[]
   missingAnswers: string[]
   prizeAwards: PrizeAward[]
+  bonusAnswer: string
+  bonusCorrectAnswer: string
+  bonusPointsAwarded: number
+  bonusPointsMax: number
 }
 
 function playerReviewItemsFromJson(value: unknown): PlayerReviewItem[] {
@@ -614,11 +689,35 @@ function PlayerSimpleAnswerResult({ snapshot }: { snapshot: PlayerSnapshot }) {
   )
 }
 
+function PlayerBonusResult({ snapshot }: { snapshot: PlayerSnapshot }) {
+  if (snapshot.bonusPointsMax <= 0) return null
+  const correct = snapshot.bonusPointsAwarded > 0
+  return (
+    <div style={{ background: correct ? C.goMist : C.panel, border: `1px solid ${correct ? C.goBorder : C.line}`, borderRadius: 18, width: '100%', overflow: 'hidden' }}>
+      <div style={{ padding: '12px 16px', borderBottom: `1px solid ${correct ? C.goBorder : C.line}` }}>
+        <p style={{ color: C.caution, fontSize: 11, fontWeight: 900, letterSpacing: '0.08em' }}>BONUS · {snapshot.bonusPointsMax} {snapshot.bonusPointsMax === 1 ? 'POINT' : 'POINTS'}</p>
+      </div>
+      <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 30px', gap: 10, alignItems: 'center' }}>
+        <div className="min-w-0 flex items-center gap-2">
+          <span style={{ color: correct ? C.go : C.ink, fontSize: 16, fontWeight: 800 }} className="truncate">{snapshot.bonusAnswer || 'No answer'}</span>
+          {!correct && snapshot.bonusCorrectAnswer && (
+            <><span style={{ color: C.sub }}>→</span><span style={{ color: C.go, fontSize: 14, fontWeight: 800 }} className="truncate">{snapshot.bonusCorrectAnswer}</span></>
+          )}
+        </div>
+        <div style={{ background: correct ? C.goMist : C.stopMist, border: `1px solid ${correct ? C.goBorder : C.stopBorder}`, color: correct ? C.go : C.stop, borderRadius: 999, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900 }}>
+          {correct ? '✓' : '×'}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function usePlayerSnapshot(): PlayerSnapshot {
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>({
     teamName: '', score: 0, answer: '', isCorrect: null, pointsAwarded: 0, pointsMax: 1,
     prompt: '', correctAnswer: '—', roundLabel: '', questionLabel: '', questionType: null,
-    reviewItems: [], missingAnswers: [], prizeAwards: [],
+    reviewItems: [], missingAnswers: [], prizeAwards: [], bonusAnswer: '', bonusCorrectAnswer: '',
+    bonusPointsAwarded: 0, bonusPointsMax: 0,
   })
 
   useEffect(() => {
@@ -639,9 +738,10 @@ function usePlayerSnapshot(): PlayerSnapshot {
 
       let question: LiveQuestionDefinition | null = null
       let submission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
+      let bonusSubmission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
 
       if (game?.current_question_key) {
-        const [{ data: questionRow }, { data: submissionRow }] = await Promise.all([
+        const [{ data: questionRow }, { data: submissionRow }, { data: bonusSubmissionRow }] = await Promise.all([
           loadPlayerQuestion(activeGameId, game.current_question_key),
           supabase
             .from('submissions')
@@ -650,15 +750,24 @@ function usePlayerSnapshot(): PlayerSnapshot {
             .eq('team_id', activeTeamId)
             .eq('question_key', game.current_question_key)
             .maybeSingle(),
+          supabase
+            .rpc('get_player_bonus_submission', {
+              p_game_id: activeGameId,
+              p_team_id: activeTeamId,
+              p_question_key: game.current_question_key,
+            })
+            .maybeSingle(),
         ])
         question = questionRow as LiveQuestionDefinition | null
         submission = submissionRow
+        bonusSubmission = bonusSubmissionRow
       }
 
       if (!active) return
 
       const reviewItems = playerReviewItemsFromJson(submission?.grading_json)
       const missingAnswers = playerMissingAnswersFromJson(submission?.grading_json)
+      const revealedBonus = runtimeBonusFromJson(question?.bonus)
 
       setSnapshot({
         teamName: team?.name ?? fallbackName,
@@ -675,6 +784,10 @@ function usePlayerSnapshot(): PlayerSnapshot {
         reviewItems,
         missingAnswers,
         prizeAwards: prizeAwardsFromJson(team?.prize_awards),
+        bonusAnswer: bonusSubmission?.answer_text ?? '',
+        bonusCorrectAnswer: revealedBonus?.correctAnswer ?? '',
+        bonusPointsAwarded: bonusSubmission?.points_awarded ?? 0,
+        bonusPointsMax: revealedBonus?.points ?? playerBonusFromJson(question?.bonus)?.points ?? 0,
       })
     }
 
@@ -803,6 +916,8 @@ const SCREENS: { id: PlayerScreen; label: string }[] = [
   { id: 'multi-answer',   label: '8 · Multi-Answer' },
   { id: 'multi-part',     label: '9 · Multi-Part' },
   { id: 'ranking',        label: '10 · Ranking' },
+  { id: 'bonus-answer',   label: '10b · Bonus Answer' },
+  { id: 'bonus-submitted',label: '10c · Bonus Submitted' },
   { id: 'submitted',      label: '11 · Submitted' },
   { id: 'no-answer',      label: '12 · No Answer' },
   { id: 'correct',        label: '13 · Correct' },
@@ -1818,9 +1933,63 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
   )
 }
 
+function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
+  const [answer, setAnswer] = useState('')
+  const question = useLiveQuestionDefinition()
+  const snapshot = usePlayerSnapshot()
+  const bonus = playerBonusFromJson(question?.bonus)
+  const { submit, submitting, submitError } = useSubmitBonusAnswer(go)
+
+  return (
+    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score}
+        round={question ? `Round ${question.round_number}` : ''}
+        question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
+      <div className="flex-1 overflow-y-auto px-5 py-6">
+        <div style={{ background: C.cautionMist, border: `1px solid ${C.cautionBorder}`, borderRadius: 999, display: 'inline-flex', padding: '5px 11px', marginBottom: 18 }}>
+          <span style={{ color: C.caution, fontSize: 11, fontWeight: 900, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            Bonus · {bonus?.points ?? 1} {(bonus?.points ?? 1) === 1 ? 'point' : 'points'}
+          </span>
+        </div>
+        {bonus?.imageUrl && (
+          <div style={{ borderRadius: 16, overflow: 'hidden', background: C.ground, border: `1px solid ${C.line}`, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', height: 180 }}>
+            <div role="img" aria-label="Bonus image" style={{ width: '85%', height: 150, backgroundImage: `url(${bonus.imageUrl})`, backgroundPosition: 'center', backgroundRepeat: 'no-repeat', backgroundSize: 'contain' }} />
+          </div>
+        )}
+        <h2 style={{ color: C.ink, fontSize: 24, lineHeight: 1.25, fontWeight: 900, marginBottom: 28 }}>{bonus?.prompt ?? 'Loading bonus…'}</h2>
+        <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your bonus answer</label>
+        <textarea rows={3} value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Type your answer…"
+          style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
+        {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+      </div>
+      <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : 'Submit Bonus Answer'}</Btn></StickyBottom>
+    </div>
+  )
+}
+
+function BonusSubmitted() {
+  const snapshot = usePlayerSnapshot()
+  return (
+    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
+      <div className="flex-1 flex flex-col items-center justify-center px-5 py-6 text-center">
+        <div style={{ background: C.cautionMist, border: `2px solid ${C.cautionBorder}`, borderRadius: 999, width: 64, height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 27 }}>★</span></div>
+        <h1 style={{ color: C.ink, fontSize: 28 }} className="font-black mt-5">Bonus locked in</h1>
+        <p style={{ color: C.sub, fontSize: 14, marginTop: 8 }}>Your main and bonus answers are saved.</p>
+        <div style={{ background: C.ground, borderRadius: 16, border: `1px solid ${C.line}`, width: '100%', padding: '16px 20px', marginTop: 22, textAlign: 'left' }}>
+          <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em' }}>YOUR BONUS ANSWER</p>
+          <p style={{ color: C.ink, fontSize: 18, fontWeight: 800, marginTop: 6 }}>{snapshot.bonusAnswer || 'Submitted'}</p>
+        </div>
+        <div style={{ marginTop: 24 }}><WaitMsg msg="Waiting for the host to close answers…" /></div>
+      </div>
+    </div>
+  )
+}
+
 // ─── SCREEN 11 — SUBMITTED ────────────────────────────────────────────────────
 function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  const question = useLiveQuestionDefinition()
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
@@ -1834,6 +2003,17 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
             <p style={{ color: C.ink, fontSize: 18, fontWeight: 800 }}>{snapshot.answer || 'Submitted'}</p>
           </div>
           <WaitMsg msg="Waiting for the host…" />
+          {question?.has_bonus && !question.bonus && (
+            <div style={{ background: C.cautionMist, border: `1px solid ${C.cautionBorder}`, borderRadius: 14, width: '100%', padding: '12px 16px', textAlign: 'center' }}>
+              <p style={{ color: C.caution, fontSize: 14, fontWeight: 800 }}>★ Bonus question coming next</p>
+            </div>
+          )}
+          {snapshot.bonusAnswer && (
+            <div style={{ background: C.cautionMist, border: `1px solid ${C.cautionBorder}`, borderRadius: 14, width: '100%', padding: '12px 16px' }}>
+              <p style={{ color: C.caution, fontSize: 11, fontWeight: 900, letterSpacing: '0.08em' }}>BONUS ANSWER LOCKED</p>
+              <p style={{ color: C.ink, fontSize: 16, fontWeight: 800, marginTop: 5 }}>{snapshot.bonusAnswer}</p>
+            </div>
+          )}
           <p style={{ color: C.sub, fontSize: 14, marginTop: -8 }}>Your score: {snapshot.score}</p>
         </div>
       </div>
@@ -1885,6 +2065,7 @@ function Correct({ go }: { go: (s: PlayerScreen) => void }) {
               <p style={{ color: C.go, fontSize: 22, fontWeight: 900 }}>+{snapshot.pointsAwarded} {snapshot.pointsAwarded === 1 ? 'point' : 'points'}</p>
             </div>
           )}
+          <PlayerBonusResult snapshot={snapshot} />
           <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>
           <WaitMsg msg="Waiting for the next question…" />
         </div>
@@ -1909,6 +2090,7 @@ function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
           ) : (
             <PlayerSimpleAnswerResult snapshot={snapshot} />
           )}
+          <PlayerBonusResult snapshot={snapshot} />
           <div style={{ background: C.ground, borderRadius: 14, border: `1px solid ${C.line}`, width: '100%', padding: '12px 20px', textAlign: 'center' }}><p style={{ color: C.ink, fontSize: 22, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Your score</p></div>
           <WaitMsg msg="Waiting for the next question…" />
         </div>
@@ -2170,6 +2352,8 @@ function GameEnded({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 13b — PARTIAL CREDIT ──────────────────────────────────────────────
 function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  const totalAwarded = snapshot.pointsAwarded + snapshot.bonusPointsAwarded
+  const totalMax = snapshot.pointsMax + snapshot.bonusPointsMax
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
@@ -2177,13 +2361,14 @@ function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
         <p style={{ color: C.sub, fontSize: 14, lineHeight: 1.5, marginBottom: 18 }}>{snapshot.prompt}</p>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
           <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.go, fontWeight: 900 }}>½</div>
-          <h1 style={{ color: C.ink, fontSize: 30 }} className="font-black">{snapshot.pointsAwarded} of {snapshot.pointsMax} correct</h1>
-          <p style={{ color: C.go, fontSize: 18, fontWeight: 800 }}>+{snapshot.pointsAwarded} points</p>
+          <h1 style={{ color: C.ink, fontSize: 30 }} className="font-black">{totalAwarded} of {totalMax} points</h1>
+          <p style={{ color: C.go, fontSize: 18, fontWeight: 800 }}>+{totalAwarded} points</p>
           {isCompoundResultType(snapshot.questionType) && snapshot.reviewItems.length > 0 ? (
             <PlayerAnswerBreakdown snapshot={snapshot} />
           ) : (
             <PlayerSimpleAnswerResult snapshot={snapshot} />
           )}
+          <PlayerBonusResult snapshot={snapshot} />
           <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>
           <WaitMsg msg="Waiting for the next question…" />
         </div>
@@ -2248,6 +2433,8 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
     case 'multi-answer':   return <MultiAnswer go={go} />
     case 'multi-part':     return <MultiPart go={go} />
     case 'ranking':        return <Ranking go={go} />
+    case 'bonus-answer':   return <BonusAnswer go={go} />
+    case 'bonus-submitted':return <BonusSubmitted />
     case 'submitted':      return <Submitted go={go} />
     case 'no-answer':      return <NoAnswer go={go} />
     case 'correct':        return <Correct go={go} />
@@ -2311,7 +2498,7 @@ export function PlayerFlow() {
       const [{ data: game, error: gameError }, { data: team, error: teamError }] = await Promise.all([
         supabase
           .from('games')
-          .select('status, current_screen, answer_phase, current_question_key, current_content_screen_key')
+          .select('status, current_screen, answer_phase, question_stage, current_question_key, current_content_screen_key')
           .eq('id', gameId)
           .maybeSingle(),
         teamId

@@ -341,6 +341,7 @@ export type Database = {
           current_screen: string
           created_at: string
           answer_phase: string
+          question_stage: string
           current_question_key: string | null
           current_content_screen_key: string | null
           quiz_id: string | null
@@ -354,6 +355,7 @@ export type Database = {
           current_screen?: string
           created_at?: string
           answer_phase?: string
+          question_stage?: string
           current_question_key?: string | null
           current_content_screen_key?: string | null
           quiz_id?: string | null
@@ -367,6 +369,7 @@ export type Database = {
           current_screen?: string
           created_at?: string
           answer_phase?: string
+          question_stage?: string
           current_question_key?: string | null
           current_content_screen_key?: string | null
           quiz_id?: string | null
@@ -503,6 +506,60 @@ export type Database = {
           },
         ]
       }
+      bonus_submissions: {
+        Row: {
+          id: string
+          game_id: string
+          team_id: string
+          question_key: string
+          answer_text: string
+          is_correct: boolean | null
+          points_awarded: number
+          grading_json: Json | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          game_id: string
+          team_id: string
+          question_key: string
+          answer_text: string
+          is_correct?: boolean | null
+          points_awarded?: number
+          grading_json?: Json | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          game_id?: string
+          team_id?: string
+          question_key?: string
+          answer_text?: string
+          is_correct?: boolean | null
+          points_awarded?: number
+          grading_json?: Json | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'bonus_submissions_game_id_fkey'
+            columns: ['game_id']
+            isOneToOne: false
+            referencedRelation: 'games'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'bonus_submissions_team_id_fkey'
+            columns: ['team_id']
+            isOneToOne: false
+            referencedRelation: 'teams'
+            referencedColumns: ['id']
+          },
+        ]
+      }
     }
     Views: {
       source_question_catalog: {
@@ -538,6 +595,8 @@ export type Database = {
           image_url: string | null
           points_max: number
           notes: string | null
+          has_bonus: boolean
+          bonus: Json | null
         }[]
       }
       join_live_game: {
@@ -559,6 +618,28 @@ export type Database = {
         }
         Returns: string
       }
+      submit_player_bonus_answer: {
+        Args: {
+          p_game_id: string
+          p_team_id: string
+          p_answer_text: string
+        }
+        Returns: string
+      }
+      get_player_bonus_submission: {
+        Args: {
+          p_game_id: string
+          p_team_id: string
+          p_question_key: string
+        }
+        Returns: {
+          id: string
+          answer_text: string
+          is_correct: boolean | null
+          points_awarded: number
+          grading_json: Json | null
+        }[]
+      }
       create_game_from_quiz: {
         Args: {
           p_quiz_id: string
@@ -575,6 +656,16 @@ export type Database = {
           p_game_id: string
           p_question_key: string
           p_results: Json
+          p_reveal?: boolean
+        }
+        Returns: number
+      }
+      finalize_question_and_bonus_scoring: {
+        Args: {
+          p_game_id: string
+          p_question_key: string
+          p_results: Json
+          p_bonus_results?: Json
           p_reveal?: boolean
         }
         Returns: number

@@ -18,6 +18,11 @@ import {
 } from "@/lib/trivia/grading";
 import { buildRevealResults } from "@/lib/trivia/reveal";
 import {
+  buildBonusRevealResults,
+  runtimeBonusFromJson,
+  storedBonusGrading,
+} from "@/lib/trivia/bonus-grading";
+import {
   answerRevealModeFromSettings,
   type AnswerRevealMode,
 } from "@/lib/trivia/answer-reveal";
@@ -76,6 +81,7 @@ async function updateLiveGame(values: {
   status?: 'lobby' | 'live' | 'finished'
   current_screen?: string
   answer_phase?: 'open' | 'closed' | 'revealed'
+  question_stage?: 'core' | 'bonus'
   current_question_key?: string | null
   current_content_screen_key?: string | null
 }) {
@@ -3869,6 +3875,8 @@ type LiveSubmission = {
   grading_json: SubmissionGrading | null
 }
 
+type LiveBonusSubmission = LiveSubmission
+
 type LiveQuestionDefinition = {
   question_key: string
   position: number
@@ -3885,6 +3893,7 @@ type LiveQuestionDefinition = {
   options: unknown
   image_url: string | null
   points_max: number
+  bonus: Json | null
   notes: string | null
 }
 
@@ -4029,11 +4038,13 @@ function ReviewBadge({
 }
 function LiveQuestion({ go }: { go: Go }) {
   const [phase, setPhase] = useState<'open' | 'closed' | 'revealed'>('open')
+  const [questionStage, setQuestionStage] = useState<'core' | 'bonus'>('core')
   const [gameScreen, setGameScreen] = useState('round-start')
   const [emergency, setEmergency] = useState(false)
   const [liveGameId, setLiveGameId] = useState<string | null>(null)
   const [teams, setTeams] = useState<LiveTeam[]>([])
   const [submissions, setSubmissions] = useState<LiveSubmission[]>([])
+  const [bonusSubmissions, setBonusSubmissions] = useState<LiveBonusSubmission[]>([])
   const [question, setQuestion] = useState<LiveQuestionDefinition | null>(null)
   const [allQuestions, setAllQuestions] = useState<LiveQuestionDefinition[]>([])
   const [contentScreen, setContentScreen] = useState<LiveContentScreenDefinition | null>(null)
@@ -4050,7 +4061,7 @@ function LiveQuestion({ go }: { go: Go }) {
     async function loadLiveData() {
       const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('id, answer_phase, current_question_key, current_content_screen_key, current_screen, settings')
+        .select('id, answer_phase, question_stage, current_question_key, current_content_screen_key, current_screen, settings')
         .eq('code', getHostGameCode())
         .maybeSingle()
 
@@ -4066,6 +4077,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setGameScreen(game.current_screen ?? '')
       setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
       setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
+      setQuestionStage(game.question_stage === 'bonus' ? 'bonus' : 'core')
 
       if (game.answer_phase === 'open' || game.answer_phase === 'closed' || game.answer_phase === 'revealed') {
         setPhase(game.answer_phase)
@@ -4074,7 +4086,7 @@ function LiveQuestion({ go }: { go: Go }) {
       const [questionResult, contentScreenResult, teamResult] = await Promise.all([
         supabase
           .from('game_questions')
-          .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
+          .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, bonus, notes')
           .eq('game_id', game.id)
           .order('position', { ascending: true }),
         supabase
@@ -4109,24 +4121,34 @@ function LiveQuestion({ go }: { go: Go }) {
       setTeams((teamResult.data ?? []) as LiveTeam[])
 
       if (currentQuestion) {
-        const { data: submissionRows, error: submissionError } = await supabase
-          .from('submissions')
-          .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
-          .eq('game_id', game.id)
-          .eq('question_key', currentQuestion.question_key)
-          .order('created_at', { ascending: true })
+        const [submissionResult, bonusSubmissionResult] = await Promise.all([
+          supabase
+            .from('submissions')
+            .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+            .eq('game_id', game.id)
+            .eq('question_key', currentQuestion.question_key)
+            .order('created_at', { ascending: true }),
+          supabase
+            .from('bonus_submissions')
+            .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+            .eq('game_id', game.id)
+            .eq('question_key', currentQuestion.question_key)
+            .order('created_at', { ascending: true }),
+        ])
 
         if (!active) return
 
-        if (submissionError) {
-          console.error('Could not load team answers:', submissionError)
+        if (submissionResult.error || bonusSubmissionResult.error) {
+          console.error('Could not load team answers:', submissionResult.error ?? bonusSubmissionResult.error)
           setLiveError('Could not load team answers.')
           return
         }
 
-        setSubmissions((submissionRows ?? []) as LiveSubmission[])
+        setSubmissions((submissionResult.data ?? []) as LiveSubmission[])
+        setBonusSubmissions((bonusSubmissionResult.data ?? []) as LiveBonusSubmission[])
       } else {
         setSubmissions([])
+        setBonusSubmissions([])
       }
 
       setLiveError(null)
@@ -4137,6 +4159,11 @@ function LiveQuestion({ go }: { go: Go }) {
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'submissions', filter: `game_id=eq.${game.id}` },
+            () => { void loadLiveData() },
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'bonus_submissions', filter: `game_id=eq.${game.id}` },
             () => { void loadLiveData() },
           )
           .on(
@@ -4188,12 +4215,14 @@ function LiveQuestion({ go }: { go: Go }) {
         status: 'live',
         current_screen: openingQuestion.question_type,
         answer_phase: 'open',
+        question_stage: 'core',
         current_question_key: openingQuestion.question_key,
         current_content_screen_key: null,
       })
       setQuestion(openingQuestion)
       setGameScreen(openingQuestion.question_type)
       setPhase('open')
+      setQuestionStage('core')
     } catch (error) {
       console.error('Could not open question:', error)
       setLiveError('Could not open the question. Please try again.')
@@ -4217,6 +4246,26 @@ function LiveQuestion({ go }: { go: Go }) {
       setLiveError('Could not close answers. Please try again.')
     } else {
       setPhase('closed')
+    }
+
+    setActionBusy(false)
+  }
+
+  async function handleShowBonus() {
+    if (!liveGameId || !question || !runtimeBonusFromJson(question.bonus) || actionBusy || phase !== 'open') return
+    setActionBusy(true)
+    setLiveError(null)
+
+    const { error } = await supabase
+      .from('games')
+      .update({ question_stage: 'bonus' })
+      .eq('id', liveGameId)
+
+    if (error) {
+      console.error('Could not show bonus question:', error)
+      setLiveError('Could not show the bonus question. Please try again.')
+    } else {
+      setQuestionStage('bonus')
     }
 
     setActionBusy(false)
@@ -4273,6 +4322,33 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }
 }
 
+  async function handleBonusReview(submissionId: string, status: 'correct' | 'incorrect') {
+    const bonus = runtimeBonusFromJson(question?.bonus)
+    if (!bonus || phase === 'revealed') return
+
+    const submission = bonusSubmissions.find(item => item.id === submissionId)
+    if (!submission) return
+
+    const current = storedBonusGrading(bonus, submission)
+    const next: SubmissionGrading = {
+      items: current.items.map((item, index) => index === 0 ? { ...item, status } : item),
+    }
+
+    setBonusSubmissions(currentSubmissions => currentSubmissions.map(item =>
+      item.id === submissionId ? { ...item, grading_json: next } : item
+    ))
+
+    const { error } = await supabase
+      .from('bonus_submissions')
+      .update({ grading_json: next })
+      .eq('id', submissionId)
+
+    if (error) {
+      console.error('Could not update bonus review:', error)
+      setLiveError('Could not save that bonus review. Please try again.')
+    }
+  }
+
   async function scoreCurrentQuestion(revealNow: boolean) {
     if (!liveGameId || !question) throw new Error('Live question is not available')
 
@@ -4284,11 +4360,24 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
     if (submissionError) throw submissionError
 
+    const { data: freshBonusSubmissions, error: bonusSubmissionError } = await supabase
+      .from('bonus_submissions')
+      .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+      .eq('game_id', liveGameId)
+      .eq('question_key', question.question_key)
+
+    if (bonusSubmissionError) throw bonusSubmissionError
+
     const results = buildRevealResults(question, (freshSubmissions ?? []) as LiveSubmission[])
-    const { error: scoringError } = await supabase.rpc('finalize_question_scoring', {
+    const bonusResults = buildBonusRevealResults(
+      runtimeBonusFromJson(question.bonus),
+      (freshBonusSubmissions ?? []) as LiveBonusSubmission[],
+    )
+    const { error: scoringError } = await supabase.rpc('finalize_question_and_bonus_scoring', {
       p_game_id: liveGameId,
       p_question_key: question.question_key,
       p_results: results as unknown as Json,
+      p_bonus_results: bonusResults as unknown as Json,
       p_reveal: revealNow,
     })
 
@@ -4353,13 +4442,16 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
         answer_phase: 'open',
+        question_stage: 'core',
         current_question_key: nextItem.question.question_key,
         current_content_screen_key: null,
       })
       setQuestion(nextItem.question)
       setPhase('open')
+      setQuestionStage('core')
       setGameScreen(nextItem.question.question_type)
       setSubmissions([])
+      setBonusSubmissions([])
     } catch (error) {
       console.error('Could not score and advance:', error)
       setLiveError('Could not score and continue. Please try again.')
@@ -4410,13 +4502,16 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
         answer_phase: 'open',
+        question_stage: 'core',
         current_question_key: nextItem.question.question_key,
         current_content_screen_key: null,
       })
       setQuestion(nextItem.question)
       setPhase('open')
+      setQuestionStage('core')
       setGameScreen(nextItem.question.question_type)
       setSubmissions([])
+      setBonusSubmissions([])
     } catch (error) {
       console.error('Could not advance the game:', error)
       setLiveError('Could not advance the game. Please try again.')
@@ -4482,14 +4577,17 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
         answer_phase: 'open',
+        question_stage: 'core',
         current_question_key: nextItem.question.question_key,
         current_content_screen_key: null,
       })
       setQuestion(nextItem.question)
       setContentScreen(null)
       setPhase('open')
+      setQuestionStage('core')
       setGameScreen(nextItem.question.question_type)
       setSubmissions([])
+      setBonusSubmissions([])
     } catch (error) {
       console.error('Could not advance the content screen:', error)
       setLiveError('Could not advance the game. Please try again.')
@@ -4499,6 +4597,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }
 
   const submissionByTeam = new Map<string, LiveSubmission>(submissions.map(submission => [submission.team_id, submission] as const))
+  const activeBonus = runtimeBonusFromJson(question?.bonus)
+  const bonusSubmissionByTeam = new Map<string, LiveBonusSubmission>(bonusSubmissions.map(submission => [submission.team_id, submission] as const))
   const answerRows = teams
     .map((team, originalIndex) => {
       const submission = submissionByTeam.get(team.id) ?? null
@@ -4519,10 +4619,24 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       return aPriority - bPriority || a.originalIndex - b.originalIndex
     })
   const answeredCount = answerRows.filter(row => row.submission).length
-  const reviewCount = answerRows.reduce(
+  const coreReviewCount = answerRows.reduce(
     (total, row) => total + (row.grading?.items.filter(item => item.status === 'review').length ?? 0),
     0,
   )
+  const bonusAnswerRows = teams.map(team => {
+    const submission = bonusSubmissionByTeam.get(team.id) ?? null
+    return {
+      team,
+      submission,
+      grading: submission && activeBonus ? storedBonusGrading(activeBonus, submission) : null,
+    }
+  })
+  const bonusAnsweredCount = bonusAnswerRows.filter(row => row.submission).length
+  const bonusReviewCount = bonusAnswerRows.reduce(
+    (total, row) => total + (row.grading?.items.filter(item => item.status === 'review').length ?? 0),
+    0,
+  )
+  const reviewCount = coreReviewCount + bonusReviewCount
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const totalRounds = Math.max(1, ...allQuestions.map(item => item.round_number))
   const sequenceItems = liveSequenceItems(allQuestions, allContentScreens)
@@ -4860,6 +4974,29 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 <p style={{ color: `${C.liveText}99` }} className="text-sm leading-relaxed">{question.notes}</p>
               </div>
             )}
+
+            {activeBonus && (
+              <div
+                style={{
+                  background: questionStage === 'bonus' || phase === 'revealed' ? `${C.caution}18` : `${C.livePanel}B8`,
+                  border: `1px solid ${questionStage === 'bonus' || phase === 'revealed' ? `${C.caution}55` : C.liveLine}`,
+                }}
+                className="mt-4 rounded-xl p-4"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <p style={{ color: C.caution }} className="text-[10px] font-extrabold uppercase tracking-widest">
+                    Bonus · {activeBonus.points} {activeBonus.points === 1 ? 'point' : 'points'}
+                  </p>
+                  <span style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">
+                    {questionStage === 'core' && phase !== 'revealed' ? 'Host only · Up next' : 'Shown to players'}
+                  </span>
+                </div>
+                <p style={{ color: C.liveText }} className="mt-2 text-lg font-extrabold">{activeBonus.prompt}</p>
+                <p style={{ color: phase === 'revealed' ? C.go : C.caution }} className="mt-2 text-sm font-bold">
+                  Answer: {activeBonus.correctAnswer}
+                </p>
+              </div>
+            )}
           </div>
           )}
 
@@ -4872,7 +5009,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             {gameScreen === 'round-start'
               ? 'Players see the round intro · Waiting for the first question'
               : phase === 'open'
-                ? `Players see Question ${question?.round_position ?? 1} · Answer controls are open`
+                ? questionStage === 'bonus'
+                  ? `Players see the bonus · Bonus answers are open`
+                  : activeBonus
+                    ? `Players see Question ${question?.round_position ?? 1} · Bonus coming indicator is visible`
+                    : `Players see Question ${question?.round_position ?? 1} · Answer controls are open`
                 : phase === 'closed'
                   ? 'Players see Submitted or No answer · Correct answer is still hidden'
                   : 'Players see their result · Correct answer is revealed'}
@@ -5153,6 +5294,46 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       </div>
     )}
   </div>
+
+  {activeBonus && (questionStage === 'bonus' || phase !== 'open') && (
+    <div style={{ background: C.liveSurface, border: `1px solid ${C.caution}45` }} className="rounded-2xl overflow-hidden shrink-0">
+      <div
+        style={{ background: `${C.caution}14`, borderBottom: `1px solid ${C.liveLine}`, color: C.liveDim, display: 'grid', gridTemplateColumns: '1.1fr 1.5fr 150px' }}
+        className="text-[10px] font-bold uppercase tracking-widest px-4 py-2.5 gap-4"
+      >
+        <span>Team</span>
+        <span>Bonus answer</span>
+        <span className="text-right">Status</span>
+      </div>
+      {bonusAnswerRows.map(({ team, submission, grading }) => {
+        const item = grading?.items[0] ?? null
+        const needsReview = item?.status === 'review'
+        return (
+          <div key={team.id} style={{ borderBottom: `1px solid ${needsReview ? `${C.caution}45` : C.liveLine}`, background: needsReview ? `${C.caution}12` : 'transparent', display: 'grid', gridTemplateColumns: '1.1fr 1.5fr 150px' }} className="items-center px-4 py-3 gap-4 last:border-0">
+            <span style={{ color: submission ? C.liveText : `${C.liveText}45` }} className="truncate text-sm font-medium">{team.name}</span>
+            <div className="min-w-0 flex items-center gap-2">
+              <span style={{ color: item?.status === 'correct' ? C.go : submission ? C.liveText : C.liveDim }} className="truncate text-sm italic font-semibold">
+                {submission ? item?.submitted || submission.answer_text : 'Waiting…'}
+              </span>
+              {item?.expected && item.status !== 'correct' && (
+                <><span style={{ color: C.liveDim }}>→</span><span style={{ color: C.go }} className="truncate text-xs font-bold">{item.expected}</span></>
+              )}
+            </div>
+            <div className="flex justify-end">
+              {submission && item ? (
+                <ReviewBadge
+                  status={item.status}
+                  disabled={phase === 'revealed'}
+                  onCorrect={() => { void handleBonusReview(submission.id, 'correct') }}
+                  onIncorrect={() => { void handleBonusReview(submission.id, 'incorrect') }}
+                />
+              ) : <span style={{ color: C.liveDim }} className="text-xs">—</span>}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )}
 </div>
 
         <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 300 }} className="flex flex-col shrink-0 sticky top-[52px] h-[calc(100dvh-52px)]">
@@ -5183,22 +5364,26 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             ) : phase === 'open' ? (
               <div className="space-y-3">
                 <p style={{ color: C.caution }} className="text-[11px] text-center font-extrabold uppercase tracking-widest">
-                  Accepting answers · {answeredCount}/{teams.length} submitted
+                  {questionStage === 'bonus'
+                    ? `Accepting bonus answers · ${bonusAnsweredCount}/${teams.length} submitted`
+                    : `Accepting main answers · ${answeredCount}/${teams.length} submitted`}
                 </p>
                 <button
-                  onClick={handleCloseAnswers}
+                  onClick={activeBonus && questionStage === 'core' ? handleShowBonus : handleCloseAnswers}
                   disabled={actionBusy}
                   style={{
-                    background: '#F59E0B',
-                    color: '#17130A',
-                    border: '2px solid #FBBF24',
-                    boxShadow: '0 10px 34px rgba(245,158,11,0.32)',
+                    background: activeBonus && questionStage === 'core' ? C.violet : '#F59E0B',
+                    color: activeBonus && questionStage === 'core' ? 'white' : '#17130A',
+                    border: activeBonus && questionStage === 'core' ? 'none' : '2px solid #FBBF24',
+                    boxShadow: activeBonus && questionStage === 'core' ? `0 8px 32px ${C.violet}60` : '0 10px 34px rgba(245,158,11,0.32)',
                   }}
                   className="w-full py-6 rounded-2xl text-xl font-black hover:brightness-110 transition-all active:scale-[0.98] disabled:opacity-50"
                 >
-                  {actionBusy ? 'Closing…' : 'Close Answers'}
+                  {actionBusy ? activeBonus && questionStage === 'core' ? 'Showing…' : 'Closing…' : activeBonus && questionStage === 'core' ? 'Show Bonus →' : 'Close Answers'}
                   {!actionBusy && (
-                    <span className="block text-xs font-bold opacity-70 mt-1">Stop all new submissions</span>
+                    <span className="block text-xs font-bold opacity-70 mt-1">
+                      {activeBonus && questionStage === 'core' ? 'Main answers stay locked in' : 'Close main and bonus answers'}
+                    </span>
                   )}
                 </button>
               </div>
@@ -5373,6 +5558,7 @@ function EndOfRound({ go }: { go: Go }) {
         current_content_screen_key: null,
         current_screen: 'round-start',
         answer_phase: 'open',
+        question_stage: 'core',
       })
       go('live-question')
     } catch (err) {

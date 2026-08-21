@@ -51,6 +51,7 @@
 - Keep editorial workflow (`draft`, `needs_review`, `active`, `archived`), verification, and factual stability (`stable`, `review_periodically`, `volatile`) independent.
 - Media is optional content, not a grading mechanic. The durable mechanics are `single-answer`, `multiple-choice`, `multi-answer`, `multi-part`, and `ranking`; image content may accompany any suitable mechanic.
 - An ordinary scored question may have at most one attached bonus for MVP. Bonuses own their prompt, answer, aliases, points, media, and metadata; they affect maximum score, estimated time, and diversity, but not the displayed normal question count.
+- Live bonuses use a staged flow within their parent question: main answer first, a visible bonus-coming cue, then host-controlled bonus display, followed by one close action that locks both stages. Store bonus submissions and grading separately from ordinary submissions, then reveal and score both together exactly once.
 - Multi-part source questions store category, tags, and difficulty on their individual parts. Derive the parent category union and difficulty range instead of inventing a single mixed category or average difficulty.
 - Prevent duplicate team names within a game.
 - Only joinable lobby games should accept new teams.
