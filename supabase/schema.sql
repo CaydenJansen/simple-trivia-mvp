@@ -117,7 +117,9 @@ create table if not exists public.games (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
   title text not null,
-  status text not null default 'lobby',
+  status text not null default 'lobby'
+    constraint games_status_check
+    check (status in ('lobby', 'live', 'finished', 'cancelled')),
   current_screen text not null default 'lobby',
   created_at timestamptz not null default now(),
   answer_phase text not null default 'open',

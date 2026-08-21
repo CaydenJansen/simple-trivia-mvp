@@ -1393,7 +1393,7 @@ function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
           table: 'teams',
           filter: `game_id=eq.${gameId}`,
         },
-        () => setTeamCount((current) => current === null ? 1 : current + 1),
+        () => { void loadTeamCount() },
       )
       .subscribe()
 
