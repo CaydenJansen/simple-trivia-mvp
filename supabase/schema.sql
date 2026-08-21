@@ -7,6 +7,8 @@
 -- supabase/migrations/20260820190000_add_atomic_live_game_operations.sql.
 -- Hidden end-of-round scoring support is versioned in
 -- supabase/migrations/20260820200000_add_hidden_question_scoring.sql.
+-- Prepared-tiebreaker authoring and game snapshots are versioned in
+-- supabase/migrations/20260821170000_add_prepared_tiebreakers.sql.
 -- Existing deployed RLS policies and Realtime publication membership are
 -- otherwise managed by Supabase and are not replaced by this file.
 
@@ -113,6 +115,21 @@ create table if not exists public.quiz_content_screens (
   unique (quiz_id, item_position)
 );
 
+create table if not exists public.quiz_tiebreakers (
+  id uuid primary key default gen_random_uuid(),
+  quiz_id uuid not null references public.quizzes(id) on delete cascade,
+  tiebreaker_key text not null,
+  position integer not null check (position > 0),
+  prompt text not null check (length(btrim(prompt)) > 0),
+  correct_value numeric not null,
+  answer_unit text,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (quiz_id, tiebreaker_key),
+  unique (quiz_id, position)
+);
+
 create table if not exists public.games (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
@@ -171,6 +188,20 @@ create table if not exists public.game_content_screens (
   unique (game_id, item_position)
 );
 
+create table if not exists public.game_tiebreakers (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.games(id) on delete cascade,
+  tiebreaker_key text not null,
+  position integer not null check (position > 0),
+  prompt text not null check (length(btrim(prompt)) > 0),
+  correct_value numeric not null,
+  answer_unit text,
+  notes text,
+  created_at timestamptz not null default now(),
+  unique (game_id, tiebreaker_key),
+  unique (game_id, position)
+);
+
 create table if not exists public.teams (
   id uuid primary key default gen_random_uuid(),
   game_id uuid not null references public.games(id) on delete cascade,
@@ -202,6 +233,9 @@ create index if not exists quiz_questions_quiz_order_idx
 create index if not exists quiz_content_screens_quiz_order_idx
   on public.quiz_content_screens (quiz_id, item_position);
 
+create index if not exists quiz_tiebreakers_quiz_order_idx
+  on public.quiz_tiebreakers (quiz_id, position);
+
 create index if not exists quizzes_owner_updated_idx
   on public.quizzes (owner_id, updated_at desc);
 
@@ -232,6 +266,9 @@ create index if not exists game_questions_game_order_idx
 
 create index if not exists game_content_screens_game_order_idx
   on public.game_content_screens (game_id, item_position);
+
+create index if not exists game_tiebreakers_game_order_idx
+  on public.game_tiebreakers (game_id, position);
 
 create index if not exists teams_game_score_idx
   on public.teams (game_id, score desc);

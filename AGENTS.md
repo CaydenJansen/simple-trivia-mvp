@@ -19,6 +19,7 @@
 - Hosting a quiz must create a fresh game with its own six-digit code, teams, submissions, scores, state, and question snapshot.
 - Never regress to using `728461` or another hard-coded code as the normal hosting path.
 - Preserve the `quiz_questions` → `game_questions` snapshot boundary so later quiz edits cannot alter an active or completed game.
+- Preserve the separate `quiz_tiebreakers` → `game_tiebreakers` snapshot boundary. Prepared tiebreakers are not ordinary scored questions.
 - Supabase is the source of truth for live game state. Do not replace working database or Realtime behaviour with fake local state.
 - Players follow host progression automatically; players do not advance questions themselves.
 - Correct answers must not be exposed to players before reveal.
@@ -43,6 +44,11 @@
 - Prevent duplicate team names within a game.
 - Only joinable lobby games should accept new teams.
 - Host live controls and question content must remain usable on small laptop screens.
+- Prepared tiebreakers are optional for manually built quizzes; recommend at least two without blocking save or hosting. Automatically built quizzes must prepare exactly three.
+- Tiebreakers are numeric closest-answer questions used only to resolve a consequential final-placement tie. Normal round and in-game ties are allowed.
+- Do not include tiebreakers in normal question counts, running-time estimates, or game points. Resolving a tie must never change a team's trivia score.
+- A future final-results resolution must offer tiebreaker, allowed-tie, and manual ordering methods, and store the decision and placement separately from score.
+- Never expose a prepared tiebreaker's correct numeric value to players before the relevant tiebreaker reveal.
 - The host must be able to reopen answers after closing them but before reveal.
 - Do not add post-reveal undo without safely reversing awarded points.
 - Review-required answers sort first, then graded submissions, then waiting teams. Keep ordering stable within each group.
@@ -140,6 +146,7 @@ Preserve and verify:
 - Recalculate cached quiz counts and duration metadata when quiz content changes.
 - Store accepted aliases explicitly; do not hide them in display text.
 - Model content screens explicitly rather than pretending they are scored questions.
+- Model prepared tiebreakers explicitly rather than assigning special point values to ordinary questions.
 - Consider Supabase RLS and Realtime publication requirements for every new table or operation.
 
 ## Testing Expectations
@@ -165,6 +172,7 @@ At minimum, grading tests must cover:
 - Case, punctuation, and whitespace normalization.
 - Host review override.
 - Scoring idempotency: reveal or retries must not award points twice.
+- Prepared tiebreaker numeric validation, optional manual recommendation, and the exact auto-build count of three.
 
 For live-session changes, verify with at least three teams where practical:
 

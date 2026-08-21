@@ -202,6 +202,18 @@ export type Database = {
           referencedColumns: ['id']
         }]
       }
+      quiz_tiebreakers: {
+        Row: TiebreakerRow & { quiz_id: string; updated_at: string }
+        Insert: TiebreakerInsert & { quiz_id: string; updated_at?: string }
+        Update: Partial<TiebreakerInsert> & { quiz_id?: string; updated_at?: string }
+        Relationships: [{
+          foreignKeyName: 'quiz_tiebreakers_quiz_id_fkey'
+          columns: ['quiz_id']
+          isOneToOne: false
+          referencedRelation: 'quizzes'
+          referencedColumns: ['id']
+        }]
+      }
       games: {
         Row: {
           id: string
@@ -268,6 +280,18 @@ export type Database = {
         Update: Partial<ContentScreenInsert> & { game_id?: string }
         Relationships: [{
           foreignKeyName: 'game_content_screens_game_id_fkey'
+          columns: ['game_id']
+          isOneToOne: false
+          referencedRelation: 'games'
+          referencedColumns: ['id']
+        }]
+      }
+      game_tiebreakers: {
+        Row: TiebreakerRow & { game_id: string }
+        Insert: TiebreakerInsert & { game_id: string }
+        Update: Partial<TiebreakerInsert> & { game_id?: string }
+        Relationships: [{
+          foreignKeyName: 'game_tiebreakers_game_id_fkey'
           columns: ['game_id']
           isOneToOne: false
           referencedRelation: 'games'
@@ -454,6 +478,7 @@ export type Database = {
           p_estimated_minutes: number
           p_questions: Json
           p_content_screens?: Json
+          p_tiebreakers?: Json
         }
         Returns: string
       }
@@ -532,5 +557,27 @@ type ContentScreenInsert = {
   title: string
   body?: string | null
   image_url?: string | null
+  created_at?: string
+}
+
+type TiebreakerRow = {
+  id: string
+  tiebreaker_key: string
+  position: number
+  prompt: string
+  correct_value: number
+  answer_unit: string | null
+  notes: string | null
+  created_at: string
+}
+
+type TiebreakerInsert = {
+  id?: string
+  tiebreaker_key: string
+  position: number
+  prompt: string
+  correct_value: number
+  answer_unit?: string | null
+  notes?: string | null
   created_at?: string
 }

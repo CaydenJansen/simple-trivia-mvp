@@ -30,6 +30,11 @@ import {
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { hostRecoveryScreen } from "@/lib/trivia/session-recovery";
 import { buildGameJoinUrl } from "@/lib/trivia/join-code";
+import {
+  AUTO_BUILD_TIEBREAKER_COUNT,
+  isValidTiebreakerNumericValue,
+  needsMoreManualTiebreakers,
+} from "@/lib/trivia/tiebreakers";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -989,6 +994,26 @@ type BuilderRoundData = {
   contentScreens: BuilderContentScreenData[]
 }
 
+type BuilderTiebreakerData = {
+  id: string
+  tiebreakerKey: string
+  prompt: string
+  correctValue: string
+  answerUnit: string
+  notes: string
+}
+
+function blankBuilderTiebreaker(): BuilderTiebreakerData {
+  return {
+    id: `tiebreaker-${crypto.randomUUID()}`,
+    tiebreakerKey: `tiebreaker-${crypto.randomUUID()}`,
+    prompt: '',
+    correctValue: '',
+    answerUnit: '',
+    notes: '',
+  }
+}
+
 function questionTypeLabel(value: string) {
   const labels: Record<string, string> = {
     'single-answer': 'Single Answer',
@@ -1103,6 +1128,7 @@ function QuizBuilder({ go }: { go: Go }) {
   const [quizStatus, setQuizStatus] = useState<'draft' | 'ready'>('draft')
   const [savedQuizStatus, setSavedQuizStatus] = useState<'draft' | 'ready'>('draft')
   const [rounds, setRounds] = useState<BuilderRoundData[]>([])
+  const [tiebreakers, setTiebreakers] = useState<BuilderTiebreakerData[]>([])
   const [persisted, setPersisted] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -1132,6 +1158,7 @@ function QuizBuilder({ go }: { go: Go }) {
         if (!active) return
         setTitle('Untitled Quiz')
         setRounds([{ id: 1, title: 'Round 1', questions: [], contentScreens: [] }])
+        setTiebreakers([])
         setQuizId(null)
         setQuizStatus('draft')
         setSavedQuizStatus('draft')
@@ -1141,7 +1168,7 @@ function QuizBuilder({ go }: { go: Go }) {
         return
       }
 
-      const [quizResult, questionResult, contentScreenResult] = await Promise.all([
+      const [quizResult, questionResult, contentScreenResult, tiebreakerResult] = await Promise.all([
         supabase
           .from('quizzes')
           .select('id, title, status')
@@ -1157,12 +1184,17 @@ function QuizBuilder({ go }: { go: Go }) {
           .select('id, screen_key, item_position, round_number, round_title, title, body, image_url')
           .eq('quiz_id', selectedId)
           .order('item_position', { ascending: true }),
+        supabase
+          .from('quiz_tiebreakers')
+          .select('id, tiebreaker_key, position, prompt, correct_value, answer_unit, notes')
+          .eq('quiz_id', selectedId)
+          .order('position', { ascending: true }),
       ])
 
       if (!active) return
 
-      if (quizResult.error || !quizResult.data || questionResult.error || contentScreenResult.error) {
-        console.error('Could not load quiz builder:', quizResult.error ?? questionResult.error ?? contentScreenResult.error)
+      if (quizResult.error || !quizResult.data || questionResult.error || contentScreenResult.error || tiebreakerResult.error) {
+        console.error('Could not load quiz builder:', quizResult.error ?? questionResult.error ?? contentScreenResult.error ?? tiebreakerResult.error)
         setLoadError('Could not load this quiz. Return to My Quizzes and try again.')
         setLoading(false)
         return
@@ -1226,6 +1258,14 @@ function QuizBuilder({ go }: { go: Go }) {
       setSavedQuizStatus(loadedStatus)
       const loadedRounds = [...groupedRounds.values()].sort((a, b) => a.id - b.id)
       setRounds(loadedRounds.length > 0 ? loadedRounds : [{ id: 1, title: 'Round 1', questions: [], contentScreens: [] }])
+      setTiebreakers((tiebreakerResult.data ?? []).map(row => ({
+        id: row.id,
+        tiebreakerKey: row.tiebreaker_key,
+        prompt: row.prompt,
+        correctValue: String(row.correct_value),
+        answerUnit: row.answer_unit ?? '',
+        notes: row.notes ?? '',
+      })))
       setPersisted(true)
       setDirty(false)
       setLoading(false)
@@ -1260,6 +1300,14 @@ function QuizBuilder({ go }: { go: Go }) {
       setSaveError('Give every content screen a title before saving.')
       return
     }
+    if (tiebreakers.some(tiebreaker => !tiebreaker.prompt.trim())) {
+      setSaveError('Give every tiebreaker a question before saving, or remove the unfinished tiebreaker.')
+      return
+    }
+    if (tiebreakers.some(tiebreaker => !isValidTiebreakerNumericValue(tiebreaker.correctValue))) {
+      setSaveError('Give every tiebreaker a numeric correct answer, without words or units.')
+      return
+    }
 
     setSaving(true)
     setSaveError(null)
@@ -1267,6 +1315,14 @@ function QuizBuilder({ go }: { go: Go }) {
     let itemPosition = 0
     const snapshots: Json[] = []
     const contentScreenSnapshots: Json[] = []
+    const tiebreakerSnapshots: Json[] = tiebreakers.map((tiebreaker, index) => ({
+      tiebreaker_key: tiebreaker.tiebreakerKey,
+      position: index + 1,
+      prompt: tiebreaker.prompt.trim(),
+      correct_value: tiebreaker.correctValue.trim(),
+      answer_unit: tiebreaker.answerUnit.trim() || null,
+      notes: tiebreaker.notes.trim() || null,
+    }))
 
     rounds.forEach((round, roundIndex) => {
       const roundQuestionCount = round.questions.length
@@ -1326,6 +1382,7 @@ function QuizBuilder({ go }: { go: Go }) {
       p_estimated_minutes: estimatedMinutes,
       p_questions: snapshots,
       p_content_screens: contentScreenSnapshots,
+      p_tiebreakers: tiebreakerSnapshots,
     })
 
     setSaving(false)
@@ -1524,6 +1581,23 @@ function QuizBuilder({ go }: { go: Go }) {
               <I.plus /> Add Round
             </span>
           </button>
+          <TiebreakerBuilder
+            tiebreakers={tiebreakers}
+            onAdd={() => {
+              setTiebreakers(current => [...current, blankBuilderTiebreaker()])
+              setDirty(true)
+            }}
+            onUpdate={(id, updates) => {
+              setTiebreakers(current => current.map(tiebreaker => tiebreaker.id === id
+                ? { ...tiebreaker, ...updates }
+                : tiebreaker))
+              setDirty(true)
+            }}
+            onDelete={id => {
+              setTiebreakers(current => current.filter(tiebreaker => tiebreaker.id !== id))
+              setDirty(true)
+            }}
+          />
         </main>
 
         {/* Structure sidebar */}
@@ -1553,6 +1627,10 @@ function QuizBuilder({ go }: { go: Go }) {
                 <div style={{ borderTop: `1px solid ${C.line}` }} className="mt-3 pt-3 flex justify-between text-xs">
                   <span style={{ color: C.sub }}>Total</span>
                   <span style={{ color: C.ink }} className="font-bold">{questionCount} questions</span>
+                </div>
+                <div className="mt-2 flex justify-between px-2 text-xs" style={{ color: C.sub }}>
+                  <span>Tiebreakers</span>
+                  <span className="font-mono">{tiebreakers.length}</span>
                 </div>
               </>
             )}
@@ -1679,6 +1757,102 @@ function QuizBuilder({ go }: { go: Go }) {
 
       {previewOpen && <QuizPreview title={title} rounds={rounds} onClose={() => setPreviewOpen(false)} />}
     </div>
+  )
+}
+
+function TiebreakerBuilder({ tiebreakers, onAdd, onUpdate, onDelete }: {
+  tiebreakers: BuilderTiebreakerData[]
+  onAdd: () => void
+  onUpdate: (id: string, updates: Partial<BuilderTiebreakerData>) => void
+  onDelete: (id: string) => void
+}) {
+  const belowRecommendation = needsMoreManualTiebreakers(tiebreakers.length)
+
+  return (
+    <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 style={{ color: C.ink }} className="text-lg font-extrabold">Tiebreakers</h2>
+            <span style={{ background: C.violetMist, color: C.violet }} className="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider">Optional</span>
+          </div>
+          <p style={{ color: C.sub }} className="mt-1 text-sm leading-6">
+            We recommend adding at least 2 closest-answer questions, just in case.<br />
+            Already have your own way of settling a tie? You can skip these.
+          </p>
+        </div>
+        <Btn v="secondary" sz="sm" onClick={onAdd}><I.plus /> Add Tiebreaker</Btn>
+      </div>
+
+      {tiebreakers.length === 0 ? (
+        <div style={{ border: `1px dashed ${C.line}`, color: C.sub }} className="mt-4 rounded-xl px-4 py-5 text-center text-sm">
+          No prepared tiebreakers. This will not prevent you from saving or hosting the quiz.
+        </div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          {tiebreakers.map((tiebreaker, index) => (
+            <div key={tiebreaker.id} style={{ border: `1px solid ${C.line}` }} className="rounded-xl p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <p style={{ color: C.ink }} className="text-sm font-bold">Tiebreaker {index + 1}</p>
+                <button type="button" onClick={() => onDelete(tiebreaker.id)} style={{ color: C.stop }} className="text-xs font-bold hover:underline">Remove</button>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[1fr_12rem]">
+                <label className="text-xs font-semibold" style={{ color: C.sub }}>
+                  Closest-answer question
+                  <textarea
+                    value={tiebreaker.prompt}
+                    onChange={event => onUpdate(tiebreaker.id, { prompt: event.target.value })}
+                    placeholder="Approximately how many kilometres long is the Great Wall of China?"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                    className="mt-1.5 min-h-20 w-full resize-y rounded-xl bg-white px-3 py-2.5 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
+                  />
+                </label>
+                <label className="text-xs font-semibold" style={{ color: C.sub }}>
+                  Correct numeric answer
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={tiebreaker.correctValue}
+                    onChange={event => onUpdate(tiebreaker.id, { correctValue: event.target.value })}
+                    placeholder="21196"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                    className="mt-1.5 w-full rounded-xl bg-white px-3 py-2.5 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
+                  />
+                </label>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="text-xs font-semibold" style={{ color: C.sub }}>
+                  Unit (optional)
+                  <input
+                    value={tiebreaker.answerUnit}
+                    onChange={event => onUpdate(tiebreaker.id, { answerUnit: event.target.value })}
+                    placeholder="kilometres"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                    className="mt-1.5 w-full rounded-xl bg-white px-3 py-2.5 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
+                  />
+                </label>
+                <label className="text-xs font-semibold" style={{ color: C.sub }}>
+                  Host notes (optional)
+                  <input
+                    value={tiebreaker.notes}
+                    onChange={event => onUpdate(tiebreaker.id, { notes: event.target.value })}
+                    placeholder="Source or context"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                    className="mt-1.5 w-full rounded-xl bg-white px-3 py-2.5 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {belowRecommendation && tiebreakers.length > 0 && (
+        <p style={{ color: C.caution }} className="mt-3 text-xs font-semibold">
+          One is fine, but adding one more gives you a backup if teams are equally close.
+        </p>
+      )}
+    </section>
   )
 }
 
@@ -2664,6 +2838,13 @@ function AutoBuild({ go }: { go: Go }) {
             </p>
           </div>
 
+          <div style={{ background: C.violetMist, border: `1px solid ${C.violetPale}` }} className="rounded-2xl p-5">
+            <p style={{ color: C.violet }} className="text-sm font-bold">{AUTO_BUILD_TIEBREAKER_COUNT} prepared tiebreakers included</p>
+            <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">
+              Auto-build will add exactly {AUTO_BUILD_TIEBREAKER_COUNT} closest-answer questions, separate from the 30 scored questions and estimated running time.
+            </p>
+          </div>
+
           <Btn sz="lg" cls="w-full" onClick={() => go('quiz-review')}>Generate Quiz →</Btn>
         </div>
       </main>
@@ -2753,6 +2934,16 @@ function QuizReview({ go }: { go: Go }) {
           {REVIEW_ROUNDS.map(round => (
             <ReviewRound key={round.id} round={round} onEdit={type => setModal(type)} />
           ))}
+
+          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p style={{ color: C.ink }} className="font-bold">Prepared Tiebreakers</p>
+                <p style={{ color: C.sub }} className="mt-1 text-sm">{AUTO_BUILD_TIEBREAKER_COUNT} closest-answer questions are included separately from the scored quiz.</p>
+              </div>
+              <span style={{ background: C.violetMist, color: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">{AUTO_BUILD_TIEBREAKER_COUNT} included</span>
+            </div>
+          </div>
 
           <button style={{ border: `2px dashed ${C.line}` }}
             className="w-full py-4 rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors hover:border-violet">
