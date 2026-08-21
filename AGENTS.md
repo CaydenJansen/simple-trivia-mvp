@@ -19,6 +19,7 @@
 - Hosting a quiz must create a fresh game with its own six-digit code, teams, submissions, scores, state, and question snapshot.
 - Never regress to using `728461` or another hard-coded code as the normal hosting path.
 - Preserve the `quiz_questions` → `game_questions` snapshot boundary so later quiz edits cannot alter an active or completed game.
+- Preserve explicit provenance across every snapshot: source question ID/revision on quiz copies, and quiz-question plus source provenance on game copies. Never infer reuse by comparing prompt text.
 - Preserve the separate `quiz_tiebreakers` → `game_tiebreakers` snapshot boundary. Prepared tiebreakers are not ordinary scored questions.
 - Auto-Build draws from platform-owned `source_questions` and `source_tiebreakers`, then creates independent quiz snapshots through the same atomic save boundary as manual authoring.
 - Supabase is the source of truth for live game state. Do not replace working database or Realtime behaviour with fake local state.
@@ -42,11 +43,22 @@
 - Always call the platform question bank **Question Library**. “Verified” may be question metadata or a badge, not part of the product name.
 - Normal hosts may read but never edit platform Question Library records. My Questions records are user-owned and editable by their owner.
 - Platform Question Library administration is private and permission-enforced; hidden customer UI alone is not an access-control boundary.
+- Keep broad subject category, controlled topic tags, mechanic, prompt pattern, answer type, editorial difficulty, factual stability, editorial status, verification, media, part metadata, bonus metadata, and provenance as distinct concepts. Do not collapse them into a generic tags field.
+- Broad source categories are: Geography; History; Science & Nature; Sport; Music; Film & Television; Arts & Literature; Food & Drink; Society & Culture; Language & Words; Technology & Inventions; Games & Leisure; Business & Brands; Politics & Government.
+- **General Knowledge** is a varied quiz/round composition mode, never a source category. Do not store **Mixed** as a source category; derive mixed summaries from part/category metadata.
+- Topic tags are controlled canonical entities with aliases and specificity/diversity meaning. Do not reintroduce arbitrary comma-separated tags as the long-term source of truth.
+- Use numeric editorial difficulty `1..5` (`Very Easy` through `Very Hard`). Keep future observed difficulty and gameplay metrics separate; never overwrite editorial judgment with performance data.
+- Keep editorial workflow (`draft`, `needs_review`, `active`, `archived`), verification, and factual stability (`stable`, `review_periodically`, `volatile`) independent.
+- Media is optional content, not a grading mechanic. The durable mechanics are `single-answer`, `multiple-choice`, `multi-answer`, `multi-part`, and `ranking`; image content may accompany any suitable mechanic.
+- An ordinary scored question may have at most one attached bonus for MVP. Bonuses own their prompt, answer, aliases, points, media, and metadata; they affect maximum score, estimated time, and diversity, but not the displayed normal question count.
+- Multi-part source questions store category, tags, and difficulty on their individual parts. Derive the parent category union and difficulty range instead of inventing a single mixed category or average difficulty.
 - Prevent duplicate team names within a game.
 - Only joinable lobby games should accept new teams.
 - Host live controls and question content must remain usable on small laptop screens.
 - Prepared tiebreakers are optional for manually built quizzes; recommend at least two without blocking save or hosting. Automatically built quizzes must prepare exactly three.
 - Auto-Build must fail clearly when active source content cannot satisfy the requested count, topics, difficulty range, or three-tiebreaker requirement. Never silently duplicate questions or reduce the requested quiz.
+- Auto-Build is conceptually two-stage: select an eligible candidate set using hard requirements, then sequence it with soft diversity penalties. Its diversity fingerprint includes part and bonus metadata.
+- Explicit round themes discount their own broad category/tag repetition, but not repeated specific subtopics. Check whole-quiz saturation as well as adjacent repetition.
 - Tiebreakers are numeric closest-answer questions used only to resolve a consequential final-placement tie. Normal round and in-game ties are allowed.
 - Do not include tiebreakers in normal question counts, running-time estimates, or game points. Resolving a tie must never change a team's trivia score.
 - A future final-results resolution must offer tiebreaker, allowed-tie, and manual ordering methods, and store the decision and placement separately from score.
@@ -66,7 +78,8 @@ Supported question concepts are:
 - `multi-answer`: an unordered set of responses.
 - `multi-part`: slot-specific clues and responses.
 - `ranking`: ordered items where position matters.
-- `image-question`: an ordinary grading type with optional media, not a separate semantic grading model.
+
+Legacy `image-question` records may remain during compatibility migrations, but normalize them to their actual mechanic plus optional media. Do not create new grading semantics around `image-question`.
 
 Normalize typed answers case-insensitively and ignore non-semantic punctuation and spacing. Fuzzy or ambiguous matches must remain reviewable by the host. Players see only final grading, never matching confidence, automation, or host-review details.
 
@@ -149,6 +162,9 @@ Preserve and verify:
 - Store accepted aliases explicitly; do not hide them in display text.
 - Model content screens explicitly rather than pretending they are scored questions.
 - Model prepared tiebreakers explicitly rather than assigning special point values to ordinary questions.
+- Keep source metadata relational where it must be searched and controlled. Quiz/game snapshots may deliberately denormalize structured metadata so they remain independent of later taxonomy edits.
+- Treat current flat `category`, `difficulty`, `tags`, `image_url`, and mechanic-specific JSON columns as compatibility projections while the normalized model is adopted. Do not remove them until every deployed reader and writer has migrated.
+- External bulk imports must pass through separate staging, validation, normalization, and review. Never shape production tables around a historical import format.
 - Consider Supabase RLS and Realtime publication requirements for every new table or operation.
 
 ## Testing Expectations

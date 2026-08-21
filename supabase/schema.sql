@@ -11,6 +11,8 @@
 -- supabase/migrations/20260821170000_add_prepared_tiebreakers.sql.
 -- Auto-Build source content is versioned in
 -- supabase/migrations/20260821190000_add_auto_build_sources.sql.
+-- The normalized Question Library metadata foundation is versioned in
+-- supabase/migrations/20260821230000_add_question_library_metadata_foundation.sql.
 -- Existing deployed RLS policies and Realtime publication membership are
 -- otherwise managed by Supabase and are not replaced by this file.
 
@@ -501,3 +503,174 @@ grant execute on function public.cancel_host_game(text) to authenticated;
 
 comment on function public.cancel_host_game(text) is
   'Ends an owned lobby or live game without deleting its teams, submissions, scores, or snapshots.';
+
+-- Normalized source metadata. Legacy source-question category, difficulty,
+-- tags, image URL, and answer payload columns remain runtime compatibility
+-- projections while the editors and snapshot pipeline migrate incrementally.
+create table if not exists public.categories (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  name text not null unique,
+  is_active boolean not null default true,
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.prompt_patterns (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  name text not null unique,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.answer_types (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  name text not null unique,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.tags (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  name text not null,
+  parent_tag_id uuid references public.tags(id) on delete set null,
+  specificity smallint not null default 2 check (specificity between 1 and 4),
+  diversity_weight numeric(5,2) not null default 1 check (diversity_weight >= 0),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.tag_aliases (
+  id uuid primary key default gen_random_uuid(),
+  tag_id uuid not null references public.tags(id) on delete cascade,
+  alias text not null,
+  normalized_alias text not null unique,
+  created_at timestamptz not null default now(),
+  unique (tag_id, alias)
+);
+
+create table if not exists public.media_assets (
+  id uuid primary key default gen_random_uuid(),
+  origin text not null check (origin in ('platform', 'user')),
+  owner_id uuid references auth.users(id) on delete cascade,
+  kind text not null default 'image' check (kind in ('image', 'audio', 'video')),
+  url text not null,
+  alt_text text,
+  caption text,
+  credit text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (
+    (origin = 'user' and owner_id is not null)
+    or (origin = 'platform' and owner_id is null)
+  )
+);
+
+alter table public.source_questions
+  add column if not exists mechanic text,
+  add column if not exists prompt_pattern_id uuid references public.prompt_patterns(id) on delete set null,
+  add column if not exists answer_type_id uuid references public.answer_types(id) on delete set null,
+  add column if not exists editorial_difficulty smallint,
+  add column if not exists scoring_mode text,
+  add column if not exists stability text not null default 'stable',
+  add column if not exists as_of_date date,
+  add column if not exists review_due_at timestamptz,
+  add column if not exists valid_from timestamptz,
+  add column if not exists expires_at timestamptz,
+  add column if not exists media_asset_id uuid references public.media_assets(id) on delete set null,
+  add column if not exists prompt_signature text;
+
+create table if not exists public.source_question_categories (
+  source_question_id uuid not null references public.source_questions(id) on delete cascade,
+  category_id uuid not null references public.categories(id) on delete restrict,
+  role text not null default 'primary' check (role in ('primary', 'secondary')),
+  created_at timestamptz not null default now(),
+  primary key (source_question_id, category_id)
+);
+
+create table if not exists public.source_question_tags (
+  source_question_id uuid not null references public.source_questions(id) on delete cascade,
+  tag_id uuid not null references public.tags(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  primary key (source_question_id, tag_id)
+);
+
+create table if not exists public.source_question_parts (
+  id uuid primary key default gen_random_uuid(),
+  source_question_id uuid not null references public.source_questions(id) on delete cascade,
+  position integer not null check (position > 0),
+  label text not null,
+  prompt text not null,
+  correct_answer jsonb not null,
+  accepted_answers jsonb not null default '[]'::jsonb,
+  prompt_pattern_id uuid references public.prompt_patterns(id) on delete set null,
+  answer_type_id uuid references public.answer_types(id) on delete set null,
+  editorial_difficulty smallint check (editorial_difficulty is null or editorial_difficulty between 1 and 5),
+  stability text not null default 'stable' check (stability in ('stable', 'review_periodically', 'volatile')),
+  as_of_date date,
+  review_due_at timestamptz,
+  valid_from timestamptz,
+  expires_at timestamptz,
+  media_asset_id uuid references public.media_assets(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (source_question_id, position),
+  unique (source_question_id, label)
+);
+
+create table if not exists public.source_question_part_categories (
+  source_question_part_id uuid not null references public.source_question_parts(id) on delete cascade,
+  category_id uuid not null references public.categories(id) on delete restrict,
+  role text not null default 'primary' check (role in ('primary', 'secondary')),
+  created_at timestamptz not null default now(),
+  primary key (source_question_part_id, category_id)
+);
+
+create table if not exists public.source_question_part_tags (
+  source_question_part_id uuid not null references public.source_question_parts(id) on delete cascade,
+  tag_id uuid not null references public.tags(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  primary key (source_question_part_id, tag_id)
+);
+
+create table if not exists public.source_question_bonuses (
+  id uuid primary key default gen_random_uuid(),
+  source_question_id uuid not null unique references public.source_questions(id) on delete cascade,
+  prompt text not null,
+  correct_answer jsonb not null,
+  accepted_answers jsonb not null default '[]'::jsonb,
+  points integer not null default 1 check (points > 0),
+  prompt_pattern_id uuid references public.prompt_patterns(id) on delete set null,
+  answer_type_id uuid references public.answer_types(id) on delete set null,
+  editorial_difficulty smallint check (editorial_difficulty is null or editorial_difficulty between 1 and 5),
+  stability text not null default 'stable' check (stability in ('stable', 'review_periodically', 'volatile')),
+  as_of_date date,
+  review_due_at timestamptz,
+  valid_from timestamptz,
+  expires_at timestamptz,
+  media_asset_id uuid references public.media_assets(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.source_question_bonus_categories (
+  source_question_bonus_id uuid not null references public.source_question_bonuses(id) on delete cascade,
+  category_id uuid not null references public.categories(id) on delete restrict,
+  role text not null default 'primary' check (role in ('primary', 'secondary')),
+  created_at timestamptz not null default now(),
+  primary key (source_question_bonus_id, category_id)
+);
+
+create table if not exists public.source_question_bonus_tags (
+  source_question_bonus_id uuid not null references public.source_question_bonuses(id) on delete cascade,
+  tag_id uuid not null references public.tags(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  primary key (source_question_bonus_id, tag_id)
+);

@@ -8,6 +8,11 @@ export type Json =
 
 export type QuestionOrigin = 'platform' | 'user'
 export type QuestionStatus = 'draft' | 'needs_review' | 'active' | 'archived'
+export type QuestionMechanic = 'single-answer' | 'multiple-choice' | 'multi-answer' | 'multi-part' | 'ranking'
+export type ScoringMode = 'fixed' | 'per-item' | 'all-or-nothing'
+export type FactualStability = 'stable' | 'review_periodically' | 'volatile'
+export type CategoryRole = 'primary' | 'secondary'
+export type MediaKind = 'image' | 'audio' | 'video'
 export type QuestionType =
   | 'single-answer'
   | 'image-question'
@@ -19,6 +24,12 @@ export type QuestionType =
 export type Database = {
   public: {
     Tables: {
+      categories: ControlledCategoryTable
+      prompt_patterns: ControlledLookupTable
+      answer_types: ControlledLookupTable
+      tags: ControlledTagTable
+      tag_aliases: TagAliasTable
+      media_assets: MediaAssetTable
       quizzes: {
         Row: {
           id: string
@@ -70,12 +81,24 @@ export type Database = {
           origin: QuestionOrigin
           owner_id: string | null
           question_type: QuestionType
+          mechanic: QuestionMechanic
           prompt: string
           correct_answer: Json
           accepted_answers: Json
           options: Json | null
           category: string | null
           difficulty: string | null
+          editorial_difficulty: number | null
+          scoring_mode: ScoringMode
+          prompt_pattern_id: string | null
+          answer_type_id: string | null
+          stability: FactualStability
+          as_of_date: string | null
+          review_due_at: string | null
+          valid_from: string | null
+          expires_at: string | null
+          media_asset_id: string | null
+          prompt_signature: string | null
           tags: string[]
           image_url: string | null
           notes: string | null
@@ -94,12 +117,24 @@ export type Database = {
           origin: QuestionOrigin
           owner_id?: string | null
           question_type: QuestionType
+          mechanic?: QuestionMechanic
           prompt: string
           correct_answer: Json
           accepted_answers?: Json
           options?: Json | null
           category?: string | null
           difficulty?: string | null
+          editorial_difficulty?: number | null
+          scoring_mode?: ScoringMode
+          prompt_pattern_id?: string | null
+          answer_type_id?: string | null
+          stability?: FactualStability
+          as_of_date?: string | null
+          review_due_at?: string | null
+          valid_from?: string | null
+          expires_at?: string | null
+          media_asset_id?: string | null
+          prompt_signature?: string | null
           tags?: string[]
           image_url?: string | null
           notes?: string | null
@@ -118,12 +153,24 @@ export type Database = {
           origin?: QuestionOrigin
           owner_id?: string | null
           question_type?: QuestionType
+          mechanic?: QuestionMechanic
           prompt?: string
           correct_answer?: Json
           accepted_answers?: Json
           options?: Json | null
           category?: string | null
           difficulty?: string | null
+          editorial_difficulty?: number | null
+          scoring_mode?: ScoringMode
+          prompt_pattern_id?: string | null
+          answer_type_id?: string | null
+          stability?: FactualStability
+          as_of_date?: string | null
+          review_due_at?: string | null
+          valid_from?: string | null
+          expires_at?: string | null
+          media_asset_id?: string | null
+          prompt_signature?: string | null
           tags?: string[]
           image_url?: string | null
           notes?: string | null
@@ -152,8 +199,37 @@ export type Database = {
             referencedRelation: 'users'
             referencedColumns: ['id']
           },
+          {
+            foreignKeyName: 'source_questions_prompt_pattern_id_fkey'
+            columns: ['prompt_pattern_id']
+            isOneToOne: false
+            referencedRelation: 'prompt_patterns'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'source_questions_answer_type_id_fkey'
+            columns: ['answer_type_id']
+            isOneToOne: false
+            referencedRelation: 'answer_types'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'source_questions_media_asset_id_fkey'
+            columns: ['media_asset_id']
+            isOneToOne: false
+            referencedRelation: 'media_assets'
+            referencedColumns: ['id']
+          },
         ]
       }
+      source_question_categories: SourceQuestionCategoryTable
+      source_question_tags: SourceQuestionTagTable
+      source_question_parts: SourceQuestionPartTable
+      source_question_part_categories: SourceQuestionPartCategoryTable
+      source_question_part_tags: SourceQuestionPartTagTable
+      source_question_bonuses: SourceQuestionBonusTable
+      source_question_bonus_categories: SourceQuestionBonusCategoryTable
+      source_question_bonus_tags: SourceQuestionBonusTagTable
       source_tiebreakers: {
         Row: {
           id: string
@@ -622,4 +698,457 @@ type TiebreakerInsert = {
   answer_unit?: string | null
   notes?: string | null
   created_at?: string
+}
+
+type ControlledLookupTable = {
+  Row: {
+    id: string
+    slug: string
+    name: string
+    is_active: boolean
+    created_at: string
+    updated_at: string
+  }
+  Insert: {
+    id?: string
+    slug: string
+    name: string
+    is_active?: boolean
+    created_at?: string
+    updated_at?: string
+  }
+  Update: Partial<ControlledLookupTable['Insert']>
+  Relationships: []
+}
+
+type ControlledCategoryTable = {
+  Row: ControlledLookupTable['Row'] & { sort_order: number }
+  Insert: ControlledLookupTable['Insert'] & { sort_order?: number }
+  Update: Partial<ControlledCategoryTable['Insert']>
+  Relationships: []
+}
+
+type ControlledTagTable = {
+  Row: {
+    id: string
+    slug: string
+    name: string
+    parent_tag_id: string | null
+    specificity: number
+    diversity_weight: number
+    is_active: boolean
+    created_at: string
+    updated_at: string
+  }
+  Insert: {
+    id?: string
+    slug: string
+    name: string
+    parent_tag_id?: string | null
+    specificity?: number
+    diversity_weight?: number
+    is_active?: boolean
+    created_at?: string
+    updated_at?: string
+  }
+  Update: Partial<ControlledTagTable['Insert']>
+  Relationships: [{
+    foreignKeyName: 'tags_parent_tag_id_fkey'
+    columns: ['parent_tag_id']
+    isOneToOne: false
+    referencedRelation: 'tags'
+    referencedColumns: ['id']
+  }]
+}
+
+type TagAliasTable = {
+  Row: {
+    id: string
+    tag_id: string
+    alias: string
+    normalized_alias: string
+    created_at: string
+  }
+  Insert: {
+    id?: string
+    tag_id: string
+    alias: string
+    normalized_alias: string
+    created_at?: string
+  }
+  Update: Partial<TagAliasTable['Insert']>
+  Relationships: [{
+    foreignKeyName: 'tag_aliases_tag_id_fkey'
+    columns: ['tag_id']
+    isOneToOne: false
+    referencedRelation: 'tags'
+    referencedColumns: ['id']
+  }]
+}
+
+type MediaAssetTable = {
+  Row: {
+    id: string
+    origin: QuestionOrigin
+    owner_id: string | null
+    kind: MediaKind
+    url: string
+    alt_text: string | null
+    caption: string | null
+    credit: string | null
+    created_at: string
+    updated_at: string
+  }
+  Insert: {
+    id?: string
+    origin: QuestionOrigin
+    owner_id?: string | null
+    kind?: MediaKind
+    url: string
+    alt_text?: string | null
+    caption?: string | null
+    credit?: string | null
+    created_at?: string
+    updated_at?: string
+  }
+  Update: Partial<MediaAssetTable['Insert']>
+  Relationships: [{
+    foreignKeyName: 'media_assets_owner_id_fkey'
+    columns: ['owner_id']
+    isOneToOne: false
+    referencedRelation: 'users'
+    referencedColumns: ['id']
+  }]
+}
+
+type SourceQuestionCategoryTable = {
+  Row: {
+    source_question_id: string
+    category_id: string
+    role: CategoryRole
+    created_at: string
+  }
+  Insert: {
+    source_question_id: string
+    category_id: string
+    role?: CategoryRole
+    created_at?: string
+  }
+  Update: Partial<SourceQuestionCategoryTable['Insert']>
+  Relationships: [
+    {
+      foreignKeyName: 'source_question_categories_source_question_id_fkey'
+      columns: ['source_question_id']
+      isOneToOne: false
+      referencedRelation: 'source_questions'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_categories_category_id_fkey'
+      columns: ['category_id']
+      isOneToOne: false
+      referencedRelation: 'categories'
+      referencedColumns: ['id']
+    },
+  ]
+}
+
+type SourceQuestionTagTable = {
+  Row: {
+    source_question_id: string
+    tag_id: string
+    created_at: string
+  }
+  Insert: {
+    source_question_id: string
+    tag_id: string
+    created_at?: string
+  }
+  Update: Partial<SourceQuestionTagTable['Insert']>
+  Relationships: [
+    {
+      foreignKeyName: 'source_question_tags_source_question_id_fkey'
+      columns: ['source_question_id']
+      isOneToOne: false
+      referencedRelation: 'source_questions'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_tags_tag_id_fkey'
+      columns: ['tag_id']
+      isOneToOne: false
+      referencedRelation: 'tags'
+      referencedColumns: ['id']
+    },
+  ]
+}
+
+type SourceQuestionPartTable = {
+  Row: {
+    id: string
+    source_question_id: string
+    position: number
+    label: string
+    prompt: string
+    correct_answer: Json
+    accepted_answers: Json
+    prompt_pattern_id: string | null
+    answer_type_id: string | null
+    editorial_difficulty: number | null
+    stability: FactualStability
+    as_of_date: string | null
+    review_due_at: string | null
+    valid_from: string | null
+    expires_at: string | null
+    media_asset_id: string | null
+    created_at: string
+    updated_at: string
+  }
+  Insert: {
+    id?: string
+    source_question_id: string
+    position: number
+    label: string
+    prompt: string
+    correct_answer: Json
+    accepted_answers?: Json
+    prompt_pattern_id?: string | null
+    answer_type_id?: string | null
+    editorial_difficulty?: number | null
+    stability?: FactualStability
+    as_of_date?: string | null
+    review_due_at?: string | null
+    valid_from?: string | null
+    expires_at?: string | null
+    media_asset_id?: string | null
+    created_at?: string
+    updated_at?: string
+  }
+  Update: Partial<SourceQuestionPartTable['Insert']>
+  Relationships: [
+    {
+      foreignKeyName: 'source_question_parts_source_question_id_fkey'
+      columns: ['source_question_id']
+      isOneToOne: false
+      referencedRelation: 'source_questions'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_parts_prompt_pattern_id_fkey'
+      columns: ['prompt_pattern_id']
+      isOneToOne: false
+      referencedRelation: 'prompt_patterns'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_parts_answer_type_id_fkey'
+      columns: ['answer_type_id']
+      isOneToOne: false
+      referencedRelation: 'answer_types'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_parts_media_asset_id_fkey'
+      columns: ['media_asset_id']
+      isOneToOne: false
+      referencedRelation: 'media_assets'
+      referencedColumns: ['id']
+    },
+  ]
+}
+
+type SourceQuestionPartCategoryTable = {
+  Row: {
+    source_question_part_id: string
+    category_id: string
+    role: CategoryRole
+    created_at: string
+  }
+  Insert: {
+    source_question_part_id: string
+    category_id: string
+    role?: CategoryRole
+    created_at?: string
+  }
+  Update: Partial<SourceQuestionPartCategoryTable['Insert']>
+  Relationships: [
+    {
+      foreignKeyName: 'source_question_part_categories_source_question_part_id_fkey'
+      columns: ['source_question_part_id']
+      isOneToOne: false
+      referencedRelation: 'source_question_parts'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_part_categories_category_id_fkey'
+      columns: ['category_id']
+      isOneToOne: false
+      referencedRelation: 'categories'
+      referencedColumns: ['id']
+    },
+  ]
+}
+
+type SourceQuestionPartTagTable = {
+  Row: {
+    source_question_part_id: string
+    tag_id: string
+    created_at: string
+  }
+  Insert: {
+    source_question_part_id: string
+    tag_id: string
+    created_at?: string
+  }
+  Update: Partial<SourceQuestionPartTagTable['Insert']>
+  Relationships: [
+    {
+      foreignKeyName: 'source_question_part_tags_source_question_part_id_fkey'
+      columns: ['source_question_part_id']
+      isOneToOne: false
+      referencedRelation: 'source_question_parts'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_part_tags_tag_id_fkey'
+      columns: ['tag_id']
+      isOneToOne: false
+      referencedRelation: 'tags'
+      referencedColumns: ['id']
+    },
+  ]
+}
+
+type SourceQuestionBonusTable = {
+  Row: {
+    id: string
+    source_question_id: string
+    prompt: string
+    correct_answer: Json
+    accepted_answers: Json
+    points: number
+    prompt_pattern_id: string | null
+    answer_type_id: string | null
+    editorial_difficulty: number | null
+    stability: FactualStability
+    as_of_date: string | null
+    review_due_at: string | null
+    valid_from: string | null
+    expires_at: string | null
+    media_asset_id: string | null
+    created_at: string
+    updated_at: string
+  }
+  Insert: {
+    id?: string
+    source_question_id: string
+    prompt: string
+    correct_answer: Json
+    accepted_answers?: Json
+    points?: number
+    prompt_pattern_id?: string | null
+    answer_type_id?: string | null
+    editorial_difficulty?: number | null
+    stability?: FactualStability
+    as_of_date?: string | null
+    review_due_at?: string | null
+    valid_from?: string | null
+    expires_at?: string | null
+    media_asset_id?: string | null
+    created_at?: string
+    updated_at?: string
+  }
+  Update: Partial<SourceQuestionBonusTable['Insert']>
+  Relationships: [
+    {
+      foreignKeyName: 'source_question_bonuses_source_question_id_fkey'
+      columns: ['source_question_id']
+      isOneToOne: true
+      referencedRelation: 'source_questions'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_bonuses_prompt_pattern_id_fkey'
+      columns: ['prompt_pattern_id']
+      isOneToOne: false
+      referencedRelation: 'prompt_patterns'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_bonuses_answer_type_id_fkey'
+      columns: ['answer_type_id']
+      isOneToOne: false
+      referencedRelation: 'answer_types'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_bonuses_media_asset_id_fkey'
+      columns: ['media_asset_id']
+      isOneToOne: false
+      referencedRelation: 'media_assets'
+      referencedColumns: ['id']
+    },
+  ]
+}
+
+type SourceQuestionBonusCategoryTable = {
+  Row: {
+    source_question_bonus_id: string
+    category_id: string
+    role: CategoryRole
+    created_at: string
+  }
+  Insert: {
+    source_question_bonus_id: string
+    category_id: string
+    role?: CategoryRole
+    created_at?: string
+  }
+  Update: Partial<SourceQuestionBonusCategoryTable['Insert']>
+  Relationships: [
+    {
+      foreignKeyName: 'source_question_bonus_categories_source_question_bonus_id_fkey'
+      columns: ['source_question_bonus_id']
+      isOneToOne: false
+      referencedRelation: 'source_question_bonuses'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_bonus_categories_category_id_fkey'
+      columns: ['category_id']
+      isOneToOne: false
+      referencedRelation: 'categories'
+      referencedColumns: ['id']
+    },
+  ]
+}
+
+type SourceQuestionBonusTagTable = {
+  Row: {
+    source_question_bonus_id: string
+    tag_id: string
+    created_at: string
+  }
+  Insert: {
+    source_question_bonus_id: string
+    tag_id: string
+    created_at?: string
+  }
+  Update: Partial<SourceQuestionBonusTagTable['Insert']>
+  Relationships: [
+    {
+      foreignKeyName: 'source_question_bonus_tags_source_question_bonus_id_fkey'
+      columns: ['source_question_bonus_id']
+      isOneToOne: false
+      referencedRelation: 'source_question_bonuses'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'source_question_bonus_tags_tag_id_fkey'
+      columns: ['tag_id']
+      isOneToOne: false
+      referencedRelation: 'tags'
+      referencedColumns: ['id']
+    },
+  ]
 }
