@@ -403,6 +403,7 @@ const I = {
   grip: () => <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="3.5" y="2" width="2" height="2" rx="1"/><rect x="8.5" y="2" width="2" height="2" rx="1"/><rect x="3.5" y="6" width="2" height="2" rx="1"/><rect x="8.5" y="6" width="2" height="2" rx="1"/><rect x="3.5" y="10" width="2" height="2" rx="1"/><rect x="8.5" y="10" width="2" height="2" rx="1"/></svg>,
   pencil: () => <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M8.5 2.5l2 2L3 12H1v-2l7.5-7.5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>,
   refresh: () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5c1.8 0 3.4.87 4.4 2.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><polyline points="12,1 12.5,4.7 9,5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  browse: () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.5"/><path d="M10.5 10.5L14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>,
   copy: () => <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="4" y="4" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><path d="M3 3h6.5M3 9.5V3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>,
   trash: () => <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 3.5h9M5 3.5V2.5h3v1M5.5 5.5v4M7.5 5.5v4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M3 3.5l.6 7h5.8l.6-7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>,
   check: (sz = 16) => <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none"><path d="M3 8l4 4 6-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>,
@@ -2556,7 +2557,7 @@ function BuilderQuestion({ q, idx, replacing, onEdit, onReplace, onCycleLibrary,
             <I.refresh /> {replacing ? 'Finding…' : 'Try another'}
           </button>
         )}
-        <IBtn icon={<I.refresh />} title={isLibraryQuestion ? 'Choose replacement manually' : 'Replace'} onClick={onReplace} />
+        <IBtn icon={<I.browse />} title={isLibraryQuestion ? 'Choose replacement manually' : 'Choose replacement'} onClick={onReplace} />
         <IBtn icon={<I.copy />} title="Duplicate" onClick={onDuplicate} />
         <IBtn icon={<I.trash />} title="Delete" onClick={onDelete} danger />
       </div>
