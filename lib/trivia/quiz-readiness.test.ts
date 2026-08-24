@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkQuizReadiness, quizBuilderPrimaryAction, quizStatusFromReadiness } from './quiz-readiness'
+import { checkQuizReadiness, quizCanHost, quizStatusFromReadiness } from './quiz-readiness'
 
 function readyQuiz() {
   return {
@@ -49,11 +49,11 @@ describe('quiz readiness', () => {
     expect(quizStatusFromReadiness({ ready: false })).toBe('draft')
   })
 
-  it('uses one primary action for saving and hosting', () => {
-    expect(quizBuilderPrimaryAction({ persisted: false, dirty: true, ready: false, status: 'draft' })).toBe('save')
-    expect(quizBuilderPrimaryAction({ persisted: false, dirty: true, ready: true, status: 'draft' })).toBe('save-and-host')
-    expect(quizBuilderPrimaryAction({ persisted: true, dirty: false, ready: true, status: 'ready' })).toBe('host')
-    expect(quizBuilderPrimaryAction({ persisted: true, dirty: false, ready: true, status: 'draft' })).toBe('save-and-host')
-    expect(quizBuilderPrimaryAction({ persisted: true, dirty: false, ready: false, status: 'draft' })).toBe('blocked')
+  it('only hosts the exact saved and complete quiz version', () => {
+    expect(quizCanHost({ persisted: true, dirty: false, ready: true, status: 'ready' })).toBe(true)
+    expect(quizCanHost({ persisted: false, dirty: true, ready: true, status: 'draft' })).toBe(false)
+    expect(quizCanHost({ persisted: true, dirty: true, ready: true, status: 'ready' })).toBe(false)
+    expect(quizCanHost({ persisted: true, dirty: false, ready: true, status: 'draft' })).toBe(false)
+    expect(quizCanHost({ persisted: true, dirty: false, ready: false, status: 'draft' })).toBe(false)
   })
 })

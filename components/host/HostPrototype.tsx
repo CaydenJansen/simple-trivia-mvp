@@ -51,7 +51,7 @@ import {
   isValidTiebreakerNumericValue,
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
-import { checkQuizReadiness, quizBuilderPrimaryAction, quizStatusFromReadiness } from "@/lib/trivia/quiz-readiness";
+import { checkQuizReadiness, quizCanHost, quizStatusFromReadiness } from "@/lib/trivia/quiz-readiness";
 import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
 import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
@@ -387,7 +387,7 @@ function JoinCodeButton({
             <p style={{ color: C.sub }} className="mt-6 text-xs font-bold uppercase tracking-widest">Game code</p>
             <p style={{ color: C.ink, letterSpacing: '0.16em' }} className="mt-1 text-5xl font-black tabular-nums">{gameCode}</p>
             <p style={{ color: C.sub }} className="mt-4 break-all text-xs">{joinUrl}</p>
-            <p style={{ color: C.caution }} className="mt-4 text-xs font-semibold">New teams can only join while the lobby is open.</p>
+            <p style={{ color: C.caution }} className="mt-4 text-xs font-semibold">New teams can join while the game is running.</p>
             <div className="mt-6 flex justify-center gap-3">
               <Btn v="secondary" onClick={() => downloadGameQr(dataUrl, gameCode)} disabled={!dataUrl}>Download QR</Btn>
               <Btn onClick={() => setOpen(false)}>Done</Btn>
@@ -1263,7 +1263,10 @@ function QuizBuilder({ go }: { go: Go }) {
       correctValue: tiebreaker.correctValue,
     })),
   }), [rounds, tiebreakers, title])
-  const primaryAction = quizBuilderPrimaryAction({ persisted, dirty, ready: readiness.ready, status: quizStatus })
+  const expectedQuizStatus = quizStatusFromReadiness(readiness)
+  const needsStatusSync = persisted && !dirty && quizStatus !== expectedQuizStatus
+  const needsSave = !persisted || dirty || needsStatusSync
+  const canHost = quizCanHost({ persisted, dirty, ready: readiness.ready, status: quizStatus })
 
   useEffect(() => {
     let active = true
@@ -1541,7 +1544,7 @@ function QuizBuilder({ go }: { go: Go }) {
 
   async function saveQuiz() {
     if (saving || loading) return null
-    const statusToSave = quizStatusFromReadiness(readiness)
+    const statusToSave = expectedQuizStatus
     if (!title.trim()) {
       setSaveError('Add a quiz title before saving.')
       return null
@@ -1657,22 +1660,11 @@ function QuizBuilder({ go }: { go: Go }) {
     return data
   }
 
-  function hostQuiz(savedQuizId = quizId) {
-    if (!savedQuizId || !readiness.ready) return
-    localStorage.setItem('simple-trivia-selected-quiz-id', savedQuizId)
+  function hostQuiz() {
+    if (!quizId || !canHost) return
+    localStorage.setItem('simple-trivia-selected-quiz-id', quizId)
     localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
     go('host-setup')
-  }
-
-  async function handlePrimaryAction() {
-    if (primaryAction === 'host') {
-      hostQuiz()
-      return
-    }
-    if (primaryAction === 'save' || primaryAction === 'save-and-host') {
-      const savedQuizId = await saveQuiz()
-      if (savedQuizId && primaryAction === 'save-and-host') hostQuiz(savedQuizId)
-    }
   }
 
   return (
@@ -1700,25 +1692,25 @@ function QuizBuilder({ go }: { go: Go }) {
           <span className="font-mono">~{estimatedMinutes} min</span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <span style={{ color: dirty ? C.caution : C.go }} className="flex items-center gap-1.5 text-xs font-semibold">
+          <span style={{ color: dirty || needsStatusSync ? C.caution : C.go }} className="flex items-center gap-1.5 text-xs font-semibold">
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            {loading ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : persisted ? 'Saved' : 'New quiz'}
+            {loading ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : needsStatusSync ? 'Save to enable hosting' : persisted ? 'Saved' : 'New quiz'}
           </span>
           <Btn v="secondary" sz="sm" onClick={() => setPreviewOpen(true)}>Preview</Btn>
           <Btn
+            v="secondary"
             sz="sm"
-            disabled={loading || saving || primaryAction === 'blocked'}
-            onClick={() => { void handlePrimaryAction() }}
+            disabled={loading || saving || !needsSave}
+            onClick={() => { void saveQuiz() }}
           >
-            {saving
-              ? 'Saving…'
-              : primaryAction === 'save'
-                ? persisted ? 'Save Changes' : 'Save Quiz'
-                : primaryAction === 'save-and-host'
-                  ? 'Save & Host'
-                  : primaryAction === 'host'
-                    ? 'Host This Quiz'
-                    : 'Add Required Content'}
+            {saving ? 'Saving…' : !persisted ? 'Save Quiz' : dirty ? 'Save Changes' : needsStatusSync ? 'Save Quiz' : 'Saved'}
+          </Btn>
+          <Btn
+            sz="sm"
+            disabled={loading || saving || !canHost}
+            onClick={hostQuiz}
+          >
+            Host This Quiz
           </Btn>
         </div>
       </header>
