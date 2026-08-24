@@ -53,8 +53,7 @@ export function questionQuizUsageSummary(usages: readonly QuestionQuizUsage[]) {
   if (usages.length === 1) return usages[0].quizTitle
 
   const quizTitles = [...new Set(usages.map(usage => usage.quizTitle))]
-  if (quizTitles.length === 1) return `${quizTitles[0]} (${usages.length} quizzes)`
-  if (quizTitles.length === 2 && usages.length === 2) return `${quizTitles[0]} and ${quizTitles[1]}`
-  if (quizTitles.length === 2) return `${quizTitles[0]}, ${quizTitles[1]} · ${usages.length} quizzes`
+  if (quizTitles.length === 1) return quizTitles[0]
+  if (quizTitles.length === 2) return `${quizTitles[0]} and ${quizTitles[1]}`
   return `${quizTitles[0]}, ${quizTitles[1]} +${quizTitles.length - 2} more`
 }

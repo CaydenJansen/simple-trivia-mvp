@@ -578,12 +578,12 @@ function QuestionCard({
           <h2 className="text-[15px] font-bold leading-6 text-zinc-900">{question.prompt}</h2>
           <p className="mt-2 truncate text-sm text-zinc-500"><span className="font-medium text-zinc-700">Answer:</span> {answerSummary(question)}</p>
           {bonus.enabled ? <p className="mt-1 truncate text-sm text-amber-700"><span className="font-medium">Bonus:</span> {bonus.prompt}</p> : null}
+          <QuestionUsageIndicator usages={usages} />
           {question.tag_names.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-1.5">
               {question.tag_names.map((tag) => <span key={tag} className="rounded-md bg-zinc-100 px-2 py-1 text-[11px] text-zinc-500">{tag}</span>)}
             </div>
           ) : null}
-          <QuestionUsageIndicator usages={usages} />
         </div>
         {editable ? (
           <div className="flex shrink-0 gap-2">

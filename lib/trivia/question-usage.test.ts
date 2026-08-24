@@ -39,6 +39,6 @@ describe('question quiz usage', () => {
     expect(questionQuizUsageSummary([
       { quizId: 'quiz-2', quizTitle: 'Auto-Built Quiz', quizUpdatedAt: '2026-08-22T00:00:00Z' },
       { quizId: 'quiz-1', quizTitle: 'Auto-Built Quiz', quizUpdatedAt: '2026-08-21T00:00:00Z' },
-    ])).toBe('Auto-Built Quiz (2 quizzes)')
+    ])).toBe('Auto-Built Quiz')
   })
 })
