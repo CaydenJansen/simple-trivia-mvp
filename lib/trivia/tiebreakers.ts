@@ -14,3 +14,21 @@ export function needsMoreManualTiebreakers(count: number) {
 export function hasRequiredAutoBuildTiebreakers(count: number) {
   return count === AUTO_BUILD_TIEBREAKER_COUNT
 }
+
+export type NumericTiebreakerAnswer = {
+  teamId: string
+  value: number
+}
+
+export function evaluateClosestAnswers(correctValue: number, answers: NumericTiebreakerAnswer[]) {
+  const ranked = answers
+    .map(answer => ({ ...answer, distance: Math.abs(answer.value - correctValue) }))
+    .sort((a, b) => a.distance - b.distance || a.teamId.localeCompare(b.teamId))
+  const unresolved = ranked.some((answer, index) => index > 0 && answer.distance === ranked[index - 1].distance)
+
+  return {
+    ranked,
+    unresolved,
+    orderedTeamIds: unresolved ? null : ranked.map(answer => answer.teamId),
+  }
+}

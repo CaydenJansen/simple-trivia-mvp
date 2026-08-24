@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -41,6 +42,7 @@ import {
   type LeaderboardVisibility,
 } from "@/lib/trivia/leaderboard-visibility";
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
+import { correctnessSummary } from "@/lib/trivia/correctness-rate";
 import { hostRecoveryScreen } from "@/lib/trivia/session-recovery";
 import { buildGameJoinUrl } from "@/lib/trivia/join-code";
 import {
@@ -4388,6 +4390,9 @@ type LiveTeam = {
   name: string
   score: number
   prize_awards?: Json
+  final_placement?: number | null
+  final_bottom_placement?: number | null
+  final_sort_order?: number | null
 }
 
 type LiveSubmission = {
@@ -5162,6 +5167,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     0,
   )
   const reviewCount = coreReviewCount + bonusReviewCount
+  const coreCorrectness = correctnessSummary(teams.length, submissions)
+  const bonusCorrectness = correctnessSummary(teams.length, bonusSubmissions)
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const totalRounds = Math.max(1, ...allQuestions.map(item => item.round_number))
   const sequenceItems = liveSequenceItems(allQuestions, allContentScreens)
@@ -5566,6 +5573,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <div className="flex items-center justify-between shrink-0">
             <h3 style={{ color: C.liveText }} className="font-bold text-sm">Team Answers</h3>
             <div className="flex items-center gap-3">
+              {phase === 'revealed' && teams.length > 0 && (
+                <span
+                  style={{ background: `${C.go}20`, color: C.go, border: `1px solid ${C.go}45` }}
+                  className="px-3 py-1.5 rounded-lg text-xs font-extrabold tabular-nums"
+                >
+                  {coreCorrectness.correct} of {coreCorrectness.total} teams correct · {coreCorrectness.percentage}%
+                </span>
+              )}
               {reviewCount > 0 && (
                 <span
                   style={{ background: `${C.caution}25`, color: C.caution, border: `1px solid ${C.caution}45` }}
@@ -5853,6 +5868,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
   {activeBonus && (questionStage === 'bonus' || phase !== 'open') && (
     <div style={{ background: C.liveSurface, border: `1px solid ${C.caution}45` }} className="rounded-2xl overflow-hidden shrink-0">
+      {phase === 'revealed' && teams.length > 0 && (
+        <div style={{ background: `${C.go}18`, borderBottom: `1px solid ${C.go}35`, color: C.go }} className="px-4 py-2 text-right text-xs font-extrabold tabular-nums">
+          Bonus: {bonusCorrectness.correct} of {bonusCorrectness.total} teams correct · {bonusCorrectness.percentage}%
+        </div>
+      )}
       <div
         style={{ background: `${C.caution}14`, borderBottom: `1px solid ${C.liveLine}`, color: C.liveDim, display: 'grid', gridTemplateColumns: '1.1fr 1.5fr 150px' }}
         className="text-[10px] font-bold uppercase tracking-widest px-4 py-2.5 gap-4"
@@ -6038,6 +6058,8 @@ function EndOfRound({ go }: { go: Go }) {
   const [currentQuestion, setCurrentQuestion] = useState<LiveQuestionDefinition | null>(null)
   const [nextQuestion, setNextQuestion] = useState<LiveQuestionDefinition | null>(null)
   const [roundQuestions, setRoundQuestions] = useState<LiveQuestionDefinition[]>([])
+  const [currentSubmissions, setCurrentSubmissions] = useState<Pick<LiveSubmission, 'is_correct'>[]>([])
+  const [currentBonusSubmissions, setCurrentBonusSubmissions] = useState<Pick<LiveBonusSubmission, 'is_correct'>[]>([])
   const [totalRounds, setTotalRounds] = useState(1)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -6094,6 +6116,23 @@ function EndOfRound({ go }: { go: Go }) {
     void loadRoundSummary()
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    if (!gameId || !currentQuestion) return
+    const questionKey = currentQuestion.question_key
+    let active = true
+    async function loadRevealAccuracy() {
+      const [coreResult, bonusResult] = await Promise.all([
+        supabase.from('submissions').select('is_correct').eq('game_id', gameId).eq('question_key', questionKey),
+        supabase.from('bonus_submissions').select('is_correct').eq('game_id', gameId).eq('question_key', questionKey),
+      ])
+      if (!active) return
+      setCurrentSubmissions((coreResult.data ?? []) as Pick<LiveSubmission, 'is_correct'>[])
+      setCurrentBonusSubmissions((bonusResult.data ?? []) as Pick<LiveBonusSubmission, 'is_correct'>[])
+    }
+    void loadRevealAccuracy()
+    return () => { active = false }
+  }, [currentQuestion, gameId])
 
   async function toggleIntermission() {
     if (busy) return
@@ -6179,6 +6218,9 @@ function EndOfRound({ go }: { go: Go }) {
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const roundNumber = currentQuestion?.round_number ?? 1
   const playersSeeRoundLeaderboard = roundResultsScreen(leaderboardVisibility) === 'round-results'
+  const revealCorrectness = correctnessSummary(teams.length, currentSubmissions)
+  const revealBonusCorrectness = correctnessSummary(teams.length, currentBonusSubmissions)
+  const revealBonus = runtimeBonusFromJson(currentQuestion?.bonus)
 
   if (answerRevealMode === 'round' && revealingAnswers && currentQuestion) {
     const orderedRoundQuestions = [...roundQuestions].sort((a, b) => a.round_position - b.round_position)
@@ -6209,6 +6251,18 @@ function EndOfRound({ go }: { go: Go }) {
               <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Correct answer</p>
               <p style={{ color: C.go }} className="mt-2 text-2xl font-extrabold">{correctAnswerDisplay(currentQuestion)}</p>
             </div>
+            {teams.length > 0 && (
+              <div className="mx-auto mt-4 flex max-w-xl flex-wrap justify-center gap-2">
+                <span style={{ background: `${C.go}18`, color: C.go, border: `1px solid ${C.go}40` }} className="rounded-xl px-4 py-2 text-sm font-extrabold tabular-nums">
+                  {revealCorrectness.correct} of {revealCorrectness.total} teams correct · {revealCorrectness.percentage}%
+                </span>
+                {revealBonus && (
+                  <span style={{ background: `${C.caution}18`, color: C.caution, border: `1px solid ${C.caution}40` }} className="rounded-xl px-4 py-2 text-sm font-extrabold tabular-nums">
+                    Bonus: {revealBonusCorrectness.correct} of {revealBonusCorrectness.total} · {revealBonusCorrectness.percentage}%
+                  </span>
+                )}
+              </div>
+            )}
             <p style={{ color: C.liveDim }} className="mt-5 text-sm">Each team also sees its own submitted answer, result, and points.</p>
             {error && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{error}</p>}
             <button data-host-navigation="forward" onClick={advanceDelayedReveal} disabled={busy} style={{ background: C.violet }} className="mt-8 min-w-72 rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
@@ -6314,30 +6368,186 @@ function EndOfRound({ go }: { go: Go }) {
 
 // ─── SCREEN 11: FINAL RESULTS ─────────────────────────────────────────────────
 
-function FinalResults({ go }: { go: Go }) {
-  const [teams, setTeams] = useState<LiveTeam[]>([])
-  const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
+type HostFinalGame = {
+  id: string
+  title: string
+  status: string
+  current_screen: string
+  current_tiebreaker_attempt_id: string | null
+  settings: Json
+}
 
-  useEffect(() => {
-    let active = true
-    async function loadFinal() {
-      const { data: game } = await supabase.from('games').select('id, settings').eq('code', getHostGameCode()).maybeSingle()
-      if (!active || !game) return
-      const { data } = await supabase.from('teams').select('id, name, score, prize_awards').eq('game_id', game.id).order('score', { ascending: false })
-      if (active) {
-        setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
-        setTeams((data ?? []) as LiveTeam[])
-      }
+type HostTieResolution = Database['public']['Tables']['game_tie_resolutions']['Row']
+type HostTiebreakerAttempt = Database['public']['Tables']['game_tiebreaker_attempts']['Row']
+type HostTiebreakerSubmission = Database['public']['Tables']['game_tiebreaker_submissions']['Row']
+type HostPreparedTiebreaker = Database['public']['Tables']['game_tiebreakers']['Row']
+
+function FinalResults({ go }: { go: Go }) {
+  const [game, setGame] = useState<HostFinalGame | null>(null)
+  const [teams, setTeams] = useState<LiveTeam[]>([])
+  const [resolutions, setResolutions] = useState<HostTieResolution[]>([])
+  const [attempts, setAttempts] = useState<HostTiebreakerAttempt[]>([])
+  const [preparedTiebreakers, setPreparedTiebreakers] = useState<HostPreparedTiebreaker[]>([])
+  const [tiebreakerSubmissions, setTiebreakerSubmissions] = useState<HostTiebreakerSubmission[]>([])
+  const [manualOrder, setManualOrder] = useState<string[]>([])
+  const [manualMode, setManualMode] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadFinal = useCallback(async () => {
+    const { data: gameRow, error: gameError } = await supabase
+      .from('games')
+      .select('id, title, status, current_screen, current_tiebreaker_attempt_id, settings')
+      .eq('code', getHostGameCode())
+      .maybeSingle()
+    if (gameError || !gameRow) {
+      setError('Could not load the final game state.')
+      return
     }
-    void loadFinal()
-    return () => { active = false }
+
+    const [teamResult, resolutionResult, attemptResult, preparedResult, submissionResult] = await Promise.all([
+      supabase.from('teams').select('id, name, score, prize_awards, final_placement, final_bottom_placement, final_sort_order').eq('game_id', gameRow.id),
+      supabase.from('game_tie_resolutions').select('*').eq('game_id', gameRow.id).order('created_at'),
+      supabase.from('game_tiebreaker_attempts').select('*').eq('game_id', gameRow.id).order('created_at'),
+      supabase.from('game_tiebreakers').select('*').eq('game_id', gameRow.id).order('position'),
+      supabase.from('game_tiebreaker_submissions').select('*').eq('game_id', gameRow.id).order('created_at'),
+    ])
+    const loadError = teamResult.error || resolutionResult.error || attemptResult.error || preparedResult.error || submissionResult.error
+    if (loadError) {
+      console.error('Could not load tiebreaker state:', loadError)
+      setError('Could not load the tiebreaker state. Please try again.')
+      return
+    }
+
+    setGame(gameRow as HostFinalGame)
+    setTeams((teamResult.data ?? []) as LiveTeam[])
+    setResolutions((resolutionResult.data ?? []) as HostTieResolution[])
+    setAttempts((attemptResult.data ?? []) as HostTiebreakerAttempt[])
+    setPreparedTiebreakers((preparedResult.data ?? []) as HostPreparedTiebreaker[])
+    setTiebreakerSubmissions((submissionResult.data ?? []) as HostTiebreakerSubmission[])
+    setError(null)
   }, [])
 
-  const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
-  const winner = leaderboard[0]
+  useEffect(() => {
+    // The first async read synchronizes this screen with the persisted live game.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadFinal()
+    const gameId = localStorage.getItem('simple-trivia-host-game-id')
+    if (!gameId) return
+    const channel = supabase
+      .channel(`host-final-${gameId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadFinal() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${gameId}` }, () => { void loadFinal() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_tiebreaker_submissions', filter: `game_id=eq.${gameId}` }, () => { void loadFinal() })
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [loadFinal])
+
+  const leaderboardVisibility = leaderboardVisibilityFromSettings(game?.settings)
+  const leaderboard = [...teams].sort((a, b) => {
+    if (a.final_sort_order !== null && a.final_sort_order !== undefined && b.final_sort_order !== null && b.final_sort_order !== undefined) {
+      return a.final_sort_order - b.final_sort_order
+    }
+    return b.score - a.score || a.name.localeCompare(b.name)
+  })
+  const winners = leaderboard.filter(team => (team.final_placement ?? 1) === 1)
+  const pendingResolution = resolutions.find(resolution => resolution.status === 'pending') ?? null
+  const activeAttempt = attempts.find(attempt => attempt.id === game?.current_tiebreaker_attempt_id)
+    ?? attempts.filter(attempt => attempt.resolution_id === pendingResolution?.id).at(-1)
+    ?? null
+  const displayResolution = pendingResolution
+    ?? resolutions.find(resolution => resolution.id === activeAttempt?.resolution_id)
+    ?? null
+  const activePrepared = preparedTiebreakers.find(item => item.id === activeAttempt?.game_tiebreaker_id) ?? null
+  const activeSubmissions = tiebreakerSubmissions.filter(submission => submission.attempt_id === activeAttempt?.id)
+  const tiedTeams = displayResolution
+    ? displayResolution.team_ids.flatMap(teamId => teams.find(team => team.id === teamId) ?? [])
+    : []
+  const unusedTiebreakerCount = preparedTiebreakers.filter(item => !attempts.some(attempt => attempt.game_tiebreaker_id === item.id)).length
+  const resolvingTie = game?.status !== 'finished' && displayResolution !== null
   const prizeWinners = leaderboard.flatMap(team =>
     prizeAwardsFromJson(team.prize_awards).map((award: PrizeAward) => ({ team, award })),
   )
+
+  async function runAction(action: () => PromiseLike<unknown>, message: string) {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await action()
+      setManualMode(false)
+      await loadFinal()
+    } catch (actionError) {
+      console.error(message, actionError)
+      setError(message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function startTiebreaker() {
+    if (!pendingResolution) return
+    void runAction(
+      () => supabase.rpc('start_game_tiebreaker', { p_resolution_id: pendingResolution.id }).then(({ error: rpcError }) => { if (rpcError) throw rpcError }),
+      'Could not start the prepared tiebreaker.',
+    )
+  }
+
+  function closeTiebreaker() {
+    if (!activeAttempt) return
+    void runAction(
+      () => supabase.rpc('close_game_tiebreaker', { p_attempt_id: activeAttempt.id }).then(({ error: rpcError }) => { if (rpcError) throw rpcError }),
+      'Could not close tiebreaker answers.',
+    )
+  }
+
+  function revealTiebreaker() {
+    if (!activeAttempt) return
+    void runAction(
+      () => supabase.rpc('reveal_game_tiebreaker', { p_attempt_id: activeAttempt.id }).then(({ error: rpcError }) => { if (rpcError) throw rpcError }),
+      'Could not reveal the tiebreaker result.',
+    )
+  }
+
+  function finalizeAfterResolution(action: () => PromiseLike<unknown>) {
+    if (!game) return
+    void runAction(async () => {
+      await action()
+      await finalizeLiveGame(game.id)
+    }, 'Could not save the final placement decision.')
+  }
+
+  function allowTie() {
+    if (!pendingResolution) return
+    finalizeAfterResolution(() => supabase.rpc('allow_game_tie', { p_resolution_id: pendingResolution.id }).then(({ error: rpcError }) => { if (rpcError) throw rpcError }))
+  }
+
+  function saveManualOrder() {
+    if (!pendingResolution || manualOrder.length !== pendingResolution.team_ids.length) return
+    finalizeAfterResolution(() => supabase.rpc('manually_resolve_game_tie', {
+      p_resolution_id: pendingResolution.id,
+      p_ordered_team_ids: manualOrder,
+    }).then(({ error: rpcError }) => { if (rpcError) throw rpcError }))
+  }
+
+  function continueAfterTiebreaker() {
+    if (!game) return
+    void runAction(() => finalizeLiveGame(game.id), 'Could not continue to the final results.')
+  }
+
+  function beginManualOrder() {
+    if (!pendingResolution) return
+    setManualOrder([...pendingResolution.team_ids])
+    setManualMode(true)
+  }
+
+  function moveManualTeam(index: number, direction: -1 | 1) {
+    const nextIndex = index + direction
+    if (nextIndex < 0 || nextIndex >= manualOrder.length) return
+    const next = [...manualOrder]
+    ;[next[index], next[nextIndex]] = [next[nextIndex], next[index]]
+    setManualOrder(next)
+  }
 
   function finishAndReturn() {
     localStorage.removeItem('simple-trivia-host-game-id')
@@ -6358,6 +6568,102 @@ function FinalResults({ go }: { go: Go }) {
       </header>
 
       <main className="flex-1 max-w-2xl mx-auto w-full px-6 py-12">
+        {resolvingTie && displayResolution ? (
+          <>
+            <div className="text-center mb-8">
+              <div style={{ background: '#FEF3C7', color: '#92400E' }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-4">Final placement tie</div>
+              <h1 style={{ color: C.ink }} className="text-4xl font-extrabold">These teams are tied on {displayResolution.tied_score}</h1>
+              <p style={{ color: C.sub }} className="mt-3 text-sm">Resolve their placement without changing either team’s trivia score.</p>
+            </div>
+
+            {error && <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="mb-5 rounded-xl px-4 py-3 text-sm font-semibold">{error}</div>}
+
+            {activeAttempt && activePrepared && game?.current_screen !== 'tiebreaker-pending' && !manualMode ? (
+              <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-3xl p-6 shadow-sm">
+                <div className="flex items-center justify-between gap-4">
+                  <p style={{ color: C.violet }} className="text-xs font-extrabold uppercase tracking-widest">Closest answer wins</p>
+                  <span style={{ color: C.sub }} className="text-xs font-bold">{activeSubmissions.length} / {activeAttempt.team_ids.length} answered</span>
+                </div>
+                <h2 style={{ color: C.ink }} className="mt-4 text-2xl font-extrabold leading-snug">{activePrepared.prompt}</h2>
+                <p style={{ color: C.go }} className="mt-3 text-sm font-bold">Correct answer: {activePrepared.correct_value}{activePrepared.answer_unit ? ` ${activePrepared.answer_unit}` : ''}</p>
+
+                <div className="mt-6 space-y-2">
+                  {tiedTeams.map(team => {
+                    const submission = activeSubmissions.find(item => item.team_id === team.id)
+                    return (
+                      <div key={team.id} style={{ background: C.ground, border: `1px solid ${C.line}` }} className="flex items-center gap-3 rounded-xl px-4 py-3">
+                        <span style={{ color: C.ink }} className="flex-1 text-sm font-bold">{team.name}</span>
+                        <span style={{ color: submission ? C.ink : C.sub }} className="text-sm font-extrabold tabular-nums">
+                          {submission ? submission.numeric_answer : 'Waiting…'}
+                        </span>
+                        {submission?.distance !== null && submission?.distance !== undefined && (
+                          <span style={{ color: C.sub }} className="text-xs">off by {submission.distance}</span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div className="mt-6 flex gap-3">
+                  {activeAttempt.status === 'open' && (
+                    <Btn sz="lg" cls="flex-1 justify-center" onClick={closeTiebreaker} disabled={busy || activeSubmissions.length !== activeAttempt.team_ids.length}>Close Answers</Btn>
+                  )}
+                  {activeAttempt.status === 'closed' && (
+                    <Btn sz="lg" cls="flex-1 justify-center" onClick={revealTiebreaker} disabled={busy}>Reveal Closest Answer</Btn>
+                  )}
+                  {activeAttempt.status === 'resolved' && (
+                    <Btn sz="lg" cls="flex-1 justify-center" onClick={continueAfterTiebreaker} disabled={busy}>Continue to Final Results</Btn>
+                  )}
+                  {activeAttempt.status === 'tied' && (
+                    <>
+                      <Btn sz="lg" cls="flex-1 justify-center" onClick={startTiebreaker} disabled={busy || unusedTiebreakerCount === 0}>Run Next Tiebreaker</Btn>
+                      <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={allowTie} disabled={busy}>Allow the Tie</Btn>
+                      <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={beginManualOrder} disabled={busy}>Choose Manually</Btn>
+                    </>
+                  )}
+                </div>
+                {activeAttempt.status === 'tied' && <p style={{ color: C.caution }} className="mt-3 text-center text-sm font-bold">Two or more teams were equally close, so the tie remains unresolved.</p>}
+              </div>
+            ) : manualMode ? (
+              <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-3xl p-6 shadow-sm">
+                <h2 style={{ color: C.ink }} className="text-xl font-extrabold">Choose the final order</h2>
+                <p style={{ color: C.sub }} className="mt-1 text-sm">Put the highest-placed team first. Scores will not change.</p>
+                <div className="mt-5 space-y-2">
+                  {manualOrder.map((teamId, index) => {
+                    const team = teams.find(item => item.id === teamId)
+                    return <div key={teamId} style={{ background: C.ground, border: `1px solid ${C.line}` }} className="flex items-center gap-3 rounded-xl px-4 py-3">
+                      <span style={{ color: C.violet }} className="w-6 text-sm font-extrabold">{index + 1}</span>
+                      <span style={{ color: C.ink }} className="flex-1 text-sm font-bold">{team?.name ?? 'Team'}</span>
+                      <button onClick={() => moveManualTeam(index, -1)} disabled={index === 0} className="rounded-lg px-2 py-1 text-sm font-bold disabled:opacity-25">↑</button>
+                      <button onClick={() => moveManualTeam(index, 1)} disabled={index === manualOrder.length - 1} className="rounded-lg px-2 py-1 text-sm font-bold disabled:opacity-25">↓</button>
+                    </div>
+                  })}
+                </div>
+                <div className="mt-6 flex gap-3">
+                  <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={() => setManualMode(false)} disabled={busy}>Back</Btn>
+                  <Btn sz="lg" cls="flex-1 justify-center" onClick={saveManualOrder} disabled={busy}>Confirm Order</Btn>
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <button onClick={startTiebreaker} disabled={busy || unusedTiebreakerCount === 0} style={{ background: C.violet, color: 'white' }} className="rounded-2xl p-5 text-left disabled:opacity-45">
+                  <span className="text-lg font-extrabold">Run a Tiebreaker</span>
+                  <span className="mt-2 block text-xs opacity-75">{unusedTiebreakerCount} prepared question{unusedTiebreakerCount === 1 ? '' : 's'} available</span>
+                </button>
+                <button onClick={allowTie} disabled={busy} style={{ background: C.panel, border: `1px solid ${C.line}`, color: C.ink }} className="rounded-2xl p-5 text-left disabled:opacity-45">
+                  <span className="text-lg font-extrabold">Allow the Tie</span>
+                  <span style={{ color: C.sub }} className="mt-2 block text-xs">Keep the equal placement.</span>
+                </button>
+                <button onClick={beginManualOrder} disabled={busy} style={{ background: C.panel, border: `1px solid ${C.line}`, color: C.ink }} className="rounded-2xl p-5 text-left disabled:opacity-45">
+                  <span className="text-lg font-extrabold">Choose Manually</span>
+                  <span style={{ color: C.sub }} className="mt-2 block text-xs">Set the tied teams’ order yourself.</span>
+                </button>
+                {unusedTiebreakerCount === 0 && <p style={{ color: C.caution }} className="sm:col-span-3 text-center text-sm font-semibold">No unused prepared tiebreakers remain. Allow the tie or choose the order manually.</p>}
+              </div>
+            )}
+          </>
+        ) : (
+        <>
         <div className="text-center mb-10">
           <div style={{ background: C.violetPale, color: C.violet }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-4">★ Game Complete</div>
           <h1 style={{ color: C.ink }} className="text-5xl font-extrabold">What a night!</h1>
@@ -6379,12 +6685,12 @@ function FinalResults({ go }: { go: Go }) {
           </p>
         </div>
 
-        {winner && (
+        {winners.length > 0 && (
           <div style={{ background: C.violet, color: 'white' }} className="rounded-3xl p-8 text-center mb-8 shadow-xl">
             <div className="text-4xl mb-2">🏆</div>
-            <p className="text-sm font-bold uppercase tracking-widest opacity-80">Winner</p>
-            <h2 className="text-3xl font-extrabold mt-2">{winner.name}</h2>
-            <p className="text-5xl font-black mt-3">{winner.score}</p>
+            <p className="text-sm font-bold uppercase tracking-widest opacity-80">{winners.length === 1 ? 'Winner' : 'Joint Winners'}</p>
+            <h2 className="text-3xl font-extrabold mt-2">{winners.map(team => team.name).join(' · ')}</h2>
+            <p className="text-5xl font-black mt-3">{winners[0].score}</p>
             <p className="text-sm opacity-75">points</p>
           </div>
         )}
@@ -6413,7 +6719,7 @@ function FinalResults({ go }: { go: Go }) {
           <div style={{ borderTop: `1px solid ${C.line}` }}>
             {leaderboard.map((team, i) => (
               <div key={team.id} style={{ borderBottom: `1px solid ${C.line}` }} className="flex items-center gap-3 py-3 last:border-0">
-                <span style={{ color: i < 3 ? C.ink : C.sub }} className="w-5 text-center text-sm shrink-0 font-extrabold">{i + 1}</span>
+                <span style={{ color: (team.final_placement ?? i + 1) <= 3 ? C.ink : C.sub }} className="w-5 text-center text-sm shrink-0 font-extrabold">{team.final_placement ?? i + 1}</span>
                 <span style={{ color: C.ink }} className="flex-1 text-sm font-semibold">{team.name}</span>
                 <span style={{ color: C.ink }} className="font-extrabold tabular-nums">{team.score}</span>
                 {prizeAwardsFromJson(team.prize_awards).length > 0 && (
@@ -6428,6 +6734,8 @@ function FinalResults({ go }: { go: Go }) {
           <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={() => go('recent-games')}>View Game Summary</Btn>
           <Btn sz="lg" cls="flex-1 justify-center" onClick={finishAndReturn}>Finish &amp; Return to My Quizzes</Btn>
         </div>
+        </>
+        )}
       </main>
     </div>
   )

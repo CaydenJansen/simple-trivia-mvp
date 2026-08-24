@@ -9,6 +9,9 @@
 -- supabase/migrations/20260820200000_add_hidden_question_scoring.sql.
 -- Prepared-tiebreaker authoring and game snapshots are versioned in
 -- supabase/migrations/20260821170000_add_prepared_tiebreakers.sql.
+-- Consequential final-tie resolution, numeric submissions, and score-independent
+-- final placements are versioned in
+-- supabase/migrations/20260824150000_add_live_tiebreaker_resolution.sql.
 -- Auto-Build source content is versioned in
 -- supabase/migrations/20260821190000_add_auto_build_sources.sql.
 -- The normalized Question Library metadata foundation is versioned in
@@ -278,8 +281,52 @@ create table if not exists public.teams (
   score integer not null default 0,
   prize_awards jsonb not null default '[]'::jsonb
     check (jsonb_typeof(prize_awards) = 'array'),
+  final_placement integer,
+  final_bottom_placement integer,
+  final_sort_order integer,
   created_at timestamptz not null default now(),
   unique (game_id, name)
+);
+
+create table if not exists public.game_tie_resolutions (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.games(id) on delete cascade,
+  tied_score integer not null,
+  team_ids uuid[] not null check (cardinality(team_ids) > 1),
+  status text not null default 'pending' check (status in ('pending', 'resolved')),
+  resolution_method text check (resolution_method in ('tiebreaker', 'allowed_tie', 'manual')),
+  ordered_team_ids uuid[],
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz,
+  unique (game_id, tied_score)
+);
+
+create table if not exists public.game_tiebreaker_attempts (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.games(id) on delete cascade,
+  resolution_id uuid not null references public.game_tie_resolutions(id) on delete cascade,
+  game_tiebreaker_id uuid not null references public.game_tiebreakers(id) on delete restrict,
+  team_ids uuid[] not null check (cardinality(team_ids) > 1),
+  status text not null default 'open' check (status in ('open', 'closed', 'resolved', 'tied')),
+  created_at timestamptz not null default now(),
+  closed_at timestamptz,
+  revealed_at timestamptz,
+  unique (game_tiebreaker_id)
+);
+
+alter table public.games
+  add column if not exists current_tiebreaker_attempt_id uuid references public.game_tiebreaker_attempts(id) on delete set null;
+
+create table if not exists public.game_tiebreaker_submissions (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.games(id) on delete cascade,
+  attempt_id uuid not null references public.game_tiebreaker_attempts(id) on delete cascade,
+  team_id uuid not null references public.teams(id) on delete cascade,
+  numeric_answer numeric not null,
+  distance numeric check (distance is null or distance >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (attempt_id, team_id)
 );
 
 create table if not exists public.submissions (

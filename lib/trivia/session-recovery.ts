@@ -7,9 +7,16 @@ const ROUND_END_SCREENS = new Set([
   'round-results-hidden',
 ])
 
+const FINAL_TIE_SCREENS = new Set([
+  'tiebreaker-pending',
+  'tiebreaker',
+  'tiebreaker-result',
+])
+
 export function hostRecoveryScreen(status: string | null, currentScreen: string | null): HostRecoveryScreen {
   if (currentScreen === 'lobby') return 'lobby'
   if (ROUND_END_SCREENS.has(currentScreen ?? '')) return 'end-of-round'
+  if (FINAL_TIE_SCREENS.has(currentScreen ?? '')) return 'final-results'
   if (currentScreen === 'final-result' || status === 'finished') return 'final-results'
   if (status === 'live' || currentScreen === 'round-start' || currentScreen === 'content-screen') return 'live-question'
   return 'dashboard'

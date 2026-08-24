@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   AUTO_BUILD_TIEBREAKER_COUNT,
+  evaluateClosestAnswers,
   hasRequiredAutoBuildTiebreakers,
   isValidTiebreakerNumericValue,
   needsMoreManualTiebreakers,
@@ -32,5 +33,26 @@ describe('prepared tiebreaker authoring semantics', () => {
     expect(hasRequiredAutoBuildTiebreakers(3)).toBe(true)
     expect(hasRequiredAutoBuildTiebreakers(2)).toBe(false)
     expect(hasRequiredAutoBuildTiebreakers(4)).toBe(false)
+  })
+
+  it('orders numeric answers by absolute distance from the correct value', () => {
+    expect(evaluateClosestAnswers(21196, [
+      { teamId: 'team-a', value: 20000 },
+      { teamId: 'team-b', value: 15000 },
+    ])).toMatchObject({
+      unresolved: false,
+      orderedTeamIds: ['team-a', 'team-b'],
+      ranked: [
+        { teamId: 'team-a', value: 20000, distance: 1196 },
+        { teamId: 'team-b', value: 15000, distance: 6196 },
+      ],
+    })
+  })
+
+  it('keeps an equal-distance result unresolved', () => {
+    expect(evaluateClosestAnswers(100, [
+      { teamId: 'team-a', value: 90 },
+      { teamId: 'team-b', value: 110 },
+    ])).toMatchObject({ unresolved: true, orderedTeamIds: null })
   })
 })

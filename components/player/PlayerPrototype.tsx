@@ -29,6 +29,7 @@ type PlayerScreen =
   | 'partial-correct'
   | 'content-screen' | 'intermission' | 'round-results' | 'round-results-hidden'
   | 'delayed-reveal' | 'winner' | 'final-result'
+  | 'tiebreaker-pending' | 'tiebreaker' | 'tiebreaker-result'
   | 'reconnecting' | 'game-ended'
 
 const PlayerDevControlsContext = createContext(false)
@@ -40,6 +41,7 @@ const LIVE_PLAYER_SCREENS = new Set<PlayerScreen>([
   'bonus-answer', 'bonus-submitted',
   'incorrect', 'partial-correct', 'content-screen', 'intermission', 'round-results',
   'round-results-hidden', 'delayed-reveal', 'winner', 'final-result', 'reconnecting', 'game-ended',
+  'tiebreaker-pending', 'tiebreaker', 'tiebreaker-result',
 ])
 
 const QUESTION_SCREENS = new Set<PlayerScreen>([
@@ -97,6 +99,8 @@ type PlayerLeaderboardTeam = {
   id: string
   name: string
   score: number
+  final_placement: number | null
+  final_sort_order: number | null
 }
 
 function playerScreenFromGameState(value: string | null | undefined): PlayerScreen | null {
@@ -877,7 +881,7 @@ function useLiveLeaderboard(enabled = true) {
     let active = true
 
     async function load() {
-      const { data } = await supabase.from('teams').select('id, name, score').eq('game_id', activeGameId).order('score', { ascending: false })
+      const { data } = await supabase.from('teams').select('id, name, score, final_placement, final_sort_order').eq('game_id', activeGameId).order('score', { ascending: false })
       if (active) setTeams((data ?? []) as PlayerLeaderboardTeam[])
     }
     void load()
@@ -888,7 +892,13 @@ function useLiveLeaderboard(enabled = true) {
     return () => { active = false; void supabase.removeChannel(channel) }
   }, [enabled])
 
-  return { teams: [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)), teamId }
+  return {
+    teams: [...teams].sort((a, b) => {
+      if (a.final_sort_order !== null && b.final_sort_order !== null) return a.final_sort_order - b.final_sort_order
+      return b.score - a.score || a.name.localeCompare(b.name)
+    }),
+    teamId,
+  }
 }
 
 // ─── PALETTE ──────────────────────────────────────────────────────────────────
@@ -939,6 +949,9 @@ const SCREENS: { id: PlayerScreen; label: string }[] = [
   { id: 'delayed-reveal', label: '18 · Delayed Reveal' },
   { id: 'winner',         label: '19 · Winner' },
   { id: 'final-result',   label: '20 · Final Result' },
+  { id: 'tiebreaker-pending', label: '20a · Tie Decision' },
+  { id: 'tiebreaker',     label: '20b · Tiebreaker' },
+  { id: 'tiebreaker-result', label: '20c · Tiebreak Result' },
   { id: 'reconnecting',   label: '21 · Reconnecting' },
   { id: 'game-ended',     label: '22 · Game Ended' },
 ]
@@ -2341,7 +2354,7 @@ function FinalResult({ go }: { go: (s: PlayerScreen) => void }) {
         <h1 style={{ color: C.ink, fontSize: 24 }} className="font-black mb-4">{snapshot.teamName || me?.name || 'Your Team'}</h1>
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 18, padding: '18px 20px', display: 'inline-block', minWidth: 180, marginBottom: 24 }}>
           <p style={{ color: C.sub, fontSize: 11, fontWeight: 800 }}>{showFinalLeaderboard ? 'YOU FINISHED' : scoresVisible ? 'YOUR FINAL SCORE' : 'GAME COMPLETE'}</p>
-          {(showFinalLeaderboard || scoresVisible) && <p style={{ color: C.ink, fontSize: 48, fontWeight: 900 }}>{showFinalLeaderboard ? (myIndex >= 0 ? myIndex + 1 : '—') : snapshot.score}</p>}
+          {(showFinalLeaderboard || scoresVisible) && <p style={{ color: C.ink, fontSize: 48, fontWeight: 900 }}>{showFinalLeaderboard ? (me?.final_placement ?? (myIndex >= 0 ? myIndex + 1 : '—')) : snapshot.score}</p>}
           <p style={{ color: C.sub, fontSize: 13 }}>{showFinalLeaderboard && scoresVisible ? `Final score: ${me?.score ?? snapshot.score}` : 'Thanks for playing!'}</p>
         </div>
         {snapshot.prizeAwards.length > 0 && (
@@ -2361,7 +2374,7 @@ function FinalResult({ go }: { go: (s: PlayerScreen) => void }) {
             <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textAlign: 'left', marginBottom: 10 }}>FINAL STANDINGS</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {teams.map((team, i) => <div key={team.id} style={{ background: team.id === teamId ? C.violetMist : C.panel, border: `1px solid ${team.id === teamId ? C.violet : C.line}`, borderRadius: 13, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
-                <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.violet, fontWeight: 800 }}>{team.score}</span>}
+                <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{team.final_placement ?? i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.violet, fontWeight: 800 }}>{team.score}</span>}
               </div>)}
             </div>
             <p style={{ color: C.sub, fontSize: 13, marginTop: 24 }}>Thanks for playing!</p>
@@ -2370,6 +2383,141 @@ function FinalResult({ go }: { go: (s: PlayerScreen) => void }) {
           <div style={{ background: C.ground, border: `1px solid ${C.line}`, borderRadius: 14, padding: '14px 18px' }}>
             <p style={{ color: C.sub, fontSize: 13, fontStyle: 'italic' }}>Final standings aren’t being shown for this game.</p>
           </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+type PlayerTiebreakerState = {
+  attempt_id: string
+  prompt: string | null
+  answer_unit: string | null
+  attempt_status: 'open' | 'closed' | 'resolved' | 'tied'
+  is_participant: boolean
+  numeric_answer: number | null
+  distance: number | null
+  correct_value: number | null
+  submitted_count: number
+  participant_count: number
+}
+
+function TiebreakerPending() {
+  return (
+    <div className="flex flex-col items-center justify-center px-6 text-center" style={{ minHeight: '100%' }}>
+      <div style={{ background: C.cautionMist, color: C.caution, width: 62, height: 62, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, marginBottom: 20 }}>＝</div>
+      <h1 style={{ color: C.ink, fontSize: 28 }} className="font-black mb-3">The final scores are tied</h1>
+      <p style={{ color: C.sub, fontSize: 15, lineHeight: 1.6 }}>The host is choosing how to resolve the final placement.</p>
+    </div>
+  )
+}
+
+function LiveTiebreaker() {
+  const [state, setState] = useState<PlayerTiebreakerState | null>(null)
+  const [answer, setAnswer] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    const teamId = localStorage.getItem('simple-trivia-team-id')
+    if (!gameId || !teamId) return
+    const { data, error: loadError } = await supabase.rpc('get_player_tiebreaker_state', {
+      p_game_id: gameId,
+      p_team_id: teamId,
+    }).maybeSingle()
+    if (loadError) {
+      console.error('Could not load player tiebreaker:', loadError)
+      setError('Could not load the tiebreaker. Please try again.')
+      return
+    }
+    const next = data as PlayerTiebreakerState | null
+    setState(next)
+    if (next?.numeric_answer !== null && next?.numeric_answer !== undefined) setAnswer(String(next.numeric_answer))
+  }, [])
+
+  useEffect(() => {
+    // The first async read synchronizes this screen with the persisted attempt.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load()
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    if (!gameId) return
+    const channel = supabase
+      .channel(`player-tiebreaker-${gameId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void load() })
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [load])
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    const teamId = localStorage.getItem('simple-trivia-team-id')
+    const numericAnswer = Number(answer)
+    if (!gameId || !teamId || !answer.trim() || !Number.isFinite(numericAnswer) || submitting) return
+    setSubmitting(true)
+    setError(null)
+    const { error: submitError } = await supabase.rpc('submit_player_tiebreaker', {
+      p_game_id: gameId,
+      p_team_id: teamId,
+      p_numeric_answer: numericAnswer,
+    })
+    if (submitError) {
+      console.error('Could not submit tiebreaker:', submitError)
+      setError('Could not submit that answer. Please try again.')
+    } else {
+      await load()
+    }
+    setSubmitting(false)
+  }
+
+  if (!state) return <TiebreakerPending />
+  if (!state.is_participant) {
+    return (
+      <div className="flex flex-col items-center justify-center px-6 text-center" style={{ minHeight: '100%' }}>
+        <div style={{ fontSize: 46, marginBottom: 16 }}>⏳</div>
+        <h1 style={{ color: C.ink, fontSize: 26 }} className="font-black mb-3">A final placement is being decided</h1>
+        <p style={{ color: C.sub, fontSize: 15 }}>Only the tied teams need to answer. You’ll see the final standings shortly.</p>
+      </div>
+    )
+  }
+
+  const revealed = state.attempt_status === 'resolved' || state.attempt_status === 'tied'
+  return (
+    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+      <div style={{ background: C.violet, color: 'white', padding: '24px 22px 28px', textAlign: 'center' }}>
+        <p style={{ opacity: 0.75, fontSize: 12, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Final Tiebreaker</p>
+        <h1 style={{ fontSize: 25, fontWeight: 900, lineHeight: 1.3, marginTop: 12 }}>{state.prompt}</h1>
+      </div>
+      <div className="flex-1 px-5 py-6">
+        {revealed ? (
+          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 18, padding: '20px', textAlign: 'center' }}>
+            <p style={{ color: C.sub, fontSize: 12, fontWeight: 800 }}>CORRECT ANSWER</p>
+            <p style={{ color: C.go, fontSize: 34, fontWeight: 900, marginTop: 6 }}>{state.correct_value}{state.answer_unit ? ` ${state.answer_unit}` : ''}</p>
+            <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 18, paddingTop: 18 }}>
+              <p style={{ color: C.sub, fontSize: 13 }}>Your answer: <strong style={{ color: C.ink }}>{state.numeric_answer}</strong></p>
+              <p style={{ color: C.sub, fontSize: 13, marginTop: 4 }}>Distance from correct: <strong style={{ color: C.ink }}>{state.distance}</strong></p>
+            </div>
+            <p style={{ color: state.attempt_status === 'tied' ? C.caution : C.violet, fontSize: 14, fontWeight: 800, marginTop: 18 }}>
+              {state.attempt_status === 'tied' ? 'The closest answers are still tied.' : 'The host will publish the final standings next.'}
+            </p>
+          </div>
+        ) : state.attempt_status === 'closed' ? (
+          <div style={{ background: C.ground, border: `1px solid ${C.line}`, borderRadius: 18, padding: '24px', textAlign: 'center' }}>
+            <p style={{ color: C.ink, fontSize: 20, fontWeight: 900 }}>{state.numeric_answer}</p>
+            <p style={{ color: C.sub, fontSize: 14, marginTop: 8 }}>Answers are closed. Waiting for the reveal…</p>
+          </div>
+        ) : (
+          <form onSubmit={submit}>
+            <label style={{ color: C.sub, fontSize: 12, fontWeight: 800 }}>YOUR CLOSEST ANSWER{state.answer_unit ? ` (${state.answer_unit})` : ''}</label>
+            <input type="number" step="any" inputMode="decimal" value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Enter a number"
+              style={{ width: '100%', marginTop: 8, border: `2px solid ${C.line}`, borderRadius: 16, padding: '16px', fontSize: 22, fontWeight: 800, color: C.ink, background: C.panel }} />
+            {error && <p style={{ color: C.stop, fontSize: 13, fontWeight: 700, marginTop: 10 }}>{error}</p>}
+            <button type="submit" disabled={!answer.trim() || submitting} style={{ width: '100%', marginTop: 16, background: C.violet, color: 'white', borderRadius: 16, padding: '15px', fontSize: 16, fontWeight: 900, opacity: !answer.trim() || submitting ? 0.5 : 1 }}>
+              {submitting ? 'Submitting…' : state.numeric_answer !== null ? 'Update Answer' : 'Submit Answer'}
+            </button>
+            {state.numeric_answer !== null && <p style={{ color: C.go, fontSize: 13, fontWeight: 800, textAlign: 'center', marginTop: 12 }}>Answer submitted. You can edit it until the host closes answers.</p>}
+          </form>
         )}
       </div>
     </div>
@@ -2510,6 +2658,9 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
     case 'delayed-reveal': return <DelayedReveal go={go} />
     case 'winner':         return <Winner go={go} />
     case 'final-result':   return <FinalResult go={go} />
+    case 'tiebreaker-pending': return <TiebreakerPending />
+    case 'tiebreaker':     return <LiveTiebreaker />
+    case 'tiebreaker-result': return <LiveTiebreaker />
     case 'reconnecting':   return <Reconnecting />
     case 'game-ended':     return <GameEnded go={go} />
   }

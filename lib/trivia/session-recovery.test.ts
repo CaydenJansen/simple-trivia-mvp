@@ -21,6 +21,12 @@ describe('host session recovery', () => {
     expect(hostRecoveryScreen('finished', 'final-result')).toBe('final-results')
   })
 
+  it('restores an in-progress final tiebreaker to the resolution console', () => {
+    expect(hostRecoveryScreen('live', 'tiebreaker-pending')).toBe('final-results')
+    expect(hostRecoveryScreen('live', 'tiebreaker')).toBe('final-results')
+    expect(hostRecoveryScreen('live', 'tiebreaker-result')).toBe('final-results')
+  })
+
   it('falls back safely when no live state is recognizable', () => {
     expect(hostRecoveryScreen(null, null)).toBe('dashboard')
     expect(hostRecoveryScreen('cancelled', 'game-ended')).toBe('dashboard')

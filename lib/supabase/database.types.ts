@@ -421,6 +421,7 @@ export type Database = {
           question_stage: string
           current_question_key: string | null
           current_content_screen_key: string | null
+          current_tiebreaker_attempt_id: string | null
           quiz_id: string | null
           settings: Json
         }
@@ -435,6 +436,7 @@ export type Database = {
           question_stage?: string
           current_question_key?: string | null
           current_content_screen_key?: string | null
+          current_tiebreaker_attempt_id?: string | null
           quiz_id?: string | null
           settings?: Json
         }
@@ -449,6 +451,7 @@ export type Database = {
           question_stage?: string
           current_question_key?: string | null
           current_content_screen_key?: string | null
+          current_tiebreaker_attempt_id?: string | null
           quiz_id?: string | null
           settings?: Json
         }
@@ -496,6 +499,88 @@ export type Database = {
           referencedColumns: ['id']
         }]
       }
+      game_tie_resolutions: {
+        Row: {
+          id: string
+          game_id: string
+          tied_score: number
+          team_ids: string[]
+          status: 'pending' | 'resolved'
+          resolution_method: 'tiebreaker' | 'allowed_tie' | 'manual' | null
+          ordered_team_ids: string[] | null
+          created_at: string
+          resolved_at: string | null
+        }
+        Insert: {
+          id?: string
+          game_id: string
+          tied_score: number
+          team_ids: string[]
+          status?: 'pending' | 'resolved'
+          resolution_method?: 'tiebreaker' | 'allowed_tie' | 'manual' | null
+          ordered_team_ids?: string[] | null
+          created_at?: string
+          resolved_at?: string | null
+        }
+        Update: Partial<Database['public']['Tables']['game_tie_resolutions']['Insert']>
+        Relationships: [{
+          foreignKeyName: 'game_tie_resolutions_game_id_fkey'
+          columns: ['game_id']
+          isOneToOne: false
+          referencedRelation: 'games'
+          referencedColumns: ['id']
+        }]
+      }
+      game_tiebreaker_attempts: {
+        Row: {
+          id: string
+          game_id: string
+          resolution_id: string
+          game_tiebreaker_id: string
+          team_ids: string[]
+          status: 'open' | 'closed' | 'resolved' | 'tied'
+          created_at: string
+          closed_at: string | null
+          revealed_at: string | null
+        }
+        Insert: {
+          id?: string
+          game_id: string
+          resolution_id: string
+          game_tiebreaker_id: string
+          team_ids: string[]
+          status?: 'open' | 'closed' | 'resolved' | 'tied'
+          created_at?: string
+          closed_at?: string | null
+          revealed_at?: string | null
+        }
+        Update: Partial<Database['public']['Tables']['game_tiebreaker_attempts']['Insert']>
+        Relationships: []
+      }
+      game_tiebreaker_submissions: {
+        Row: {
+          id: string
+          game_id: string
+          attempt_id: string
+          team_id: string
+          numeric_answer: number
+          distance: number | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          game_id: string
+          attempt_id: string
+          team_id: string
+          numeric_answer: number
+          distance?: number | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['game_tiebreaker_submissions']['Insert']>
+        Relationships: []
+      }
       teams: {
         Row: {
           id: string
@@ -503,6 +588,9 @@ export type Database = {
           name: string
           score: number
           prize_awards: Json
+          final_placement: number | null
+          final_bottom_placement: number | null
+          final_sort_order: number | null
           created_at: string
         }
         Insert: {
@@ -511,6 +599,9 @@ export type Database = {
           name: string
           score?: number
           prize_awards?: Json
+          final_placement?: number | null
+          final_bottom_placement?: number | null
+          final_sort_order?: number | null
           created_at?: string
         }
         Update: {
@@ -519,6 +610,9 @@ export type Database = {
           name?: string
           score?: number
           prize_awards?: Json
+          final_placement?: number | null
+          final_bottom_placement?: number | null
+          final_sort_order?: number | null
           created_at?: string
         }
         Relationships: [{
@@ -767,6 +861,45 @@ export type Database = {
           p_game_id: string
         }
         Returns: number
+      }
+      start_game_tiebreaker: {
+        Args: { p_resolution_id: string }
+        Returns: string
+      }
+      close_game_tiebreaker: {
+        Args: { p_attempt_id: string }
+        Returns: undefined
+      }
+      reveal_game_tiebreaker: {
+        Args: { p_attempt_id: string }
+        Returns: boolean
+      }
+      allow_game_tie: {
+        Args: { p_resolution_id: string }
+        Returns: undefined
+      }
+      manually_resolve_game_tie: {
+        Args: { p_resolution_id: string; p_ordered_team_ids: string[] }
+        Returns: undefined
+      }
+      submit_player_tiebreaker: {
+        Args: { p_game_id: string; p_team_id: string; p_numeric_answer: number }
+        Returns: string
+      }
+      get_player_tiebreaker_state: {
+        Args: { p_game_id: string; p_team_id: string }
+        Returns: {
+          attempt_id: string
+          prompt: string | null
+          answer_unit: string | null
+          attempt_status: 'open' | 'closed' | 'resolved' | 'tied'
+          is_participant: boolean
+          numeric_answer: number | null
+          distance: number | null
+          correct_value: number | null
+          submitted_count: number
+          participant_count: number
+        }[]
       }
       reveal_and_score_question: {
         Args: {
