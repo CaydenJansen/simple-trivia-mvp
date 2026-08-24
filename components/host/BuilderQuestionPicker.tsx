@@ -10,6 +10,7 @@ import { sourceQuestionSearchOrFilter } from "@/lib/trivia/source-question-searc
 export type PickerSourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"];
 type Category = Database["public"]["Tables"]["categories"]["Row"];
 type Tag = Database["public"]["Tables"]["tags"]["Row"];
+type TagAlias = Database["public"]["Tables"]["tag_aliases"]["Row"];
 
 export default function BuilderQuestionPicker({
   origin,
@@ -23,6 +24,7 @@ export default function BuilderQuestionPicker({
   const [questions, setQuestions] = useState<PickerSourceQuestion[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
+  const [tagAliases, setTagAliases] = useState<TagAlias[]>([]);
   const [search, setSearch] = useState("");
   const [type, setType] = useState<QuestionMechanic | "all">("all");
   const [categoryId, setCategoryId] = useState("");
@@ -36,14 +38,16 @@ export default function BuilderQuestionPicker({
     void Promise.all([
       supabase.from("categories").select("*").eq("is_active", true).order("sort_order"),
       supabase.from("tags").select("*").eq("is_active", true).order("name"),
-    ]).then(([categoryResult, tagResult]) => {
+      supabase.from("tag_aliases").select("*").order("alias"),
+    ]).then(([categoryResult, tagResult, tagAliasResult]) => {
       if (!active) return;
-      if (categoryResult.error || tagResult.error) {
+      if (categoryResult.error || tagResult.error || tagAliasResult.error) {
         setError("Could not load question filters.");
         return;
       }
       setCategories(categoryResult.data ?? []);
       setTags(tagResult.data ?? []);
+      setTagAliases(tagAliasResult.data ?? []);
     });
     return () => { active = false; };
   }, []);
@@ -62,7 +66,7 @@ export default function BuilderQuestionPicker({
           .order("updated_at", { ascending: false })
           .range(0, 49);
 
-        const searchFilter = sourceQuestionSearchOrFilter(search, categories, tags);
+        const searchFilter = sourceQuestionSearchOrFilter(search, categories, tags, tagAliases);
         if (searchFilter) query = query.or(searchFilter);
         if (type !== "all") query = query.eq("mechanic", type);
         if (categoryId) query = query.contains("category_ids", [categoryId]);
@@ -86,7 +90,7 @@ export default function BuilderQuestionPicker({
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [origin, search, type, categoryId, difficulty, tagId, categories, tags]);
+  }, [origin, search, type, categoryId, difficulty, tagId, categories, tags, tagAliases]);
 
   const title = origin === "user" ? "My Questions" : "Question Library";
 

@@ -26,12 +26,14 @@ import {
 type SourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"];
 type Category = Database["public"]["Tables"]["categories"]["Row"];
 type Tag = Database["public"]["Tables"]["tags"]["Row"];
+type TagAlias = Database["public"]["Tables"]["tag_aliases"]["Row"];
 type EditableQuestionType = Exclude<QuestionType, "image-question">;
 type QuestionTab = "mine" | "library";
 
 type QuestionTaxonomy = {
   categories: Category[];
   tags: Tag[];
+  tagAliases: TagAlias[];
 };
 
 type QuestionDraft = {
@@ -256,7 +258,7 @@ function difficultyLabel(value: number | null) {
 export default function QuestionsArea() {
   const [tab, setTab] = useState<QuestionTab>("library");
   const [questions, setQuestions] = useState<SourceQuestion[]>([]);
-  const [taxonomy, setTaxonomy] = useState<QuestionTaxonomy>({ categories: [], tags: [] });
+  const [taxonomy, setTaxonomy] = useState<QuestionTaxonomy>({ categories: [], tags: [], tagAliases: [] });
   const [count, setCount] = useState(0);
   const [search, setSearch] = useState("");
   const [questionType, setQuestionType] = useState<QuestionMechanic | "all">("all");
@@ -274,9 +276,10 @@ export default function QuestionsArea() {
     void Promise.all([
       supabase.from("categories").select("*").eq("is_active", true).order("sort_order"),
       supabase.from("tags").select("*").eq("is_active", true).order("name"),
-    ]).then(([categories, tags]) => {
+      supabase.from("tag_aliases").select("*").order("alias"),
+    ]).then(([categories, tags, tagAliases]) => {
       if (!active) return;
-      const error = categories.error ?? tags.error;
+      const error = categories.error ?? tags.error ?? tagAliases.error;
       if (error) {
         console.error("Could not load question taxonomy:", error);
         setLoadError("Could not load question filters. Refresh and try again.");
@@ -285,6 +288,7 @@ export default function QuestionsArea() {
       setTaxonomy({
         categories: categories.data ?? [],
         tags: tags.data ?? [],
+        tagAliases: tagAliases.data ?? [],
       });
     });
     return () => { active = false; };
@@ -304,7 +308,7 @@ export default function QuestionsArea() {
           .order("updated_at", { ascending: false })
           .range(0, 49);
 
-        const searchFilter = sourceQuestionSearchOrFilter(search, taxonomy.categories, taxonomy.tags);
+        const searchFilter = sourceQuestionSearchOrFilter(search, taxonomy.categories, taxonomy.tags, taxonomy.tagAliases);
         if (searchFilter) query = query.or(searchFilter);
         if (questionType !== "all") query = query.eq("mechanic", questionType);
         if (difficulty) query = query.eq("editorial_difficulty", Number(difficulty));
@@ -334,7 +338,7 @@ export default function QuestionsArea() {
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [tab, search, questionType, difficulty, categoryId, tagId, status, taxonomy.categories, taxonomy.tags, refresh]);
+  }, [tab, search, questionType, difficulty, categoryId, tagId, status, taxonomy.categories, taxonomy.tags, taxonomy.tagAliases, refresh]);
 
   function changeTab(nextTab: QuestionTab) {
     setTab(nextTab);

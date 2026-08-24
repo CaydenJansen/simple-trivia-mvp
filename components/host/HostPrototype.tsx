@@ -52,6 +52,7 @@ import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-b
 import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy } from "@/lib/trivia/question-metadata";
+import { hostKeyboardNavigation, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
 import {
   EMPTY_SOURCE_QUESTION_BONUS,
   estimatedQuizMinutes,
@@ -169,7 +170,7 @@ const Qs = [
 // ─── BASE COMPONENTS ──────────────────────────────────────────────────────────
 
 function Btn({
-  v = 'primary', sz = 'md', children, onClick, cls = '', disabled = false,
+  v = 'primary', sz = 'md', children, onClick, cls = '', disabled = false, hostNavigation,
 }: {
   v?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'live'
   sz?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'
@@ -177,6 +178,7 @@ function Btn({
   onClick?: (e: React.MouseEvent) => void
   cls?: string
   disabled?: boolean
+  hostNavigation?: HostKeyboardNavigation
 }) {
   const base = 'inline-flex items-center justify-center gap-2 font-semibold rounded-xl transition-all select-none disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer'
   const sizes: Record<string, string> = {
@@ -194,10 +196,41 @@ function Btn({
     live: 'bg-violet text-white text-lg font-bold hover:bg-violet-hover active:scale-[0.97] shadow-lg shadow-violet/25',
   }
   return (
-    <button className={`${base} ${sizes[sz]} ${variants[v]} ${cls}`} onClick={onClick} disabled={disabled}>
+    <button
+      className={`${base} ${sizes[sz]} ${variants[v]} ${cls}`}
+      onClick={onClick}
+      disabled={disabled}
+      data-host-navigation={hostNavigation}
+    >
       {children}
     </button>
   )
+}
+
+function useHostKeyboardShortcuts(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return
+
+      const navigation = hostKeyboardNavigation(event.key, event.code)
+      if (!navigation) return
+
+      const eventTarget = event.target
+      if (eventTarget instanceof Element && eventTarget.closest('input, textarea, select, button, a, [contenteditable="true"], [role="button"]')) return
+      if (document.querySelector('[data-host-shortcuts="blocked"]')) return
+
+      const action = document.querySelector<HTMLButtonElement>(`button[data-host-navigation="${navigation}"]:not(:disabled)`)
+      if (!action || action.offsetParent === null) return
+
+      event.preventDefault()
+      action.click()
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [enabled])
 }
 
 function Chip({
@@ -326,7 +359,7 @@ function JoinCodeButton({
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#080713]/80 px-5 py-8 backdrop-blur-sm">
+        <div data-host-shortcuts="blocked" className="fixed inset-0 z-[100] flex items-center justify-center bg-[#080713]/80 px-5 py-8 backdrop-blur-sm">
           <section style={{ background: C.panel }} className="w-full max-w-lg rounded-3xl p-7 text-center shadow-2xl">
             <div className="flex items-start justify-between gap-4 text-left">
               <div>
@@ -401,7 +434,7 @@ function CancelGameButton({
       </button>
 
       {confirming && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#080713]/80 px-5 backdrop-blur-sm">
+        <div data-host-shortcuts="blocked" className="fixed inset-0 z-[100] flex items-center justify-center bg-[#080713]/80 px-5 backdrop-blur-sm">
           <section style={{ background: C.panel }} className="w-full max-w-md rounded-3xl p-7 text-center shadow-2xl">
             <div style={{ background: '#FEF2F2', color: C.stop }} className="mx-auto flex h-14 w-14 items-center justify-center rounded-full text-2xl">!</div>
             <h2 style={{ color: C.ink }} className="mt-5 text-2xl font-black">Cancel this game?</h2>
@@ -4315,7 +4348,7 @@ function Lobby({ go }: { go: Go }) {
                 <p style={{ color: C.stop }} className="text-xs font-semibold">{startError}</p>
               </div>
             )}
-            <Btn sz="lg" cls="w-full" onClick={handleStartQuiz} disabled={starting || teams.length === 0}>
+            <Btn sz="lg" cls="w-full" onClick={handleStartQuiz} disabled={starting || teams.length === 0} hostNavigation="forward">
               {starting ? 'Starting Quiz…' : 'Start Quiz'}
             </Btn>
           </div>
@@ -5155,7 +5188,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             <h1 className="text-5xl font-black leading-tight">{contentScreen?.title ?? 'Loading content screen…'}</h1>
             {contentScreen?.body && <p style={{ color: C.liveDim }} className="mx-auto mt-6 max-w-2xl text-xl leading-8">{contentScreen.body}</p>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
-            <button onClick={handleAdvanceContentScreen} disabled={actionBusy || !contentScreen} style={{ background: C.violet, boxShadow: `0 8px 32px ${C.violet}60` }} className="mx-auto mt-10 min-w-72 rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
+            <button data-host-navigation="forward" onClick={handleAdvanceContentScreen} disabled={actionBusy || !contentScreen} style={{ background: C.violet, boxShadow: `0 8px 32px ${C.violet}60` }} className="mx-auto mt-10 min-w-72 rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
               {actionBusy ? 'Advancing…' : contentButtonLabel}
             </button>
           </section>
@@ -5861,7 +5894,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             {gameScreen === 'round-start' ? (
               <div className="space-y-3">
                 <p style={{ color: C.caution }} className="text-[11px] text-center font-semibold uppercase tracking-widest">Round intro is on player phones</p>
-                <button onClick={handleOpenQuestion} disabled={actionBusy || !question}
+                <button data-host-navigation="forward" onClick={handleOpenQuestion} disabled={actionBusy || !question}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
                   className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
                   {actionBusy ? 'Opening…' : firstRoundItem?.kind === 'content' ? 'Show First Content Screen' : 'Open First Question'}
@@ -5875,6 +5908,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     : `Accepting main answers · ${answeredCount}/${teams.length} submitted`}
                 </p>
                 <button
+                  data-host-navigation="forward"
                   onClick={activeBonus && questionStage === 'core' ? handleShowBonus : handleCloseAnswers}
                   disabled={actionBusy}
                   style={{
@@ -5896,6 +5930,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             ) : phase === 'closed' ? (
               <div className="space-y-3">
                 <button
+                  data-host-navigation="back"
                   onClick={handleReopenAnswers}
                   disabled={actionBusy}
                   style={{
@@ -5916,6 +5951,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                       : 'Answers closed — ready to reveal'}
                 </p>
                 <button
+                  data-host-navigation="forward"
                   onClick={answerRevealMode === 'round' ? handleScoreAndContinue : handleRevealAnswer}
                   disabled={actionBusy || !question || reviewCount > 0}
                   style={{
@@ -5946,7 +5982,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   <p style={{ color: C.go }} className="font-extrabold text-base">Answer Revealed</p>
                   <p style={{ color: C.liveDim }} className="text-[11px] mt-0.5">{correctDisplay}</p>
                 </div>
-                <button onClick={handleAdvance} disabled={actionBusy}
+                <button data-host-navigation="forward" onClick={handleAdvance} disabled={actionBusy}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
                   className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
                   {actionBusy
@@ -6153,7 +6189,7 @@ function EndOfRound({ go }: { go: Go }) {
             </div>
             <p style={{ color: C.liveDim }} className="mt-5 text-sm">Each team also sees its own submitted answer, result, and points.</p>
             {error && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{error}</p>}
-            <button onClick={advanceDelayedReveal} disabled={busy} style={{ background: C.violet }} className="mt-8 min-w-72 rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
+            <button data-host-navigation="forward" onClick={advanceDelayedReveal} disabled={busy} style={{ background: C.violet }} className="mt-8 min-w-72 rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
               {busy
                 ? 'Advancing…'
                 : hasNextReveal
@@ -6241,11 +6277,11 @@ function EndOfRound({ go }: { go: Go }) {
             {intermission ? 'Hide Intermission' : 'Take a Break'}
           </Btn>
           {nextQuestion ? (
-            <Btn sz="lg" cls="flex-1 justify-center" onClick={startNextRound} disabled={busy}>
+            <Btn sz="lg" cls="flex-1 justify-center" onClick={startNextRound} disabled={busy} hostNavigation="forward">
               Start Round {nextQuestion.round_number}
             </Btn>
           ) : (
-            <Btn sz="lg" cls="flex-1 justify-center" onClick={() => go('final-results')}>View Final Results</Btn>
+            <Btn sz="lg" cls="flex-1 justify-center" onClick={() => go('final-results')} hostNavigation="forward">View Final Results</Btn>
           )}
         </div>
 
@@ -6433,6 +6469,10 @@ export default function App({ showDevNavigator = false }: { showDevNavigator?: b
   const [screen, setScreen] = useState<Screen>('dashboard')
   const [restoringSession, setRestoringSession] = useState(true)
   const [connectionLost, setConnectionLost] = useState(false)
+
+  useHostKeyboardShortcuts(
+    !restoringSession && (screen === 'lobby' || screen === 'live-question' || screen === 'end-of-round'),
+  )
 
   useEffect(() => {
     let active = true
