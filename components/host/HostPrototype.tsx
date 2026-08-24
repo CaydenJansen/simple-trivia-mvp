@@ -2,7 +2,6 @@
 
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -49,7 +48,7 @@ import {
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
 import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
-import { reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
+import { insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, type TriviaDifficulty } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy } from "@/lib/trivia/question-metadata";
 import {
@@ -2297,102 +2296,99 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
   onReorderItems: (orderedKeys: string[]) => void
 }) {
   const [open, setOpen] = useState(true)
-  const [draggedItemKey, setDraggedItemKey] = useState<string | null>(null)
-  const [itemDropTarget, setItemDropTarget] = useState<{ key: string; placement: DropPlacement } | null>(null)
-  const itemElementsRef = useRef(new Map<string, HTMLDivElement>())
-  const previousItemRectsRef = useRef<Map<string, DOMRect> | null>(null)
+  const [itemDragPreview, setItemDragPreview] = useState<{
+    key: string
+    offsetY: number
+    originalIndex: number
+    insertionIndex: number
+    itemHeight: number
+  } | null>(null)
   const items = [
     ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, question })),
     ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, screen })),
   ].sort((a, b) => a.itemPosition - b.itemPosition)
   const itemKeys = items.map(item => item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`)
-  const previewItemKeys = draggedItemKey && itemDropTarget
-    ? reorderKeys(itemKeys, draggedItemKey, itemDropTarget.key, itemDropTarget.placement)
-    : itemKeys
-  const itemByKey = new Map(items.map(item => [
-    item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`,
-    item,
-  ] as const))
-  const renderedItems = previewItemKeys.map(key => itemByKey.get(key)).filter((item): item is typeof items[number] => Boolean(item))
-  const previewOrderKey = previewItemKeys.join('|')
 
-  function captureItemRects() {
-    previousItemRectsRef.current = new Map(
-      [...itemElementsRef.current].map(([key, element]) => [key, element.getBoundingClientRect()]),
-    )
+  function itemDragTransform(itemKey: string) {
+    if (!itemDragPreview) return undefined
+    if (itemKey === itemDragPreview.key) return `translate3d(0, ${itemDragPreview.offsetY}px, 0)`
+
+    const itemIndex = itemKeys.indexOf(itemKey)
+    const distance = itemDragPreview.itemHeight + 8
+    if (
+      itemDragPreview.insertionIndex > itemDragPreview.originalIndex
+      && itemIndex > itemDragPreview.originalIndex
+      && itemIndex <= itemDragPreview.insertionIndex
+    ) return `translate3d(0, -${distance}px, 0)`
+    if (
+      itemDragPreview.insertionIndex < itemDragPreview.originalIndex
+      && itemIndex >= itemDragPreview.insertionIndex
+      && itemIndex < itemDragPreview.originalIndex
+    ) return `translate3d(0, ${distance}px, 0)`
+    return 'translate3d(0, 0, 0)'
   }
-
-  useLayoutEffect(() => {
-    const previousRects = previousItemRectsRef.current
-    if (!previousRects) return
-    previousItemRectsRef.current = null
-
-    itemElementsRef.current.forEach((element, key) => {
-      const previous = previousRects.get(key)
-      if (!previous) return
-      const current = element.getBoundingClientRect()
-      const deltaY = previous.top - current.top
-      if (Math.abs(deltaY) < 1) return
-
-      element.animate(
-        [
-          { transform: `translateY(${deltaY}px)` },
-          { transform: 'translateY(0)' },
-        ],
-        { duration: 220, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
-      )
-    })
-  }, [previewOrderKey])
 
   function startItemDrag(itemKey: string, event: ReactPointerEvent<HTMLButtonElement>) {
     if (event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
     const pointerId = event.pointerId
-    let latestTarget: { key: string; placement: DropPlacement } | null = null
-    setDraggedItemKey(itemKey)
-    setItemDropTarget(null)
+    const originalIndex = itemKeys.indexOf(itemKey)
+    const itemList = event.currentTarget.closest<HTMLElement>('[data-builder-item-list]')
+    const itemBounds = itemList
+      ? [...itemList.querySelectorAll<HTMLElement>('[data-builder-item-key]')]
+        .map(element => ({ key: element.dataset.builderItemKey ?? '', bounds: element.getBoundingClientRect() }))
+        .filter(item => item.key)
+      : []
+    const draggedBounds = itemBounds.find(item => item.key === itemKey)?.bounds
+    if (originalIndex < 0 || !draggedBounds) return
 
-    const updateTarget = (clientX: number, clientY: number) => {
-      const target = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('[data-builder-item-key]')
-      const targetKey = target?.dataset.builderItemKey
-      if (targetKey === itemKey) return
-      if (!target || !targetKey) {
-        if (!latestTarget) return
-        captureItemRects()
-        latestTarget = null
-        setItemDropTarget(null)
-        return
-      }
-      const bounds = target.getBoundingClientRect()
-      const nextTarget = { key: targetKey, placement: clientY < bounds.top + bounds.height / 2 ? 'before' as const : 'after' as const }
-      if (latestTarget?.key === nextTarget.key && latestTarget.placement === nextTarget.placement) return
-      captureItemRects()
-      latestTarget = nextTarget
-      setItemDropTarget(nextTarget)
+    const otherItems = itemBounds.filter(item => item.key !== itemKey)
+    const startY = event.clientY
+    let latestPointerY = startY
+    let latestInsertionIndex = originalIndex
+    let animationFrame: number | null = null
+    const otherItemCentres = otherItems.map(item => item.bounds.top + item.bounds.height / 2)
+
+    const insertionIndexForY = (pointerY: number) => {
+      return insertionIndexWithHysteresis(otherItemCentres, latestInsertionIndex, pointerY)
+    }
+
+    const updatePreview = () => {
+      animationFrame = null
+      const insertionIndex = insertionIndexForY(latestPointerY)
+      latestInsertionIndex = insertionIndex
+      setItemDragPreview({
+        key: itemKey,
+        offsetY: latestPointerY - startY,
+        originalIndex,
+        insertionIndex,
+        itemHeight: draggedBounds.height,
+      })
     }
     const move = (moveEvent: PointerEvent) => {
-      if (moveEvent.pointerId === pointerId) updateTarget(moveEvent.clientX, moveEvent.clientY)
+      if (moveEvent.pointerId !== pointerId) return
+      latestPointerY = moveEvent.clientY
+      if (animationFrame === null) animationFrame = window.requestAnimationFrame(updatePreview)
     }
     const finish = (finishEvent: PointerEvent) => {
       if (finishEvent.pointerId !== pointerId) return
-      if (finishEvent.type === 'pointerup' && latestTarget) {
-        onReorderItems(reorderKeys(
-          itemKeys,
-          itemKey,
-          latestTarget.key,
-          latestTarget.placement,
-        ))
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame)
+        animationFrame = null
+      }
+      latestPointerY = finishEvent.clientY
+      latestInsertionIndex = insertionIndexForY(latestPointerY)
+      if (finishEvent.type === 'pointerup' && latestInsertionIndex !== originalIndex) {
+        onReorderItems(moveKeyToIndex(itemKeys, itemKey, latestInsertionIndex))
       }
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
-      if (finishEvent.type === 'pointercancel' && latestTarget) captureItemRects()
-      setDraggedItemKey(null)
-      setItemDropTarget(null)
+      setItemDragPreview(null)
     }
 
-    updateTarget(event.clientX, event.clientY)
+    updatePreview()
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', finish)
     window.addEventListener('pointercancel', finish)
@@ -2423,21 +2419,17 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
         </button>
       </div>
       {open && (
-        <div className="p-3 space-y-2">
-          {renderedItems.map(item => {
+        <div data-builder-item-list className="p-3 space-y-2">
+          {items.map(item => {
             const itemKey = item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`
-            const dropPlacement = itemDropTarget?.key === itemKey ? itemDropTarget.placement : null
+            const dragged = itemDragPreview?.key === itemKey
             return (
             <div
               key={itemKey}
-              ref={element => {
-                if (element) itemElementsRef.current.set(itemKey, element)
-                else itemElementsRef.current.delete(itemKey)
-              }}
               data-builder-item-key={itemKey}
-              className={`relative rounded-xl transition-[opacity,box-shadow] duration-200 ${draggedItemKey === itemKey ? 'z-20 opacity-70 shadow-xl ring-2 ring-violet/25' : ''}`}
+              style={{ transform: itemDragTransform(itemKey) }}
+              className={`relative rounded-xl will-change-transform ${dragged ? 'z-20 cursor-grabbing opacity-90 shadow-xl ring-2 ring-violet/25 transition-[opacity,box-shadow] duration-150' : 'transition-transform duration-150 ease-out'}`}
             >
-              {dropPlacement === 'before' && <div className="absolute -top-1 left-3 right-3 z-10 h-1 rounded-full bg-violet" />}
               {item.kind === 'question' ? (
               <BuilderQuestion
               q={item.question}
@@ -2458,7 +2450,6 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
               onPointerDown={event => startItemDrag(itemKey, event)}
             />
           )}
-              {dropPlacement === 'after' && <div className="absolute -bottom-1 left-3 right-3 z-10 h-1 rounded-full bg-violet" />}
             </div>
           )})}
           <div className="flex gap-1 pt-1">
