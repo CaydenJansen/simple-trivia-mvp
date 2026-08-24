@@ -2225,6 +2225,89 @@ function builderCorrectAnswerDisplay(question: BuilderQuestionData) {
   return String(question.correctAnswer ?? '') || '—'
 }
 
+function BuilderQuestionAnswerPreview({ question }: { question: BuilderQuestionData }) {
+  const correctAnswers = asStringArray(question.correctAnswer)
+  const acceptedGroups = acceptedAnswerGroups(question.acceptedAnswers)
+  const options = questionOptions(question.options)
+  const bonus = sourceQuestionBonusDraft(question.bonus)
+
+  return (
+    <div className="mt-3 space-y-2">
+      <div style={{ border: `1px solid ${C.go}30`, background: '#f0fdf9' }} className="rounded-lg px-3 py-2.5">
+        {question.questionType === 'multiple-choice' ? (
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {options.map((option, optionIndex) => {
+              const key = option.key ?? String.fromCharCode(65 + optionIndex)
+              const correct = key === String(question.correctAnswer ?? '')
+              return (
+                <div key={`${key}-${optionIndex}`} className="flex min-w-0 items-start gap-1.5 text-xs">
+                  <span style={{ color: correct ? C.go : C.sub }} className="w-5 shrink-0 font-bold">
+                    {correct ? '✓' : key}
+                  </span>
+                  <span style={{ color: correct ? C.ink : C.sub }} className={correct ? 'font-bold' : ''}>{option.label || '—'}</span>
+                </div>
+              )
+            })}
+          </div>
+        ) : question.questionType === 'multi-part' ? (
+          <div className="space-y-2">
+            {correctAnswers.map((answer, index) => {
+              const part = options[index]
+              const aliases = acceptedGroups[index]?.filter(Boolean) ?? []
+              return (
+                <div key={`${part?.label ?? index}-${index}`} className="text-xs">
+                  <div className="flex items-start gap-2">
+                    <span style={{ color: C.violet }} className="shrink-0 font-bold">{part?.label || String.fromCharCode(65 + index)}</span>
+                    <div className="min-w-0">
+                      {part?.clue && <p style={{ color: C.sub }}>{part.clue}</p>}
+                      <p style={{ color: C.ink }} className="font-bold">Answer: {answer || '—'}</p>
+                      {aliases.length > 0 && <p style={{ color: C.sub }}>Also accept: {aliases.join(' · ')}</p>}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : question.questionType === 'multi-answer' ? (
+          <div className="space-y-1.5">
+            {correctAnswers.map((answer, index) => {
+              const aliases = acceptedGroups[index]?.filter(Boolean) ?? []
+              return (
+                <div key={`${answer}-${index}`} className="text-xs">
+                  <p style={{ color: C.ink }}><span style={{ color: C.go }} className="font-bold">{index + 1}.</span> <span className="font-bold">{answer || '—'}</span></p>
+                  {aliases.length > 0 && <p style={{ color: C.sub }} className="pl-4">Also accept: {aliases.join(' · ')}</p>}
+                </div>
+              )
+            })}
+          </div>
+        ) : question.questionType === 'ranking' ? (
+          <div className="text-xs">
+            <p style={{ color: C.go }} className="mb-1 font-bold">Correct order</p>
+            <ol style={{ color: C.ink }} className="space-y-0.5 pl-4">
+              {correctAnswers.map((answer, index) => <li key={`${answer}-${index}`}>{index + 1}. {answer}</li>)}
+            </ol>
+          </div>
+        ) : (
+          <div className="text-xs">
+            <p><span style={{ color: C.go }} className="font-bold">Answer:</span> <span style={{ color: C.ink }} className="font-bold">{builderCorrectAnswerDisplay(question)}</span></p>
+            {acceptedGroups.flat().filter(Boolean).length > 0 && (
+              <p style={{ color: C.sub }} className="mt-1">Also accept: {acceptedGroups.flat().filter(Boolean).join(' · ')}</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {bonus.enabled && (
+        <div style={{ border: `1px solid ${C.caution}35`, background: '#fffbeb' }} className="rounded-lg px-3 py-2.5 text-xs">
+          <p style={{ color: C.caution }} className="font-bold">Bonus · {bonus.points} {bonus.points === 1 ? 'point' : 'points'}</p>
+          <p style={{ color: C.ink }} className="mt-1 font-semibold">{bonus.prompt || '—'}</p>
+          <p style={{ color: C.sub }} className="mt-0.5"><span className="font-bold">Answer:</span> {bonus.answer || '—'}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function QuizPreview({ title, rounds, onClose }: {
   title: string
   rounds: BuilderRoundData[]
@@ -2636,6 +2719,8 @@ function BuilderQuestion({ q, idx, replacing, onEdit, onReplace, onCycleLibrary,
   onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
 }) {
   const isLibraryQuestion = q.sourceOrigin === 'platform'
+  const hasCategory = Boolean(q.cat && q.cat !== 'Uncategorised')
+  const hasDifficulty = Boolean(q.diff && q.diff !== 'Unrated')
 
   return (
     <div onClick={onEdit} style={{
@@ -2673,8 +2758,8 @@ function BuilderQuestion({ q, idx, replacing, onEdit, onReplace, onCycleLibrary,
           <p style={{ color: C.ink }} className="text-sm leading-snug group-hover:text-violet transition-colors">{q.text}</p>
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
-          <Chip>{q.cat}</Chip>
-          <Chip color={difficultyChipColor(q.diff)}>{q.diff}</Chip>
+          {hasCategory && <Chip>{q.cat}</Chip>}
+          {hasDifficulty && <Chip color={difficultyChipColor(q.diff)}>{q.diff}</Chip>}
           <Chip color="violet">{q.type}</Chip>
           {q.hasImage && <Chip color="violet">📷 Image</Chip>}
           {q.bonus !== null && <Chip color="medium">+ Bonus</Chip>}
@@ -2682,6 +2767,7 @@ function BuilderQuestion({ q, idx, replacing, onEdit, onReplace, onCycleLibrary,
             <I.pencil /> Edit
           </span>
         </div>
+        <BuilderQuestionAnswerPreview question={q} />
       </div>
       <div className="flex items-center gap-1 shrink-0 mt-0.5" onClick={e => e.stopPropagation()}>
         {isLibraryQuestion && (

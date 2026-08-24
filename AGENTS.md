@@ -63,6 +63,7 @@
 - Host live controls and question content must remain usable on small laptop screens.
 - Quiz readiness is derived automatically when saving: complete quizzes become Ready, incomplete quizzes remain Draft with specific blockers. Do not reintroduce a manual readiness step or preparation progress wizard.
 - Saving and hosting are separate deliberate actions. Any edit disables hosting until the current quiz version is saved; saving must never automatically enter the hosting flow.
+- Quiz Builder overview cards expose the complete question and answer information needed for review, including accepted alternatives, choices, multi-part clues, ranking order, and bonuses. Omit absent optional category/difficulty metadata instead of showing placeholder labels such as Uncategorised or Unrated.
 - Prepared tiebreakers are optional for manually built quizzes; recommend at least two without blocking save or hosting. Automatically built quizzes must prepare exactly three.
 - Auto-Build must fail clearly when active source content cannot satisfy the requested count, topics, difficulty range, or three-tiebreaker requirement. Never silently duplicate questions or reduce the requested quiz.
 - Auto-Build is conceptually two-stage: select an eligible candidate set using hard requirements, then sequence it with soft diversity penalties. Its diversity fingerprint includes part and bonus metadata.
