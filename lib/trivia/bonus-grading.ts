@@ -1,5 +1,5 @@
 import type { Json } from '@/lib/supabase/database.types'
-import { reviewStatusForPair, type SubmissionGrading } from './grading'
+import { reviewMatchForPair, type SubmissionGrading } from './grading'
 
 export type RuntimeBonus = {
   prompt: string
@@ -51,7 +51,7 @@ export function buildBonusGrading(bonus: RuntimeBonus, answerText: string): Subm
   const candidates = [bonus.correctAnswer, ...bonus.acceptedAnswers]
   const statuses = candidates.map(expected => ({
     expected,
-    status: reviewStatusForPair(answerText, expected),
+    ...reviewMatchForPair(answerText, expected),
   }))
   const match = statuses.find(item => item.status === 'correct')
     ?? statuses.find(item => item.status === 'review')
@@ -62,6 +62,7 @@ export function buildBonusGrading(bonus: RuntimeBonus, answerText: string): Subm
       submitted: answerText,
       expected: match?.expected ?? bonus.correctAnswer,
       status: match?.status ?? 'incorrect',
+      review_reason: match?.review_reason,
     }],
   }
 }
@@ -75,6 +76,7 @@ export function storedBonusGrading(bonus: RuntimeBonus, submission: BonusSubmiss
       submitted: String(item.submitted ?? submission.answer_text),
       expected: item.expected === undefined ? bonus.correctAnswer : String(item.expected),
       status: item.status === 'correct' || item.status === 'review' ? item.status : 'incorrect',
+      review_reason: item.review_reason,
     }],
   }
 }

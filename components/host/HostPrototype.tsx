@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -18,6 +19,7 @@ import {
   multiAnswerMissing,
   parseStoredAnswer,
   questionOptions,
+  reviewReasonLabel,
   storedSubmissionGrading,
   type ReviewStatus,
   type SubmissionGrading,
@@ -2297,10 +2299,50 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
   const [open, setOpen] = useState(true)
   const [draggedItemKey, setDraggedItemKey] = useState<string | null>(null)
   const [itemDropTarget, setItemDropTarget] = useState<{ key: string; placement: DropPlacement } | null>(null)
+  const itemElementsRef = useRef(new Map<string, HTMLDivElement>())
+  const previousItemRectsRef = useRef<Map<string, DOMRect> | null>(null)
   const items = [
     ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, question })),
     ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, screen })),
   ].sort((a, b) => a.itemPosition - b.itemPosition)
+  const itemKeys = items.map(item => item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`)
+  const previewItemKeys = draggedItemKey && itemDropTarget
+    ? reorderKeys(itemKeys, draggedItemKey, itemDropTarget.key, itemDropTarget.placement)
+    : itemKeys
+  const itemByKey = new Map(items.map(item => [
+    item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`,
+    item,
+  ] as const))
+  const renderedItems = previewItemKeys.map(key => itemByKey.get(key)).filter((item): item is typeof items[number] => Boolean(item))
+  const previewOrderKey = previewItemKeys.join('|')
+
+  function captureItemRects() {
+    previousItemRectsRef.current = new Map(
+      [...itemElementsRef.current].map(([key, element]) => [key, element.getBoundingClientRect()]),
+    )
+  }
+
+  useLayoutEffect(() => {
+    const previousRects = previousItemRectsRef.current
+    if (!previousRects) return
+    previousItemRectsRef.current = null
+
+    itemElementsRef.current.forEach((element, key) => {
+      const previous = previousRects.get(key)
+      if (!previous) return
+      const current = element.getBoundingClientRect()
+      const deltaY = previous.top - current.top
+      if (Math.abs(deltaY) < 1) return
+
+      element.animate(
+        [
+          { transform: `translateY(${deltaY}px)` },
+          { transform: 'translateY(0)' },
+        ],
+        { duration: 220, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+      )
+    })
+  }, [previewOrderKey])
 
   function startItemDrag(itemKey: string, event: ReactPointerEvent<HTMLButtonElement>) {
     if (event.button !== 0) return
@@ -2314,14 +2356,20 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
     const updateTarget = (clientX: number, clientY: number) => {
       const target = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('[data-builder-item-key]')
       const targetKey = target?.dataset.builderItemKey
-      if (!target || !targetKey || targetKey === itemKey) {
+      if (targetKey === itemKey) return
+      if (!target || !targetKey) {
+        if (!latestTarget) return
+        captureItemRects()
         latestTarget = null
         setItemDropTarget(null)
         return
       }
       const bounds = target.getBoundingClientRect()
-      latestTarget = { key: targetKey, placement: clientY < bounds.top + bounds.height / 2 ? 'before' : 'after' }
-      setItemDropTarget(latestTarget)
+      const nextTarget = { key: targetKey, placement: clientY < bounds.top + bounds.height / 2 ? 'before' as const : 'after' as const }
+      if (latestTarget?.key === nextTarget.key && latestTarget.placement === nextTarget.placement) return
+      captureItemRects()
+      latestTarget = nextTarget
+      setItemDropTarget(nextTarget)
     }
     const move = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId === pointerId) updateTarget(moveEvent.clientX, moveEvent.clientY)
@@ -2330,7 +2378,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
       if (finishEvent.pointerId !== pointerId) return
       if (finishEvent.type === 'pointerup' && latestTarget) {
         onReorderItems(reorderKeys(
-          items.map(roundItem => roundItem.kind === 'question' ? `question:${roundItem.question.id}` : `content:${roundItem.screen.id}`),
+          itemKeys,
           itemKey,
           latestTarget.key,
           latestTarget.placement,
@@ -2339,6 +2387,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
+      if (finishEvent.type === 'pointercancel' && latestTarget) captureItemRects()
       setDraggedItemKey(null)
       setItemDropTarget(null)
     }
@@ -2359,7 +2408,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
           title="Drag to reorder round"
           onPointerDown={onRoundPointerDown}
           style={{ color: C.sub }}
-          className="cursor-grab hover:text-ink active:cursor-grabbing transition-colors"
+          className="touch-none select-none cursor-grab hover:text-ink active:cursor-grabbing transition-colors"
         ><I.grip /></button>
         <span style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-widest shrink-0">Round {roundNumber}</span>
         <input
@@ -2375,14 +2424,18 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
       </div>
       {open && (
         <div className="p-3 space-y-2">
-          {items.map(item => {
+          {renderedItems.map(item => {
             const itemKey = item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`
             const dropPlacement = itemDropTarget?.key === itemKey ? itemDropTarget.placement : null
             return (
             <div
               key={itemKey}
+              ref={element => {
+                if (element) itemElementsRef.current.set(itemKey, element)
+                else itemElementsRef.current.delete(itemKey)
+              }}
               data-builder-item-key={itemKey}
-              className={`relative rounded-xl ${draggedItemKey === itemKey ? 'opacity-45' : ''}`}
+              className={`relative rounded-xl transition-[opacity,box-shadow] duration-200 ${draggedItemKey === itemKey ? 'z-20 opacity-70 shadow-xl ring-2 ring-violet/25' : ''}`}
             >
               {dropPlacement === 'before' && <div className="absolute -top-1 left-3 right-3 z-10 h-1 rounded-full bg-violet" />}
               {item.kind === 'question' ? (
@@ -2440,7 +2493,7 @@ function BuilderContentScreen({ screen, onChange, onDelete, onPointerDown }: {
         onClick={() => setExpanded(v => !v)}>
         <button type="button" aria-label="Drag content screen to reorder" title="Drag to reorder"
           onPointerDown={onPointerDown}
-          style={{ color: C.sub }} className="mt-0.5 cursor-grab hover:text-ink active:cursor-grabbing transition-colors shrink-0"
+          style={{ color: C.sub }} className="mt-0.5 touch-none select-none cursor-grab hover:text-ink active:cursor-grabbing transition-colors shrink-0"
           onClick={e => e.stopPropagation()}><I.grip /></button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5">
@@ -2526,7 +2579,7 @@ function BuilderQuestion({ q, idx, replacing, onEdit, onReplace, onCycleLibrary,
       className="flex items-start gap-3 px-3 py-3 rounded-xl hover:border-violet hover:shadow-sm transition-all group">
       <button type="button" aria-label={`Drag question ${idx + 1} to reorder`} title="Drag to reorder"
         onPointerDown={onPointerDown}
-        style={{ color: C.sub }} className="mt-0.5 cursor-grab hover:text-ink active:cursor-grabbing transition-colors shrink-0"
+        style={{ color: C.sub }} className="mt-0.5 touch-none select-none cursor-grab hover:text-ink active:cursor-grabbing transition-colors shrink-0"
         onClick={e => e.stopPropagation()}><I.grip /></button>
       <div className="flex-1 min-w-0">
         {isLibraryQuestion && (
@@ -4219,6 +4272,7 @@ type LiveQuestionDefinition = {
   difficulty: string | null
   question_type: string
   correct_answer: unknown
+  accepted_answers: unknown
   options: unknown
   image_url: string | null
   points_max: number
@@ -4415,7 +4469,7 @@ function LiveQuestion({ go }: { go: Go }) {
       const [questionResult, contentScreenResult, teamResult] = await Promise.all([
         supabase
           .from('game_questions')
-          .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, bonus, notes')
+          .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, image_url, points_max, bonus, notes')
           .eq('game_id', game.id)
           .order('position', { ascending: true }),
         supabase
@@ -5454,6 +5508,15 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     </span>
                   </>
                 )}
+                {needsReview && item?.review_reason && (
+                  <span
+                    style={{ color: C.caution }}
+                    className="shrink-0 text-[10px] font-bold"
+                    title={reviewReasonLabel(item.review_reason)}
+                  >
+                    {reviewReasonLabel(item.review_reason)}
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center justify-end">
@@ -5578,6 +5641,15 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                             possible: {item.expected}
                           </span>
                         )}
+                        {item.status === 'review' && item.review_reason && (
+                          <span
+                            style={{ color: C.caution }}
+                            className="shrink-0 text-[10px] font-bold"
+                            title={reviewReasonLabel(item.review_reason)}
+                          >
+                            {reviewReasonLabel(item.review_reason)}
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex justify-end">
@@ -5659,6 +5731,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               </span>
               {item?.expected && item.status !== 'correct' && (
                 <><span style={{ color: C.liveDim }}>→</span><span style={{ color: C.go }} className="truncate text-xs font-bold">{item.expected}</span></>
+              )}
+              {needsReview && item?.review_reason && (
+                <span style={{ color: C.caution }} className="shrink-0 text-[10px] font-bold" title={reviewReasonLabel(item.review_reason)}>
+                  {reviewReasonLabel(item.review_reason)}
+                </span>
               )}
             </div>
             <div className="flex justify-end">
@@ -5845,7 +5922,7 @@ function EndOfRound({ go }: { go: Go }) {
       const [{ data: questionRows }, { data: teamRows }] = await Promise.all([
         supabase
           .from('game_questions')
-          .select('question_key, position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, options, image_url, points_max, notes')
+          .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, image_url, points_max, bonus, notes')
           .eq('game_id', game.id)
           .order('position', { ascending: true }),
         supabase

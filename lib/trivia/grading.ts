@@ -1,10 +1,17 @@
 export type ReviewStatus = 'correct' | 'incorrect' | 'review'
 
+export type ReviewReason =
+  | 'minor_typo'
+  | 'same_characters'
+  | 'article_difference'
+  | 'close_phrase'
+
 export type ReviewItem = {
   label?: string
   submitted: string
   expected?: string
   status: ReviewStatus
+  review_reason?: ReviewReason
 }
 
 export type SubmissionGrading = {
@@ -15,6 +22,7 @@ export type SubmissionGrading = {
 export type GradingQuestion = {
   question_type: string
   correct_answer: unknown
+  accepted_answers?: unknown
   options: unknown
   points_max: number
 }
@@ -46,43 +54,135 @@ export function questionOptions(value: unknown): { key?: string; label?: string;
     : []
 }
 
-function isOneEditAway(a: string, b: string) {
-  if (!a || !b || a === b) return false
-  if (Math.abs(a.length - b.length) > 1) return false
-
-  let i = 0
-  let j = 0
-  let edits = 0
-
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      i += 1
-      j += 1
-      continue
-    }
-
-    edits += 1
-    if (edits > 1) return false
-
-    if (a.length > b.length) i += 1
-    else if (b.length > a.length) j += 1
-    else {
-      i += 1
-      j += 1
-    }
-  }
-
-  if (i < a.length || j < b.length) edits += 1
-  return edits === 1
+function compactAnswer(value: string) {
+  return value.replace(/\s+/g, '')
 }
 
-export function reviewStatusForPair(submitted: string, expected: string): ReviewStatus {
+function editDistance(a: string, b: string, maximum: number) {
+  if (Math.abs(a.length - b.length) > maximum) return maximum + 1
+
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index)
+  for (let aIndex = 1; aIndex <= a.length; aIndex += 1) {
+    const current = [aIndex]
+    let rowMinimum = aIndex
+
+    for (let bIndex = 1; bIndex <= b.length; bIndex += 1) {
+      const substitutionCost = a[aIndex - 1] === b[bIndex - 1] ? 0 : 1
+      const value = Math.min(
+        current[bIndex - 1] + 1,
+        previous[bIndex] + 1,
+        previous[bIndex - 1] + substitutionCost,
+      )
+      current.push(value)
+      rowMinimum = Math.min(rowMinimum, value)
+    }
+
+    if (rowMinimum > maximum) return maximum + 1
+    previous = current
+  }
+
+  return previous[b.length]
+}
+
+function sortedCharacters(value: string) {
+  return [...compactAnswer(value)].sort().join('')
+}
+
+function withoutLeadingArticle(value: string) {
+  return value.replace(/^(?:the|a|an)\s+/u, '')
+}
+
+function tokensAppearInOrder(shorter: string, longer: string) {
+  const shortTokens = shorter.split(' ').filter(Boolean)
+  const longTokens = longer.split(' ').filter(Boolean)
+  if (shortTokens.length < 2 || shortTokens.length >= longTokens.length) return false
+
+  let longIndex = 0
+  return shortTokens.every(token => {
+    const matchIndex = longTokens.indexOf(token, longIndex)
+    if (matchIndex < 0) return false
+    longIndex = matchIndex + 1
+    return true
+  })
+}
+
+function reviewReasonForPair(normalizedSubmitted: string, normalizedExpected: string): ReviewReason | null {
+  if (!normalizedSubmitted || !normalizedExpected || normalizedSubmitted === normalizedExpected) return null
+
+  const submittedCompact = compactAnswer(normalizedSubmitted)
+  const expectedCompact = compactAnswer(normalizedExpected)
+  const shortestLength = Math.min(submittedCompact.length, expectedCompact.length)
+  const longestLength = Math.max(submittedCompact.length, expectedCompact.length)
+
+  if (
+    shortestLength >= 3
+    && submittedCompact.length === expectedCompact.length
+    && sortedCharacters(normalizedSubmitted) === sortedCharacters(normalizedExpected)
+  ) return 'same_characters'
+
+  const maximumEdits = longestLength >= 10 ? 2 : 1
+  if (shortestLength >= 5 && editDistance(submittedCompact, expectedCompact, maximumEdits) <= maximumEdits) {
+    return 'minor_typo'
+  }
+
+  if (
+    shortestLength >= 4
+    && withoutLeadingArticle(normalizedSubmitted) === withoutLeadingArticle(normalizedExpected)
+  ) return 'article_difference'
+
+  const shorter = submittedCompact.length <= expectedCompact.length ? submittedCompact : expectedCompact
+  const longer = submittedCompact.length > expectedCompact.length ? submittedCompact : expectedCompact
+  const shorterNormalized = normalizedSubmitted.length <= normalizedExpected.length
+    ? normalizedSubmitted
+    : normalizedExpected
+  const longerNormalized = normalizedSubmitted.length > normalizedExpected.length
+    ? normalizedSubmitted
+    : normalizedExpected
+  if (
+    shorter.length >= 6
+    && shorter.length / longer.length >= 0.8
+    && (longer.includes(shorter) || tokensAppearInOrder(shorterNormalized, longerNormalized))
+  ) return 'close_phrase'
+
+  return null
+}
+
+export function reviewReasonLabel(reason: ReviewReason) {
+  if (reason === 'same_characters') return 'Same letters, different order'
+  if (reason === 'article_difference') return 'Only “the”, “a” or “an” differs'
+  if (reason === 'close_phrase') return 'Very close phrase'
+  return 'Possible spelling mistake'
+}
+
+export function reviewMatchForPair(submitted: string, expected: string): Pick<ReviewItem, 'status' | 'review_reason'> {
   const normalizedSubmitted = normaliseTriviaAnswer(submitted)
   const normalizedExpected = normaliseTriviaAnswer(expected)
 
-  if (normalizedSubmitted && normalizedSubmitted === normalizedExpected) return 'correct'
-  if (normalizedSubmitted && normalizedExpected && isOneEditAway(normalizedSubmitted, normalizedExpected)) return 'review'
-  return 'incorrect'
+  if (normalizedSubmitted && normalizedSubmitted === normalizedExpected) return { status: 'correct' }
+  const reviewReason = reviewReasonForPair(normalizedSubmitted, normalizedExpected)
+  return reviewReason
+    ? { status: 'review', review_reason: reviewReason }
+    : { status: 'incorrect' }
+}
+
+export function reviewStatusForPair(submitted: string, expected: string): ReviewStatus {
+  return reviewMatchForPair(submitted, expected).status
+}
+
+function acceptedAnswerGroups(value: unknown): string[][] {
+  if (!Array.isArray(value)) return []
+  return value.map(item => Array.isArray(item) ? item.map(String) : [String(item)])
+}
+
+function bestMatch(submitted: string, expected: string, accepted: string[] = []) {
+  const candidates = [expected, ...accepted]
+  const matches = candidates.map(candidate => ({
+    expected: candidate,
+    ...reviewMatchForPair(submitted, candidate),
+  }))
+  return matches.find(match => match.status === 'correct')
+    ?? matches.find(match => match.status === 'review')
+    ?? matches[0]
 }
 
 export function buildSubmissionGrading(question: GradingQuestion, answerText: string): SubmissionGrading {
@@ -91,7 +191,8 @@ export function buildSubmissionGrading(question: GradingQuestion, answerText: st
   if (question.question_type === 'single-answer' || question.question_type === 'image-question') {
     const submitted = String(parsed ?? '')
     const expected = String(question.correct_answer ?? '')
-    return { items: [{ submitted, expected, status: reviewStatusForPair(submitted, expected) }] }
+    const match = bestMatch(submitted, expected, acceptedAnswerGroups(question.accepted_answers).flat())
+    return { items: [{ submitted, expected: match.expected, status: match.status, review_reason: match.review_reason }] }
   }
 
   if (question.question_type === 'multiple-choice') {
@@ -110,24 +211,37 @@ export function buildSubmissionGrading(question: GradingQuestion, answerText: st
 
   if (question.question_type === 'multi-answer') {
     const submittedRaw = asStringArray(parsed).filter(value => normaliseTriviaAnswer(value))
+    const acceptedGroups = acceptedAnswerGroups(question.accepted_answers)
     const remaining = asStringArray(question.correct_answer).map(value => ({
       value,
       norm: normaliseTriviaAnswer(value),
+      accepted: acceptedGroups.shift() ?? [],
     }))
 
     const items: ReviewItem[] = submittedRaw.map((submitted) => {
       const norm = normaliseTriviaAnswer(submitted)
-      const exactIndex = remaining.findIndex(candidate => norm && candidate.norm === norm)
+      const exactIndex = remaining.findIndex(candidate => norm && [candidate.value, ...candidate.accepted]
+        .some(value => normaliseTriviaAnswer(value) === norm))
 
       if (exactIndex >= 0) {
         const [match] = remaining.splice(exactIndex, 1)
         return { submitted, expected: match.value, status: 'correct' }
       }
 
-      const nearIndex = remaining.findIndex(candidate => norm && isOneEditAway(norm, candidate.norm))
-      if (nearIndex >= 0) {
-        const [match] = remaining.splice(nearIndex, 1)
-        return { submitted, expected: match.value, status: 'review' }
+      const nearMatches = remaining.map((candidate, index) => ({
+        index,
+        candidate,
+        match: bestMatch(submitted, candidate.value, candidate.accepted),
+      }))
+      const near = nearMatches.find(result => result.match.status === 'review')
+      if (near) {
+        remaining.splice(near.index, 1)
+        return {
+          submitted,
+          expected: near.candidate.value,
+          status: 'review',
+          review_reason: near.match.review_reason,
+        }
       }
 
       return { submitted, status: 'incorrect' }
@@ -139,14 +253,17 @@ export function buildSubmissionGrading(question: GradingQuestion, answerText: st
   if (question.question_type === 'multi-part') {
     const submitted = asStringArray(parsed)
     const expected = asStringArray(question.correct_answer)
+    const acceptedGroups = acceptedAnswerGroups(question.accepted_answers)
     return {
       items: expected.map((expectedValue, index) => {
         const submittedValue = submitted[index] ?? ''
+        const match = bestMatch(submittedValue, expectedValue, acceptedGroups[index] ?? [])
         return {
           label: String.fromCharCode(65 + index),
           submitted: submittedValue,
-          expected: expectedValue,
-          status: reviewStatusForPair(submittedValue, expectedValue),
+          expected: match.status === 'correct' ? match.expected : expectedValue,
+          status: match.status,
+          review_reason: match.review_reason,
         }
       }),
     }
@@ -214,6 +331,7 @@ export function storedSubmissionGrading(
         submitted: String(item.submitted ?? ''),
         expected: item.expected === undefined ? undefined : String(item.expected),
         status: item.status === 'correct' || item.status === 'review' ? item.status : 'incorrect',
+        review_reason: item.review_reason,
       })),
     }
 

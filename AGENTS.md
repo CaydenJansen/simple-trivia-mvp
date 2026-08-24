@@ -89,6 +89,10 @@ Legacy `image-question` records may remain during compatibility migrations, but 
 
 Normalize typed answers case-insensitively and ignore non-semantic punctuation and spacing. Fuzzy or ambiguous matches must remain reviewable by the host. Players see only final grading, never matching confidence, automation, or host-review details.
 
+- Configured accepted aliases grade as correct for their specific answer or part.
+- Conservative near-match signals such as plausible spelling slips, reordered identical characters, article-only differences, and very close phrases may flag an answer for host review.
+- A near-match signal must never award points automatically. The host decides whether every reviewable answer is correct or incorrect.
+
 ### Multi-answer
 
 - Treat correct answers as an unordered set.

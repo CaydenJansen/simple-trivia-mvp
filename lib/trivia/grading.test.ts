@@ -41,6 +41,46 @@ describe('single-answer grading', () => {
   it('marks a one-edit typo for host review', () => {
     expect(buildSubmissionGrading(single, 'Cannada').items[0].status).toBe('review')
   })
+
+  it('marks the same letters in a different order for host review', () => {
+    expect(buildSubmissionGrading(single, 'adnaca').items[0]).toMatchObject({
+      submitted: 'adnaca',
+      expected: 'Canada',
+      status: 'review',
+      review_reason: 'same_characters',
+    })
+  })
+
+  it('accepts configured alternative answers', () => {
+    expect(buildSubmissionGrading(
+      question({ correct_answer: 'William Shakespeare', accepted_answers: ['Shakespeare'] }),
+      'shakespeare!',
+    ).items[0].status).toBe('correct')
+  })
+
+  it('reviews article-only and close-phrase differences', () => {
+    expect(buildSubmissionGrading(
+      question({ correct_answer: 'The Great Barrier Reef' }),
+      'Great Barrier Reef',
+    ).items[0].review_reason).toBe('article_difference')
+
+    expect(buildSubmissionGrading(
+      question({ correct_answer: 'Sonic the Hedgehog' }),
+      'Sonic Hedgehog',
+    ).items[0].review_reason).toBe('close_phrase')
+  })
+
+  it('reviews two-character spelling differences only on longer answers', () => {
+    expect(buildSubmissionGrading(
+      question({ correct_answer: 'Shakespeare' }),
+      'Shakspear',
+    ).items[0].review_reason).toBe('minor_typo')
+
+    expect(buildSubmissionGrading(
+      question({ correct_answer: 'Iran' }),
+      'Iraq',
+    ).items[0].status).toBe('incorrect')
+  })
 })
 
 describe('multi-answer grading', () => {
@@ -87,6 +127,30 @@ describe('multi-answer grading', () => {
     expect(result.missing).toEqual(['Luxembourg'])
     expect(gradingPoints(result, 3)).toBe(2)
   })
+
+  it('uses per-answer aliases and keeps near matches reviewable without double consumption', () => {
+    const result = buildSubmissionGrading(
+      question({
+        question_type: 'multi-answer',
+        correct_answer: ['Belgium', 'Netherlands'],
+        accepted_answers: [['Belgique'], ['The Netherlands']],
+        points_max: 2,
+      }),
+      JSON.stringify(['Belgique', 'slandnether']),
+    )
+
+    expect(result.items).toEqual([
+      { submitted: 'Belgique', expected: 'Belgium', status: 'correct' },
+      {
+        submitted: 'slandnether',
+        expected: 'Netherlands',
+        status: 'review',
+        review_reason: 'same_characters',
+      },
+    ])
+    expect(result.missing).toEqual([])
+    expect(gradingPoints(result, 2)).toBe(1)
+  })
 })
 
 describe('multi-part grading', () => {
@@ -105,6 +169,20 @@ describe('multi-part grading', () => {
       { label: 'B', submitted: 'Banjo-Kazooie', expected: 'Crash Bandicoot', status: 'incorrect' },
       { label: 'C', submitted: 'Mario', expected: 'Banjo-Kazooie', status: 'incorrect' },
     ])
+  })
+
+  it('accepts alternatives for their specific part only', () => {
+    const result = buildSubmissionGrading(
+      question({
+        question_type: 'multi-part',
+        correct_answer: ['Canberra', 'Wellington'],
+        accepted_answers: [['ACT'], ['Te Whanganui-a-Tara']],
+        points_max: 2,
+      }),
+      JSON.stringify(['ACT', 'Te Whanganui-a-Tara']),
+    )
+
+    expect(result.items.map(item => item.status)).toEqual(['correct', 'correct'])
   })
 })
 
