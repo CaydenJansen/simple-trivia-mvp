@@ -2326,7 +2326,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
     insertionIndex: number
     itemHeight: number
   } | null>(null)
-  const [justDroppedItemKey, setJustDroppedItemKey] = useState<string | null>(null)
+  const [dropSettlingItemKeys, setDropSettlingItemKeys] = useState<string[]>([])
   const suppressItemEditRef = useRef(false)
   const items = [
     ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, question })),
@@ -2416,14 +2416,17 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
       }
       if (finishEvent.type === 'pointerup' && latestInsertionIndex !== originalIndex) {
         const nextOrder = moveKeyToIndex(itemKeys, itemKey, latestInsertionIndex)
+        const affectedStart = Math.min(originalIndex, latestInsertionIndex)
+        const affectedEnd = Math.max(originalIndex, latestInsertionIndex)
+        const affectedItemKeys = itemKeys.slice(affectedStart, affectedEnd + 1)
         flushSync(() => {
-          setJustDroppedItemKey(itemKey)
+          setDropSettlingItemKeys(affectedItemKeys)
           onReorderItems(nextOrder)
           setItemDragPreview(null)
         })
         window.requestAnimationFrame(() => {
           window.requestAnimationFrame(() => {
-            setJustDroppedItemKey(current => current === itemKey ? null : current)
+            setDropSettlingItemKeys(current => current.includes(itemKey) ? [] : current)
           })
         })
       } else {
@@ -2470,13 +2473,13 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
           {items.map(item => {
             const itemKey = item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`
             const dragged = itemDragPreview?.key === itemKey
-            const justDropped = justDroppedItemKey === itemKey
+            const isSettlingAfterDrop = dropSettlingItemKeys.includes(itemKey)
             return (
             <div
               key={itemKey}
               data-builder-item-key={itemKey}
               style={{ transform: itemDragTransform(itemKey) }}
-              className={`relative rounded-xl will-change-transform ${dragged ? 'z-20 cursor-grabbing opacity-90 shadow-xl ring-2 ring-violet/25 transition-[opacity,box-shadow] duration-150' : justDropped ? 'transition-none' : 'transition-transform duration-150 ease-out'}`}
+              className={`relative rounded-xl will-change-transform ${dragged ? 'z-20 cursor-grabbing opacity-90 shadow-xl ring-2 ring-violet/25 transition-[opacity,box-shadow] duration-150' : isSettlingAfterDrop ? 'transition-none' : 'transition-transform duration-150 ease-out'}`}
             >
               {item.kind === 'question' ? (
               <BuilderQuestion
