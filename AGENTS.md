@@ -73,7 +73,7 @@
 - Reopening answers must return submitted teams to an editable form with their previous response preserved; resubmission replaces the existing response rather than creating a duplicate.
 - Do not add post-reveal undo without safely reversing awarded points.
 - Review-required answers sort first, then graded submissions, then waiting teams. Keep ordering stable within each group.
-- Leaderboard visibility rules must not leak prohibited team names, scores, or ranks. A team may still see its own score.
+- Leaderboard visibility rules must not leak prohibited team names, scores, or ranks. A team sees point totals only when the host enables player score visibility; this setting is independent from leaderboard visibility.
 - Preserve the established visual language: purple brand surfaces, light builder UI, dark host console, rounded cards, Plus Jakarta Sans, and restrained SaaS styling.
 
 ## Question and Grading Semantics

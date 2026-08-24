@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hostRecoveryScreen } from './session-recovery'
+import { hostRecoveryScreen, shouldResetPlayerSessionForJoinCode } from './session-recovery'
 
 describe('host session recovery', () => {
   it('restores a lobby', () => {
@@ -24,5 +24,23 @@ describe('host session recovery', () => {
   it('falls back safely when no live state is recognizable', () => {
     expect(hostRecoveryScreen(null, null)).toBe('dashboard')
     expect(hostRecoveryScreen('cancelled', 'game-ended')).toBe('dashboard')
+  })
+})
+
+describe('player session recovery for QR join links', () => {
+  it('keeps a same-game session so the player can resume', () => {
+    expect(shouldResetPlayerSessionForJoinCode('123456', '123456')).toBe(false)
+  })
+
+  it('resets a stale session when a different game is requested', () => {
+    expect(shouldResetPlayerSessionForJoinCode('654321', '123456')).toBe(true)
+  })
+
+  it('does not reset an ordinary visit without a join code', () => {
+    expect(shouldResetPlayerSessionForJoinCode(null, '123456')).toBe(false)
+  })
+
+  it('treats a missing stored code as stale when a QR game is requested', () => {
+    expect(shouldResetPlayerSessionForJoinCode('654321', null)).toBe(true)
   })
 })

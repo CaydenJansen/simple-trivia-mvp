@@ -12,11 +12,12 @@ import {
   type AnswerRevealMode,
 } from "@/lib/trivia/answer-reveal";
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
-import { PLAYER_SESSION_KEYS } from "@/lib/trivia/session-recovery";
+import { PLAYER_SESSION_KEYS, shouldResetPlayerSessionForJoinCode } from "@/lib/trivia/session-recovery";
 import { gameCodeFromSearch } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
 import type { Json } from "@/lib/supabase/database.types";
 import { playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
+import { playersSeeScoresFromSettings } from "@/lib/trivia/score-visibility";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -31,6 +32,7 @@ type PlayerScreen =
   | 'reconnecting' | 'game-ended'
 
 const PlayerDevControlsContext = createContext(false)
+const PlayerScoreVisibilityContext = createContext(true)
 
 const LIVE_PLAYER_SCREENS = new Set<PlayerScreen>([
   'waiting', 'round-start', 'single-answer', 'image-question', 'multiple-choice',
@@ -956,7 +958,8 @@ function TopBar({
   team?: string; score?: number; round?: string; question?: string
 }) {
   const answerRevealMode = useAnswerRevealMode()
-  const showScore = score !== undefined && answerRevealMode === 'each'
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
+  const showScore = scoresVisible && score !== undefined && answerRevealMode === 'each'
 
   return (
     <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="px-4 pt-3 pb-3 shrink-0">
@@ -1218,6 +1221,14 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   const [pin, setPin] = useState('')
   const [pinMode, setPinMode] = useState<PinMode>('none')
   const [taken, setTaken] = useState(false)
+  const [gameTitle, setGameTitle] = useState('Trivia game')
+
+  useEffect(() => {
+    const storedTitle = localStorage.getItem('simple-trivia-game-title')
+    // Restore the selected game's real title after hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (storedTitle) setGameTitle(storedTitle)
+  }, [])
 
 async function handleJoin() {
   setTaken(false);
@@ -1263,7 +1274,7 @@ async function handleJoin() {
           <span style={{ color: C.go, fontSize: 10 }}>●</span>
           <span style={{ color: C.go, fontSize: 13, fontWeight: 700 }}>Game found</span>
         </div>
-        <h2 style={{ color: C.ink, fontSize: 20 }} className="font-black">Friday Night Trivia</h2>
+        <h2 style={{ color: C.ink, fontSize: 20 }} className="font-black">{gameTitle}</h2>
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 py-6">
@@ -2034,6 +2045,7 @@ function BonusSubmitted() {
 function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const question = useLiveQuestionDefinition()
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
@@ -2058,7 +2070,7 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
               <p style={{ color: C.ink, fontSize: 16, fontWeight: 800, marginTop: 5 }}>{snapshot.bonusAnswer}</p>
             </div>
           )}
-          <p style={{ color: C.sub, fontSize: 14, marginTop: -8 }}>Your score: {snapshot.score}</p>
+          {scoresVisible && <p style={{ color: C.sub, fontSize: 14, marginTop: -8 }}>Your score: {snapshot.score}</p>}
         </div>
       </div>
     </div>
@@ -2086,6 +2098,7 @@ function NoAnswer({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 13 — CORRECT ──────────────────────────────────────────────────────
 function Correct({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
@@ -2110,7 +2123,7 @@ function Correct({ go }: { go: (s: PlayerScreen) => void }) {
             </div>
           )}
           <PlayerBonusResult snapshot={snapshot} />
-          <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>
+          {scoresVisible && <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>}
           <WaitMsg msg="Waiting for the next question…" />
         </div>
       </div>
@@ -2121,6 +2134,7 @@ function Correct({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 14 — INCORRECT ────────────────────────────────────────────────────
 function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
@@ -2135,7 +2149,7 @@ function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
             <PlayerSimpleAnswerResult snapshot={snapshot} />
           )}
           <PlayerBonusResult snapshot={snapshot} />
-          <div style={{ background: C.ground, borderRadius: 14, border: `1px solid ${C.line}`, width: '100%', padding: '12px 20px', textAlign: 'center' }}><p style={{ color: C.ink, fontSize: 22, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Your score</p></div>
+          {scoresVisible && <div style={{ background: C.ground, borderRadius: 14, border: `1px solid ${C.line}`, width: '100%', padding: '12px 20px', textAlign: 'center' }}><p style={{ color: C.ink, fontSize: 22, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Your score</p></div>}
           <WaitMsg msg="Waiting for the next question…" />
         </div>
       </div>
@@ -2173,6 +2187,7 @@ function ContentScreen() {
 // ─── SCREEN 16 — INTERMISSION ─────────────────────────────────────────────────
 function Intermission({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} />
@@ -2180,10 +2195,10 @@ function Intermission({ go }: { go: (s: PlayerScreen) => void }) {
         <p style={{ color: C.sub, fontSize: 14, marginBottom: 8 }}>{snapshot.roundLabel} complete</p>
         <h1 style={{ color: C.ink, fontSize: 34 }} className="font-black mb-2">Intermission</h1>
         <p style={{ color: C.sub, fontSize: 15, marginBottom: 28 }}>The next round will begin shortly.</p>
-        <div style={{ background: C.violetPale, borderRadius: 18, width: '100%', maxWidth: 300, padding: '18px 24px', marginBottom: 18 }}>
+        {scoresVisible && <div style={{ background: C.violetPale, borderRadius: 18, width: '100%', maxWidth: 300, padding: '18px 24px', marginBottom: 18 }}>
           <p style={{ color: C.sub, fontSize: 11, fontWeight: 700 }}>YOUR SCORE</p>
           <p style={{ color: C.violet, fontSize: 42, fontWeight: 900 }}>{snapshot.score}</p>
-        </div>
+        </div>}
         <WaitMsg msg="Waiting for the host…" />
       </div>
     </div>
@@ -2193,6 +2208,7 @@ function Intermission({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 17 — ROUND RESULTS ────────────────────────────────────────────────
 function RoundResults({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
   const { teams, teamId } = useLiveLeaderboard()
   const myIndex = teams.findIndex(team => team.id === teamId)
   return (
@@ -2202,13 +2218,13 @@ function RoundResults({ go }: { go: (s: PlayerScreen) => void }) {
         <p style={{ color: C.sub, fontSize: 14, textAlign: 'center', marginBottom: 8 }}>{snapshot.roundLabel} Complete</p>
         <div style={{ background: C.violetPale, borderRadius: 18, padding: '18px 20px', textAlign: 'center', marginBottom: 22 }}>
           <p style={{ color: C.violet, fontSize: 18, fontWeight: 800 }}>{snapshot.teamName}</p>
-          <p style={{ color: C.ink, fontSize: 36, fontWeight: 900 }}>{snapshot.score}</p>
+          {scoresVisible && <p style={{ color: C.ink, fontSize: 36, fontWeight: 900 }}>{snapshot.score}</p>}
           <p style={{ color: C.violet, fontSize: 13, fontWeight: 700 }}>{myIndex >= 0 ? `${myIndex + 1}${myIndex === 0 ? 'st' : myIndex === 1 ? 'nd' : myIndex === 2 ? 'rd' : 'th'} place` : ''}</p>
         </div>
         <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', marginBottom: 10 }}>LEADERBOARD</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {teams.map((team, i) => <div key={team.id} style={{ background: team.id === teamId ? C.violetMist : C.panel, border: `1px solid ${team.id === teamId ? C.violet : C.line}`, borderRadius: 13, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span><span style={{ color: C.ink, fontWeight: 800 }}>{team.score}</span>
+            <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.ink, fontWeight: 800 }}>{team.score}</span>}
           </div>)}
         </div>
         <div style={{ marginTop: 24 }}><WaitMsg msg="Waiting for the next round…" /></div>
@@ -2312,6 +2328,7 @@ function Winner({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 20 — FINAL RESULT ─────────────────────────────────────────────────
 function FinalResult({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
   const visibility = useLeaderboardVisibility()
   const showFinalLeaderboard = visibility !== null && playersSeeFinalLeaderboard(visibility)
   const { teams, teamId } = useLiveLeaderboard(showFinalLeaderboard)
@@ -2323,9 +2340,9 @@ function FinalResult({ go }: { go: (s: PlayerScreen) => void }) {
         <p style={{ color: C.sub, fontSize: 14, marginBottom: 8 }}>Game Complete</p>
         <h1 style={{ color: C.ink, fontSize: 24 }} className="font-black mb-4">{snapshot.teamName || me?.name || 'Your Team'}</h1>
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 18, padding: '18px 20px', display: 'inline-block', minWidth: 180, marginBottom: 24 }}>
-          <p style={{ color: C.sub, fontSize: 11, fontWeight: 800 }}>{showFinalLeaderboard ? 'YOU FINISHED' : 'YOUR FINAL SCORE'}</p>
-          <p style={{ color: C.ink, fontSize: 48, fontWeight: 900 }}>{showFinalLeaderboard ? (myIndex >= 0 ? myIndex + 1 : '—') : snapshot.score}</p>
-          <p style={{ color: C.sub, fontSize: 13 }}>{showFinalLeaderboard ? `Final score: ${me?.score ?? snapshot.score}` : 'Thanks for playing!'}</p>
+          <p style={{ color: C.sub, fontSize: 11, fontWeight: 800 }}>{showFinalLeaderboard ? 'YOU FINISHED' : scoresVisible ? 'YOUR FINAL SCORE' : 'GAME COMPLETE'}</p>
+          {(showFinalLeaderboard || scoresVisible) && <p style={{ color: C.ink, fontSize: 48, fontWeight: 900 }}>{showFinalLeaderboard ? (myIndex >= 0 ? myIndex + 1 : '—') : snapshot.score}</p>}
+          <p style={{ color: C.sub, fontSize: 13 }}>{showFinalLeaderboard && scoresVisible ? `Final score: ${me?.score ?? snapshot.score}` : 'Thanks for playing!'}</p>
         </div>
         {snapshot.prizeAwards.length > 0 && (
           <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 16, padding: '18px 20px', marginBottom: 24, textAlign: 'left' }}>
@@ -2344,7 +2361,7 @@ function FinalResult({ go }: { go: (s: PlayerScreen) => void }) {
             <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textAlign: 'left', marginBottom: 10 }}>FINAL STANDINGS</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {teams.map((team, i) => <div key={team.id} style={{ background: team.id === teamId ? C.violetMist : C.panel, border: `1px solid ${team.id === teamId ? C.violet : C.line}`, borderRadius: 13, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
-                <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span><span style={{ color: C.violet, fontWeight: 800 }}>{team.score}</span>
+                <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.violet, fontWeight: 800 }}>{team.score}</span>}
               </div>)}
             </div>
             <p style={{ color: C.sub, fontSize: 13, marginTop: 24 }}>Thanks for playing!</p>
@@ -2396,6 +2413,7 @@ function GameEnded({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 13b — PARTIAL CREDIT ──────────────────────────────────────────────
 function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
   const totalAwarded = snapshot.pointsAwarded + snapshot.bonusPointsAwarded
   const totalMax = snapshot.pointsMax + snapshot.bonusPointsMax
   return (
@@ -2413,7 +2431,7 @@ function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
             <PlayerSimpleAnswerResult snapshot={snapshot} />
           )}
           <PlayerBonusResult snapshot={snapshot} />
-          <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>
+          {scoresVisible && <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>}
           <WaitMsg msg="Waiting for the next question…" />
         </div>
       </div>
@@ -2424,6 +2442,7 @@ function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 17b — ROUND RESULTS (LEADERBOARD HIDDEN) ─────────────────────────
 function RoundResultsHidden({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} />
@@ -2431,10 +2450,10 @@ function RoundResultsHidden({ go }: { go: (s: PlayerScreen) => void }) {
       <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
         <p style={{ color: C.sub, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{snapshot.roundLabel} Complete</p>
 
-        <div style={{ background: C.violetPale, borderRadius: 24, width: '100%', maxWidth: 300, padding: '32px 24px', marginBottom: 24 }}>
+        {scoresVisible ? <div style={{ background: C.violetPale, borderRadius: 24, width: '100%', maxWidth: 300, padding: '32px 24px', marginBottom: 24 }}>
           <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>Your score</p>
           <p style={{ color: C.violet, fontSize: 60, fontWeight: 900, lineHeight: 1 }}>{snapshot.score}</p>
-        </div>
+        </div> : <div style={{ background: C.ground, border: `1px solid ${C.line}`, borderRadius: 14, width: '100%', maxWidth: 300, padding: '14px 18px', marginBottom: 24 }}><p style={{ color: C.sub, fontSize: 13 }}>Scores are hidden for this game.</p></div>}
 
         <p style={{ color: C.sub, fontSize: 15, lineHeight: 1.6, maxWidth: 260, marginBottom: 28 }}>
           The next round will begin shortly.
@@ -2501,7 +2520,29 @@ export function PlayerFlow() {
   const [screen, setScreen] = useState<PlayerScreen>('join')
   const [restoringSession, setRestoringSession] = useState(true)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
+  const [scoresVisible, setScoresVisible] = useState(true)
   useLivePlayerSync(screen, setScreen, !restoringSession)
+
+  useEffect(() => {
+    if (screen === 'join' || screen === 'team-setup') return
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    if (!gameId) return
+    const activeGameId = gameId
+    let active = true
+
+    async function loadScoreVisibility() {
+      const { data, error } = await supabase.from('games').select('settings').eq('id', activeGameId).maybeSingle()
+      if (!active) return
+      if (error) {
+        console.error('Could not load player score visibility:', error)
+        return
+      }
+      setScoresVisible(playersSeeScoresFromSettings(data?.settings))
+    }
+
+    void loadScoreVisibility()
+    return () => { active = false }
+  }, [screen])
 
   useEffect(() => {
     let active = true
@@ -2520,6 +2561,15 @@ export function PlayerFlow() {
       if (retryTimer) {
         clearTimeout(retryTimer)
         retryTimer = null
+      }
+
+      const requestedCode = gameCodeFromSearch(window.location.search)
+      const storedCode = localStorage.getItem('simple-trivia-game-code')
+      if (shouldResetPlayerSessionForJoinCode(requestedCode, storedCode)) {
+        clearStoredSession()
+        setScreen('join')
+        setRestoringSession(false)
+        return
       }
 
       const gameId = localStorage.getItem('simple-trivia-game-id')
@@ -2641,7 +2691,9 @@ export function PlayerFlow() {
             </button>
           </div>
         )}
-        {renderScreen(screen, go)}
+        <PlayerScoreVisibilityContext.Provider value={scoresVisible}>
+          {renderScreen(screen, go)}
+        </PlayerScoreVisibilityContext.Provider>
       </div>
 
       {confirmingLeave && (

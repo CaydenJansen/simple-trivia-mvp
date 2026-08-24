@@ -3882,6 +3882,7 @@ function ReviewQuestion({ item, idx, onEdit }: {
 function HostSetup({ go }: { go: Go }) {
   const [reveal, setReveal] = useState<'each' | 'round'>('each')
   const [lb, setLb] = useState<'always' | 'round' | 'final' | 'host'>('round')
+  const [scoresVisible, setScoresVisible] = useState(true)
   type PrizePlace = { enabled: boolean; msg: string }
   const topPlaces = ['1st', '2nd', '3rd']
   const bottomPlaces = ['Last', '2nd Last', '3rd Last']
@@ -3947,6 +3948,7 @@ function HostSetup({ go }: { go: Go }) {
           p_settings: {
             answer_reveal: reveal,
             leaderboard_visibility: lb,
+            scores_visible_to_players: scoresVisible,
             top_prizes: topPrizes,
             bottom_prizes: botPrizes,
           },
@@ -4029,6 +4031,29 @@ function HostSetup({ go }: { go: Go }) {
                   }}
                   className="py-2.5 px-3 rounded-xl text-sm font-semibold text-left transition-all">
                   {o.l}
+                </button>
+              ))}
+            </div>
+          </SCard>
+
+          {/* Scores */}
+          <SCard title="Score Visibility to Players">
+            <p style={{ color: C.sub }} className="mb-3 text-xs leading-5">
+              Choose whether players can see point totals during and after the game. This is separate from showing the leaderboard.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { v: true, l: 'Show scores' },
+                { v: false, l: 'Hide scores' },
+              ].map(option => (
+                <button key={String(option.v)} onClick={() => setScoresVisible(option.v)}
+                  style={{
+                    border: `1.5px solid ${scoresVisible === option.v ? C.violet : C.line}`,
+                    background: scoresVisible === option.v ? C.violetMist : 'white',
+                    color: scoresVisible === option.v ? C.violet : C.sub,
+                  }}
+                  className="rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-all">
+                  {option.l}
                 </button>
               ))}
             </div>

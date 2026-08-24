@@ -23,3 +23,10 @@ export const PLAYER_SESSION_KEYS = [
   'simple-trivia-team-name',
   'simple-trivia-last-answer',
 ] as const
+
+export function shouldResetPlayerSessionForJoinCode(
+  requestedCode: string | null,
+  storedCode: string | null,
+) {
+  return requestedCode !== null && requestedCode !== storedCode
+}
