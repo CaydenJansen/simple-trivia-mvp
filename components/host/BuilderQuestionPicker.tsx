@@ -174,7 +174,6 @@ export default function BuilderQuestionPicker({
                       <span className="rounded-full bg-violet-50 px-2 py-1 font-semibold text-violet-700">{question.question_type.replaceAll("-", " ")}</span>
                       {question.category_names.length > 0 ? <span>{question.category_names.join(" · ")}</span> : null}
                       {question.editorial_difficulty ? <span>· {TRIVIA_DIFFICULTIES[question.editorial_difficulty - 1]}</span> : null}
-                      {question.is_verified ? <span className="rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">✓ Verified</span> : null}
                     </div>
                     <h3 className="text-sm font-bold leading-6 text-zinc-900">{question.prompt}</h3>
                     <QuestionUsageIndicator usages={usageByQuestion ? usageByQuestion[question.id] ?? [] : null} />

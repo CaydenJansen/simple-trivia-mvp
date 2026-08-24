@@ -571,7 +571,6 @@ function QuestionCard({
             <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">{questionTypeLabel(question.mechanic)}</span>
             {question.category_names.length > 0 ? <span className="text-xs text-zinc-500">{question.category_names.length === 1 ? question.category_names[0] : "Mixed categories"}</span> : null}
             {difficultyLabel(question.editorial_difficulty) ? <span className="text-xs text-zinc-500">· {difficultyLabel(question.editorial_difficulty)}</span> : null}
-            {question.is_verified ? <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">✓ Verified</span> : null}
             {bonus.enabled ? <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">+ {bonus.points} pt bonus</span> : null}
             {editable ? <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${statusColors[question.status]}`}>{question.status.replace("_", " ")}</span> : null}
           </div>
