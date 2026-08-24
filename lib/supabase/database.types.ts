@@ -12,6 +12,7 @@ export type QuestionMechanic = 'single-answer' | 'multiple-choice' | 'multi-answ
 export type ScoringMode = 'fixed' | 'per-item' | 'all-or-nothing'
 export type FactualStability = 'stable' | 'review_periodically' | 'volatile'
 export type AudienceSuitability = 'family' | 'general' | 'adult'
+export type AudienceFit = 'broad' | 'kids' | 'young_adults' | 'older_adults'
 export type AudienceScope = 'global' | 'country_specific'
 export type ContentFlag =
   | 'sexual_health'
@@ -105,6 +106,8 @@ export type Database = {
           answer_type_id: string | null
           stability: FactualStability
           audience_suitability: AudienceSuitability
+          audience_fit: AudienceFit
+          adult_content: boolean
           audience_scope: AudienceScope
           audience_locale: string | null
           content_flags: ContentFlag[]
@@ -148,6 +151,8 @@ export type Database = {
           answer_type_id?: string | null
           stability?: FactualStability
           audience_suitability?: AudienceSuitability
+          audience_fit?: AudienceFit
+          adult_content?: boolean
           audience_scope?: AudienceScope
           audience_locale?: string | null
           content_flags?: ContentFlag[]
@@ -191,6 +196,8 @@ export type Database = {
           answer_type_id?: string | null
           stability?: FactualStability
           audience_suitability?: AudienceSuitability
+          audience_fit?: AudienceFit
+          adult_content?: boolean
           audience_scope?: AudienceScope
           audience_locale?: string | null
           content_flags?: ContentFlag[]
@@ -263,6 +270,8 @@ export type Database = {
       source_question_bonus_categories: SourceQuestionBonusCategoryTable
       source_question_bonus_tags: SourceQuestionBonusTagTable
       question_library_import_batches: QuestionLibraryImportBatchTable
+      proposed_question_tags: ProposedQuestionTagTable
+      proposed_question_tag_assignments: ProposedQuestionTagAssignmentTable
       source_tiebreakers: {
         Row: {
           id: string
@@ -277,6 +286,12 @@ export type Database = {
           source_name: string | null
           source_url: string | null
           source_checked_date: string | null
+          primary_category_id: string | null
+          editorial_difficulty: number | null
+          audience_fit: AudienceFit
+          adult_content: boolean
+          audience_scope: AudienceScope
+          audience_locale: string | null
           created_at: string
           updated_at: string
         }
@@ -293,6 +308,12 @@ export type Database = {
           source_name?: string | null
           source_url?: string | null
           source_checked_date?: string | null
+          primary_category_id?: string | null
+          editorial_difficulty?: number | null
+          audience_fit?: AudienceFit
+          adult_content?: boolean
+          audience_scope?: AudienceScope
+          audience_locale?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -309,10 +330,24 @@ export type Database = {
           source_name?: string | null
           source_url?: string | null
           source_checked_date?: string | null
+          primary_category_id?: string | null
+          editorial_difficulty?: number | null
+          audience_fit?: AudienceFit
+          adult_content?: boolean
+          audience_scope?: AudienceScope
+          audience_locale?: string | null
           created_at?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: 'source_tiebreakers_primary_category_id_fkey'
+            columns: ['primary_category_id']
+            isOneToOne: false
+            referencedRelation: 'categories'
+            referencedColumns: ['id']
+          },
+        ]
       }
       quiz_questions: {
         Row: QuestionRow & {
@@ -608,6 +643,21 @@ export type Database = {
         Row: SourceQuestionCatalogRow
         Relationships: []
       }
+      question_library_proposed_tag_review: {
+        Row: {
+          id: string | null
+          display_phrase: string | null
+          normalized_phrase: string | null
+          status: 'pending' | 'mapped' | 'created' | 'ignored' | null
+          resolved_tag_id: string | null
+          assignment_count: number | null
+          question_count: number | null
+          first_seen_at: string | null
+          last_seen_at: string | null
+          resolved_at: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       cancel_host_game: {
@@ -780,6 +830,16 @@ export type Database = {
         }
         Returns: Json
       }
+      resolve_question_library_proposed_tag: {
+        Args: {
+          p_proposed_tag_id: string
+          p_action: string
+          p_tag_slug?: string | null
+          p_tag_name?: string | null
+          p_remember_alias?: boolean
+        }
+        Returns: string | null
+      }
     }
     Enums: Record<string, never>
     CompositeTypes: Record<string, never>
@@ -902,6 +962,8 @@ type SourceQuestionCatalogRow = {
   answer_type_id: string | null
   stability: FactualStability
   audience_suitability: AudienceSuitability
+  audience_fit: AudienceFit
+  adult_content: boolean
   audience_scope: AudienceScope
   audience_locale: string | null
   content_flags: ContentFlag[]
@@ -1135,6 +1197,8 @@ type SourceQuestionPartTable = {
     editorial_difficulty: number | null
     stability: FactualStability | null
     audience_suitability: AudienceSuitability | null
+    audience_fit: AudienceFit | null
+    adult_content: boolean | null
     audience_scope: AudienceScope | null
     audience_locale: string | null
     content_flags: ContentFlag[] | null
@@ -1159,6 +1223,8 @@ type SourceQuestionPartTable = {
     editorial_difficulty?: number | null
     stability?: FactualStability | null
     audience_suitability?: AudienceSuitability | null
+    audience_fit?: AudienceFit | null
+    adult_content?: boolean | null
     audience_scope?: AudienceScope | null
     audience_locale?: string | null
     content_flags?: ContentFlag[] | null
@@ -1279,6 +1345,9 @@ type SourceQuestionBonusTable = {
     editorial_difficulty: number | null
     stability: FactualStability | null
     audience_suitability: AudienceSuitability | null
+    audience_fit: AudienceFit | null
+    adult_content: boolean | null
+    tag_mode: 'inherit' | 'replace'
     audience_scope: AudienceScope | null
     audience_locale: string | null
     content_flags: ContentFlag[] | null
@@ -1307,6 +1376,9 @@ type SourceQuestionBonusTable = {
     editorial_difficulty?: number | null
     stability?: FactualStability | null
     audience_suitability?: AudienceSuitability | null
+    audience_fit?: AudienceFit | null
+    adult_content?: boolean | null
+    tag_mode?: 'inherit' | 'replace'
     audience_scope?: AudienceScope | null
     audience_locale?: string | null
     content_flags?: ContentFlag[] | null
@@ -1376,6 +1448,102 @@ type QuestionLibraryImportBatchTable = {
   }
   Update: Partial<QuestionLibraryImportBatchTable['Insert']>
   Relationships: []
+}
+
+type ProposedQuestionTagTable = {
+  Row: {
+    id: string
+    normalized_phrase: string
+    display_phrase: string
+    status: 'pending' | 'mapped' | 'created' | 'ignored'
+    resolved_tag_id: string | null
+    first_seen_at: string
+    last_seen_at: string
+    resolved_at: string | null
+  }
+  Insert: {
+    id?: string
+    normalized_phrase: string
+    display_phrase: string
+    status?: 'pending' | 'mapped' | 'created' | 'ignored'
+    resolved_tag_id?: string | null
+    first_seen_at?: string
+    last_seen_at?: string
+    resolved_at?: string | null
+  }
+  Update: Partial<ProposedQuestionTagTable['Insert']>
+  Relationships: [
+    {
+      foreignKeyName: 'proposed_question_tags_resolved_tag_id_fkey'
+      columns: ['resolved_tag_id']
+      isOneToOne: false
+      referencedRelation: 'tags'
+      referencedColumns: ['id']
+    },
+  ]
+}
+
+type ProposedQuestionTagAssignmentTable = {
+  Row: {
+    id: string
+    proposed_tag_id: string
+    import_batch_id: string | null
+    source_question_id: string
+    source_question_part_id: string | null
+    source_question_bonus_id: string | null
+    raw_phrase: string
+    created_at: string
+    resolved_at: string | null
+  }
+  Insert: {
+    id?: string
+    proposed_tag_id: string
+    import_batch_id?: string | null
+    source_question_id: string
+    source_question_part_id?: string | null
+    source_question_bonus_id?: string | null
+    raw_phrase: string
+    created_at?: string
+    resolved_at?: string | null
+  }
+  Update: Partial<ProposedQuestionTagAssignmentTable['Insert']>
+  Relationships: [
+    {
+      foreignKeyName: 'proposed_question_tag_assignments_proposed_tag_id_fkey'
+      columns: ['proposed_tag_id']
+      isOneToOne: false
+      referencedRelation: 'proposed_question_tags'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'proposed_question_tag_assignments_import_batch_id_fkey'
+      columns: ['import_batch_id']
+      isOneToOne: false
+      referencedRelation: 'question_library_import_batches'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'proposed_question_tag_assignments_source_question_id_fkey'
+      columns: ['source_question_id']
+      isOneToOne: false
+      referencedRelation: 'source_questions'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'proposed_question_tag_assignments_source_question_part_id_fkey'
+      columns: ['source_question_part_id']
+      isOneToOne: false
+      referencedRelation: 'source_question_parts'
+      referencedColumns: ['id']
+    },
+    {
+      foreignKeyName: 'proposed_question_tag_assignments_source_question_bonus_id_fkey'
+      columns: ['source_question_bonus_id']
+      isOneToOne: false
+      referencedRelation: 'source_question_bonuses'
+      referencedColumns: ['id']
+    },
+  ]
 }
 
 type SourceQuestionBonusCategoryTable = {

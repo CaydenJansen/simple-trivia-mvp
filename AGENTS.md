@@ -43,20 +43,21 @@
 - Always call the platform question bank **Question Library**. “Verified” may be question metadata or a badge, not part of the product name.
 - Normal hosts may read but never edit platform Question Library records. My Questions records are user-owned and editable by their owner.
 - Platform Question Library administration is private and permission-enforced; hidden customer UI alone is not an access-control boundary.
-- Keep broad subject category, controlled topic tags, mechanic, prompt pattern, answer type, editorial difficulty, factual stability, editorial status, verification, media, part metadata, bonus metadata, and provenance as distinct concepts. Do not collapse them into a generic tags field.
+- Keep broad subject category, controlled topic tags, mechanic, prompt pattern, answer type, editorial difficulty, editorial status, verification, media, Part metadata, and Bonus metadata as distinct concepts. Keep any retained legacy freshness/provenance fields separate too; do not collapse these concepts into a generic tags field.
 - Broad source categories are: Geography; History; Science & Nature; Sport; Music; Film & Television; Arts & Literature; Food & Drink; Society & Culture; Language & Words; Technology & Inventions; Games & Leisure; Business & Brands; Politics & Government.
 - **General Knowledge** is a varied quiz/round composition mode, never a source category. Do not store **Mixed** as a source category; derive mixed summaries from part/category metadata.
-- Topic tags are controlled canonical entities with aliases and specificity/diversity meaning. Do not reintroduce arbitrary comma-separated tags as the long-term source of truth.
+- Topic tags are optional controlled canonical entities with conservative aliases. Unknown imported phrases never block an otherwise-valid question: retain their component assignments for bulk map/create/ignore review, and backfill resolved tags onto already-imported content.
 - Use numeric editorial difficulty `1..5` (`Very Easy` through `Very Hard`). Keep future observed difficulty and gameplay metrics separate; never overwrite editorial judgment with performance data.
-- Keep editorial workflow (`draft`, `needs_review`, `active`, `archived`), verification, and factual stability (`stable`, `review_periodically`, `volatile`) independent.
+- Keep editorial workflow (`draft`, `needs_review`, `active`, `archived`) and verification independent. The permanent MVP library is evergreen; leave existing factual-stability/freshness fields safely deprecated rather than requiring them in normal authoring.
 - Media is optional content, not a grading mechanic. The durable mechanics are `single-answer`, `multiple-choice`, `multi-answer`, `multi-part`, and `ranking`; image content may accompany any suitable mechanic.
 - An ordinary scored question may have at most one attached bonus for MVP. Bonuses own their prompt, answer, aliases, points, media, and metadata; they affect maximum score, estimated time, and diversity, but not the displayed normal question count.
 - Live bonuses use a staged flow within their parent question: main answer first, a visible bonus-coming cue, then host-controlled bonus display, followed by one close action that locks both stages. Store bonus submissions and grading separately from ordinary submissions, then reveal and score both together exactly once.
 - Multi-part source questions store category, tags, and difficulty on their individual parts. Derive the parent category union and difficulty range instead of inventing a single mixed category or average difficulty.
-- Keep manual question classification lightweight: parent questions default to `general`, `global`, and `stable`; tags, content flags, prompt pattern, answer type, and review dates remain optional enrichment.
-- Audience suitability is `family`, `general`, or `adult`; audience scope is `global` or `country_specific` with a locale. A question about a country is not automatically country-specific.
-- Multi-part parts and Bonuses inherit parent category, difficulty, audience, locality, stability, tags, prompt pattern, and answer type when their override is absent. Store only genuine child differences and derive the effective package footprint from content actually shown to players.
-- Effective package audience uses the most restrictive presented child, and any country-specific child makes the package not fully international-friendly. Content flags describe material; they do not mechanically determine audience suitability.
+- Keep manual question classification lightweight: parent questions default to Audience Fit `broad`, Adult Content `false`, and Scope `global`; tags, prompt pattern, answer type, and review dates remain optional enrichment.
+- Audience Fit is `broad`, `kids`, `young_adults`, or `older_adults` and is a soft selection preference. Adult Content is an independent hard family-safety flag. Scope is `global` or `country_specific` with a locale; a question about a country is not automatically country-specific.
+- Adult Content means the content must not be automatically selected for children, school, or family-safe quizzes, including substantial alcohol, gambling, recreational-drug, explicit sexual, strongly mature, or particularly graphic material.
+- Multi-part Parts and Bonuses inherit parent category, difficulty, audience, and locality when their override is absent. Part tags are additive. Blank Bonus tags inherit; populated Bonus tags replace, and replacement intent must survive even while every supplied tag is unresolved.
+- Effective package Adult Content is true when any content shown to players is adult. Any country-specific child makes the package not fully international-friendly.
 - Prevent duplicate team names within a game.
 - Only joinable lobby games should accept new teams.
 - Host live controls and question content must remain usable on small laptop screens.
@@ -175,6 +176,7 @@ Preserve and verify:
 - Keep source metadata relational where it must be searched and controlled. Quiz/game snapshots may deliberately denormalize structured metadata so they remain independent of later taxonomy edits.
 - Treat current flat `category`, `difficulty`, `tags`, `image_url`, and mechanic-specific JSON columns as compatibility projections while the normalized model is adopted. Do not remove them until every deployed reader and writer has migrated.
 - External bulk imports must pass through separate staging, validation, normalization, and review. Never shape production tables around a historical import format.
+- The human spreadsheet uses one long-format Questions sheet plus a separate Tiebreakers sheet. Infer mechanics from grouped child Row Types and reject contradictory structures rather than guessing.
 - Consider Supabase RLS and Realtime publication requirements for every new table or operation.
 
 ## Testing Expectations

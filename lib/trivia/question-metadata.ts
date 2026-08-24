@@ -25,11 +25,13 @@ export type QuestionMechanic =
   | 'ranking'
 export type FactualStability = 'stable' | 'review_periodically' | 'volatile'
 export type AudienceSuitability = 'family' | 'general' | 'adult'
+export type AudienceFit = 'broad' | 'kids' | 'young_adults' | 'older_adults'
 export type AudienceScope = 'global' | 'country_specific'
 
 export type DiversityMetadata = {
   categories?: readonly string[]
   tags?: readonly string[]
+  tagMode?: 'inherit' | 'add' | 'replace'
   mechanic?: QuestionMechanic | null
   promptPattern?: string | null
   answerType?: string | null
@@ -37,6 +39,8 @@ export type DiversityMetadata = {
   hasMedia?: boolean
   stability?: FactualStability | null
   audienceSuitability?: AudienceSuitability | null
+  audienceFit?: AudienceFit | null
+  adultContent?: boolean | null
   audienceScope?: AudienceScope | null
   audienceLocale?: string | null
   contentFlags?: readonly string[] | null
@@ -48,6 +52,8 @@ export type EffectiveQuestionPackageMetadata = {
   difficultyMin: EditorialDifficulty | null
   difficultyMax: EditorialDifficulty | null
   audienceSuitability: AudienceSuitability
+  audienceFits: AudienceFit[]
+  adultContent: boolean
   audienceScope: AudienceScope
   audienceLocales: string[]
   contentFlags: string[]
@@ -80,6 +86,12 @@ function inheritedList(child: readonly string[] | null | undefined, parent: read
   return child && child.length > 0 ? child : parent ?? []
 }
 
+function inheritedTags(child: DiversityMetadata, parent: DiversityMetadata) {
+  if (child.tagMode === 'replace') return child.tags ?? []
+  if (child.tagMode === 'add') return distinct([...(parent.tags ?? []), ...(child.tags ?? [])])
+  return inheritedList(child.tags, parent.tags)
+}
+
 export function resolveInheritedQuestionMetadata(
   parent: DiversityMetadata,
   child: DiversityMetadata,
@@ -88,12 +100,14 @@ export function resolveInheritedQuestionMetadata(
   return {
     ...child,
     categories: inheritedList(child.categories, parent.categories),
-    tags: inheritedList(child.tags, parent.tags),
+    tags: inheritedTags(child, parent),
     promptPattern: child.promptPattern ?? parent.promptPattern ?? null,
     answerType: child.answerType ?? parent.answerType ?? null,
     editorialDifficulty: child.editorialDifficulty ?? parent.editorialDifficulty ?? null,
     stability: child.stability ?? parent.stability ?? 'stable',
     audienceSuitability: child.audienceSuitability ?? parent.audienceSuitability ?? 'general',
+    audienceFit: child.audienceFit ?? parent.audienceFit ?? 'broad',
+    adultContent: child.adultContent ?? parent.adultContent ?? false,
     audienceScope,
     audienceLocale: audienceScope === 'country_specific'
       ? child.audienceLocale ?? parent.audienceLocale ?? null
@@ -113,10 +127,13 @@ export function deriveQuestionPackageMetadata({
 }): EffectiveQuestionPackageMetadata {
   const base = resolveInheritedQuestionMetadata({}, question)
   const mainComponents = parts.length > 0
-    ? parts.map(part => resolveInheritedQuestionMetadata(base, part))
+    ? parts.map(part => resolveInheritedQuestionMetadata(base, { tagMode: 'add', ...part }))
     : [base]
   const components = bonus
-    ? [...mainComponents, resolveInheritedQuestionMetadata(base, bonus)]
+    ? [...mainComponents, resolveInheritedQuestionMetadata(base, {
+        tagMode: bonus.tagMode ?? (bonus.tags?.length ? 'replace' : 'inherit'),
+        ...bonus,
+      })]
     : mainComponents
   const difficulties = components
     .map(component => asEditorialDifficulty(component.editorialDifficulty))
@@ -134,6 +151,8 @@ export function deriveQuestionPackageMetadata({
     difficultyMin: difficulties.length > 0 ? Math.min(...difficulties) as EditorialDifficulty : null,
     difficultyMax: difficulties.length > 0 ? Math.max(...difficulties) as EditorialDifficulty : null,
     audienceSuitability,
+    audienceFits: distinct(components.map(component => component.audienceFit ?? 'broad')),
+    adultContent: components.some(component => component.adultContent === true),
     audienceScope: countrySpecific.length > 0 ? 'country_specific' : 'global',
     audienceLocales: distinct(countrySpecific.flatMap(component => component.audienceLocale ? [component.audienceLocale] : [])),
     contentFlags: distinct(components.flatMap(component => component.contentFlags ?? [])),
@@ -190,9 +209,12 @@ export function buildDiversityFingerprint({
 }): DiversityFingerprint {
   const base = resolveInheritedQuestionMetadata({}, question)
   const semanticComponents = parts.length > 0
-    ? parts.map(part => resolveInheritedQuestionMetadata(base, part))
+    ? parts.map(part => resolveInheritedQuestionMetadata(base, { tagMode: 'add', ...part }))
     : [base]
-  const resolvedBonus = bonus ? resolveInheritedQuestionMetadata(base, bonus) : null
+  const resolvedBonus = bonus ? resolveInheritedQuestionMetadata(base, {
+    tagMode: bonus.tagMode ?? (bonus.tags?.length ? 'replace' : 'inherit'),
+    ...bonus,
+  }) : null
   const diversityComponents = resolvedBonus ? [...semanticComponents, resolvedBonus] : semanticComponents
   const styleComponents = resolvedBonus ? [base, ...semanticComponents, resolvedBonus] : [base, ...semanticComponents]
   const difficulties = diversityComponents

@@ -51,7 +51,7 @@ import {
 import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
 import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
-import { editorialDifficultyFromLegacy } from "@/lib/trivia/question-metadata";
+import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib/trivia/question-metadata";
 import { hostKeyboardNavigation, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
 import {
   EMPTY_SOURCE_QUESTION_BONUS,
@@ -923,17 +923,11 @@ function QuizCard({ q, go, onDelete }: { q: QuizSummary; go: Go; onDelete: () =>
 
 function CreateQuiz({ go }: { go: Go }) {
   const [sel, setSel] = useState<'scratch' | 'auto' | null>('auto')
-  const [n, setN] = useState(30)
-  const [nInput, setNInput] = useState('30')
-  const est = Math.round(n * 2.4)
 
   function openCreationPath(id: 'scratch' | 'auto', next: Screen) {
     if (id === 'scratch') {
       localStorage.removeItem('simple-trivia-selected-quiz-id')
       localStorage.removeItem('simple-trivia-selected-quiz-title')
-    }
-    if (id === 'auto') {
-      localStorage.setItem('simple-trivia-auto-question-count', String(n))
     }
     go(next)
   }
@@ -1000,45 +994,6 @@ function CreateQuiz({ go }: { go: Go }) {
           ))}
         </div>
 
-        <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-6">
-          <label style={{ color: C.ink }} className="block font-bold mb-1">How many questions?</label>
-          <p style={{ color: C.sub }} className="text-xs mb-4">Used when we build the draft for you. Writing it yourself starts with an empty quiz.</p>
-          <div className="flex items-center gap-4 mb-4">
-            <button
-              onClick={() => { const v = Math.max(1, n - 1); setN(v); setNInput(String(v)) }}
-              style={{ border: `1px solid ${C.line}`, color: C.ink }}
-              className="w-9 h-9 rounded-xl flex items-center justify-center text-lg font-bold hover:bg-ground transition-colors"
-            >−</button>
-            <input
-              type="number"
-              value={nInput}
-              min={1}
-              onChange={e => {
-                setNInput(e.target.value)
-                const v = parseInt(e.target.value)
-                if (!isNaN(v) && v >= 1) setN(v)
-              }}
-              onBlur={() => { if (n < 1) { setN(1); setNInput('1') } else setNInput(String(n)) }}
-              style={{ color: C.ink, border: `1px solid ${C.line}` }}
-              className="text-4xl font-extrabold w-28 text-center tabular-nums bg-transparent rounded-xl px-2 py-1 focus:outline-none focus:ring-2 focus:ring-violet/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-            />
-            <button
-              onClick={() => { const v = n + 1; setN(v); setNInput(String(v)) }}
-              style={{ border: `1px solid ${C.line}`, color: C.ink }}
-              className="w-9 h-9 rounded-xl flex items-center justify-center text-lg font-bold hover:bg-ground transition-colors"
-            >+</button>
-            <span style={{ color: C.sub }} className="text-sm">questions</span>
-          </div>
-          <input type="range" min={1} max={100} step={1} value={Math.min(n, 100)} onChange={e => { const v = +e.target.value; setN(v); setNInput(String(v)) }} className="w-full mb-4" />
-          <div style={{ background: C.violetMist, border: `1px solid ${C.violetPale}` }} className="rounded-xl px-4 py-3">
-            <p style={{ color: C.ink }} className="text-sm font-semibold">
-              Estimated running time: <span style={{ color: C.violet }}>~{est} minutes</span>
-            </p>
-            <p style={{ color: C.sub }} className="text-xs mt-0.5">
-              Varies based on answering pace, scoring pauses, and breaks between rounds.
-            </p>
-          </div>
-        </div>
       </main>
     </div>
   )
@@ -3358,6 +3313,9 @@ function QuestionEditor({ question, title, onClose, onSave }: {
 function AutoBuild({ go }: { go: Go }) {
   const [mode, setMode] = useState<'mixed' | 'custom'>('mixed')
   const [diff, setDiff] = useState<[number, number]>([0, 4])
+  const [questionCount, setQuestionCount] = useState(30)
+  const [questionCountInput, setQuestionCountInput] = useState('30')
+  const [roundCount, setRoundCount] = useState(4)
 
   const startDifficultyDrag = (handle: 'minimum' | 'maximum', event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault()
@@ -3387,12 +3345,7 @@ function AutoBuild({ go }: { go: Go }) {
     window.addEventListener('pointerup', stop)
     window.addEventListener('pointercancel', stop)
   }
-  const [topics, setTopics] = useState(['General Knowledge', 'Movies', 'Sport', 'Music'])
-  const [questionCount] = useState(() => {
-    if (typeof window === 'undefined') return 30
-    const storedCount = Number(localStorage.getItem('simple-trivia-auto-question-count'))
-    return Number.isInteger(storedCount) && storedCount > 0 ? storedCount : 30
-  })
+  const [topics, setTopics] = useState(['General Knowledge', 'Film & Television', 'Sport', 'Music'])
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
   const [sourceQuestions, setSourceQuestions] = useState<AutoBuildSourceQuestion[]>([])
@@ -3400,9 +3353,12 @@ function AutoBuild({ go }: { go: Go }) {
   const [sourcesLoading, setSourcesLoading] = useState(true)
   const [sourcesError, setSourcesError] = useState<string | null>(null)
   const diffLabels = TRIVIA_DIFFICULTIES
-  const allTopics = ['General Knowledge', 'Movies', 'Sport', 'Music']
+  const allTopics = ['General Knowledge', ...SOURCE_QUESTION_CATEGORIES]
   const selectedDifficulties = useMemo(() => TRIVIA_DIFFICULTIES.slice(diff[0], diff[1] + 1), [diff])
-  const selectedRoundTopics = useMemo(() => mode === 'mixed' ? [null, null, null, null] : topics, [mode, topics])
+  const selectedRoundTopics = useMemo(
+    () => mode === 'mixed' ? Array.from({ length: roundCount }, () => null) : topics,
+    [mode, roundCount, topics],
+  )
   const availability = useMemo(() => getAutoBuildAvailability({
     questions: sourceQuestions,
     questionCount,
@@ -3410,7 +3366,9 @@ function AutoBuild({ go }: { go: Go }) {
     difficulties: selectedDifficulties,
   }), [questionCount, selectedDifficulties, selectedRoundTopics, sourceQuestions])
   const firstShortage = availability.shortages[0]
-  const canGenerate = !sourcesLoading
+  const countsAreValid = questionCount >= roundCount
+  const canGenerate = countsAreValid
+    && !sourcesLoading
     && !sourcesError
     && availability.canBuild
     && sourceTiebreakers.length >= AUTO_BUILD_TIEBREAKER_COUNT
@@ -3453,6 +3411,18 @@ function AutoBuild({ go }: { go: Go }) {
   const diffText = () => {
     const [lo, hi] = diff
     return lo === hi ? `${diffLabels[lo]} only` : `${diffLabels[lo]} through ${diffLabels[hi]}`
+  }
+
+  function updateRoundCount(nextCount: number) {
+    const safeCount = Math.max(1, Math.min(10, nextCount))
+    setRoundCount(safeCount)
+    setTopics(current => Array.from({ length: safeCount }, (_, index) => current[index] ?? 'General Knowledge'))
+  }
+
+  function updateQuestionCount(nextCount: number) {
+    const safeCount = Math.max(1, Math.min(100, nextCount))
+    setQuestionCount(safeCount)
+    setQuestionCountInput(String(safeCount))
   }
 
   async function generateQuiz() {
@@ -3541,24 +3511,49 @@ function AutoBuild({ go }: { go: Go }) {
         <h1 style={{ color: C.ink }} className="text-3xl font-extrabold mb-8">Build My Quiz</h1>
 
         <div className="space-y-4">
-          {/* Count */}
+          {/* Quiz size */}
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
-            <div className="grid grid-cols-2 gap-6">
-              {[{ label: 'Questions', val: questionCount }, { label: 'Rounds', val: 4 }].map(f => (
-                <div key={f.label}>
-                  <label style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider block mb-2">{f.label}</label>
-                  <div className="flex items-baseline gap-1.5">
-                    <span style={{ color: C.ink }} className="text-3xl font-extrabold tabular-nums">{f.val}</span>
-                    <span style={{ color: C.sub }} className="text-sm">{f.label.toLowerCase()}</span>
-                  </div>
+            <label style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider block mb-4">Quiz Size</label>
+            <div className="grid gap-6 sm:grid-cols-2">
+              <div>
+                <label style={{ color: C.ink }} className="block text-sm font-bold mb-2">Questions</label>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => updateQuestionCount(questionCount - 1)} aria-label="Remove one question"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }} className="h-9 w-9 rounded-xl text-lg font-bold hover:bg-ground">−</button>
+                  <input type="number" min={1} max={100} value={questionCountInput}
+                    onChange={event => {
+                      setQuestionCountInput(event.target.value)
+                      const parsed = Number(event.target.value)
+                      if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 100) setQuestionCount(parsed)
+                    }}
+                    onBlur={() => updateQuestionCount(questionCount)}
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                    className="h-9 w-20 rounded-xl bg-white text-center text-lg font-extrabold tabular-nums focus:outline-none focus:ring-2 focus:ring-violet/30" />
+                  <button type="button" onClick={() => updateQuestionCount(questionCount + 1)} aria-label="Add one question"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }} className="h-9 w-9 rounded-xl text-lg font-bold hover:bg-ground">+</button>
                 </div>
-              ))}
+              </div>
+              <div>
+                <label style={{ color: C.ink }} className="block text-sm font-bold mb-2">Rounds</label>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => updateRoundCount(roundCount - 1)} aria-label="Remove one round"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }} className="h-9 w-9 rounded-xl text-lg font-bold hover:bg-ground">−</button>
+                  <span style={{ border: `1px solid ${C.line}`, color: C.ink }} className="flex h-9 w-20 items-center justify-center rounded-xl bg-white text-lg font-extrabold tabular-nums">{roundCount}</span>
+                  <button type="button" onClick={() => updateRoundCount(roundCount + 1)} aria-label="Add one round"
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }} className="h-9 w-9 rounded-xl text-lg font-bold hover:bg-ground">+</button>
+                </div>
+              </div>
             </div>
+            <p style={{ color: countsAreValid ? C.sub : C.stop }} className="mt-4 text-xs">
+              {countsAreValid
+                ? `About ${Math.round(questionCount * 2.4)} minutes, with roughly ${Math.floor(questionCount / roundCount)}–${Math.ceil(questionCount / roundCount)} questions per round.`
+                : 'Add at least one question for every round.'}
+            </p>
           </div>
 
           {/* Topics */}
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
-            <label style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider block mb-3">Topics</label>
+            <label style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider block mb-3">Round Categories</label>
             <div className="flex gap-2 mb-4">
               {([['mixed', 'Mixed Topics'], ['custom', 'Choose by Round']] as ['mixed' | 'custom', string][]).map(([v, l]) => (
                 <button key={v} onClick={() => setMode(v)}
@@ -3579,7 +3574,7 @@ function AutoBuild({ go }: { go: Go }) {
                     <span style={{ color: C.sub }} className="text-xs font-mono w-14 shrink-0">Round {i + 1}</span>
                     <select value={t} onChange={event => setTopics(current => current.map((topic, topicIndex) => topicIndex === i ? event.target.value : topic))} style={{ border: `1px solid ${C.line}`, color: C.ink }}
                       className="flex-1 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30">
-                      {allTopics.map(o => <option key={o}>{o}</option>)}
+                      {allTopics.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </div>
                 ))}
@@ -3648,7 +3643,9 @@ function AutoBuild({ go }: { go: Go }) {
               Sourcing: <span style={{ color: C.ink }} className="font-semibold">{diffText()}</span>
             </p>
             <p aria-live="polite" style={{ color: sourcesError || firstShortage ? C.stop : C.sub }} className="mt-2 text-xs leading-5">
-              {sourcesLoading
+              {!countsAreValid
+                ? 'The question count must be at least the number of rounds.'
+                : sourcesLoading
                 ? 'Checking Question Library availability…'
                 : sourcesError
                   ? sourcesError

@@ -86,6 +86,8 @@ describe('question-package metadata inheritance', () => {
     editorialDifficulty: 2,
     stability: 'stable' as const,
     audienceSuitability: 'family' as const,
+    audienceFit: 'broad' as const,
+    adultContent: false,
     audienceScope: 'global' as const,
     contentFlags: [],
   }
@@ -95,6 +97,8 @@ describe('question-package metadata inheritance', () => {
       categories: ['Arts & Literature'],
       editorialDifficulty: 4,
       audienceSuitability: 'adult',
+      audienceFit: 'young_adults',
+      adultContent: true,
       audienceScope: 'country_specific',
       audienceLocale: 'Australia',
     })).toMatchObject({
@@ -103,6 +107,8 @@ describe('question-package metadata inheritance', () => {
       editorialDifficulty: 4,
       stability: 'stable',
       audienceSuitability: 'adult',
+      audienceFit: 'young_adults',
+      adultContent: true,
       audienceScope: 'country_specific',
       audienceLocale: 'Australia',
       contentFlags: [],
@@ -120,6 +126,8 @@ describe('question-package metadata inheritance', () => {
       bonus: {
         categories: ['Arts & Literature'],
         audienceSuitability: 'adult',
+        audienceFit: 'older_adults',
+        adultContent: true,
         audienceScope: 'country_specific',
         audienceLocale: 'Australia',
         contentFlags: ['violence'],
@@ -130,9 +138,21 @@ describe('question-package metadata inheritance', () => {
       difficultyMin: 2,
       difficultyMax: 4,
       audienceSuitability: 'adult',
+      audienceFits: ['broad', 'older_adults'],
+      adultContent: true,
       audienceScope: 'country_specific',
       audienceLocales: ['Australia'],
       contentFlags: ['violence'],
     })
+  })
+
+  it('adds Part tags but replaces parent tags for a populated Bonus', () => {
+    expect(deriveQuestionPackageMetadata({
+      question: { tags: ['Space', 'Physics'] },
+      parts: [{ tags: ['Eclipses'] }],
+      bonus: { tags: ['Books', 'Twilight'], tagMode: 'replace' },
+    }).tags).toEqual(['Space', 'Physics', 'Eclipses', 'Books', 'Twilight'])
+
+    expect(resolveInheritedQuestionMetadata(parent, { tags: [], tagMode: 'replace' }).tags).toEqual([])
   })
 })

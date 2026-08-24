@@ -19,6 +19,28 @@ describe('Auto-Build selection semantics', () => {
     expect(distributeQuestionCount(30, 4)).toEqual([8, 8, 7, 7])
   })
 
+  it('requires at least one question in every configured round', () => {
+    expect(() => buildAutoQuizPlan({
+      questions,
+      tiebreakers,
+      questionCount: 2,
+      roundTopics: [null, null, null],
+      difficulties: ['Easy'],
+    })).toThrow('Add at least one question for every round.')
+  })
+
+  it('treats a named General Knowledge round as a mixed-category round', () => {
+    const availability = getAutoBuildAvailability({
+      questions,
+      questionCount: 6,
+      roundTopics: ['General Knowledge'],
+      difficulties: ['Easy', 'Medium', 'Hard'],
+    })
+
+    expect(availability.canBuild).toBe(true)
+    expect(availability.matchingQuestionCount).toBe(24)
+  })
+
   it('selects custom round topics without reusing source questions', () => {
     const plan = buildAutoQuizPlan({
       questions,

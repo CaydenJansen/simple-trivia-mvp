@@ -21,6 +21,9 @@
 -- Audience defaults, child metadata inheritance, and snapshot metadata are
 -- versioned in
 -- supabase/migrations/20260824120000_add_question_audience_inheritance.sql.
+-- The approved long-format workbook, controlled starter tags, non-blocking
+-- proposed-tag review, Audience Fit, Adult Content, and v3 import RPC are
+-- versioned in migrations 20260824140000 and 20260824141000.
 -- Existing deployed RLS policies and Realtime publication membership are
 -- otherwise managed by Supabase and are not replaced by this file.
 
@@ -62,6 +65,9 @@ create table if not exists public.source_questions (
   source_checked_date date,
   audience_suitability text not null default 'general'
     check (audience_suitability in ('family', 'general', 'adult')),
+  audience_fit text not null default 'broad'
+    check (audience_fit in ('broad', 'kids', 'young_adults', 'older_adults')),
+  adult_content boolean not null default false,
   audience_scope text not null default 'global'
     check (audience_scope in ('global', 'country_specific')),
   audience_locale text,
@@ -112,8 +118,20 @@ create table if not exists public.source_tiebreakers (
   source_name text,
   source_url text,
   source_checked_date date,
+  primary_category_id uuid,
+  editorial_difficulty smallint check (editorial_difficulty between 1 and 5),
+  audience_fit text not null default 'broad'
+    check (audience_fit in ('broad', 'kids', 'young_adults', 'older_adults')),
+  adult_content boolean not null default false,
+  audience_scope text not null default 'global'
+    check (audience_scope in ('global', 'country_specific')),
+  audience_locale text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  check (
+    (audience_scope = 'global' and audience_locale is null)
+    or (audience_scope = 'country_specific' and length(btrim(audience_locale)) > 0)
+  )
 );
 
 create table if not exists public.quiz_questions (
@@ -648,6 +666,8 @@ create table if not exists public.source_question_parts (
   editorial_difficulty smallint check (editorial_difficulty is null or editorial_difficulty between 1 and 5),
   stability text check (stability is null or stability in ('stable', 'review_periodically', 'volatile')),
   audience_suitability text check (audience_suitability is null or audience_suitability in ('family', 'general', 'adult')),
+  audience_fit text check (audience_fit is null or audience_fit in ('broad', 'kids', 'young_adults', 'older_adults')),
+  adult_content boolean,
   audience_scope text check (audience_scope is null or audience_scope in ('global', 'country_specific')),
   audience_locale text,
   content_flags text[],
@@ -695,6 +715,9 @@ create table if not exists public.source_question_bonuses (
   editorial_difficulty smallint check (editorial_difficulty is null or editorial_difficulty between 1 and 5),
   stability text check (stability is null or stability in ('stable', 'review_periodically', 'volatile')),
   audience_suitability text check (audience_suitability is null or audience_suitability in ('family', 'general', 'adult')),
+  audience_fit text check (audience_fit is null or audience_fit in ('broad', 'kids', 'young_adults', 'older_adults')),
+  adult_content boolean,
+  tag_mode text not null default 'inherit' check (tag_mode in ('inherit', 'replace')),
   audience_scope text check (audience_scope is null or audience_scope in ('global', 'country_specific')),
   audience_locale text,
   content_flags text[],
@@ -740,6 +763,52 @@ create table if not exists public.question_library_import_batches (
   counts jsonb not null check (jsonb_typeof(counts) = 'object'),
   imported_at timestamptz not null default now()
 );
+
+create table if not exists public.proposed_question_tags (
+  id uuid primary key default gen_random_uuid(),
+  normalized_phrase text not null unique check (length(btrim(normalized_phrase)) > 0),
+  display_phrase text not null check (length(btrim(display_phrase)) > 0),
+  status text not null default 'pending' check (status in ('pending', 'mapped', 'created', 'ignored')),
+  resolved_tag_id uuid references public.tags(id) on delete set null,
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  resolved_at timestamptz,
+  check (
+    (status = 'pending' and resolved_tag_id is null and resolved_at is null)
+    or (status in ('mapped', 'created') and resolved_tag_id is not null and resolved_at is not null)
+    or (status = 'ignored' and resolved_tag_id is null and resolved_at is not null)
+  )
+);
+
+create table if not exists public.proposed_question_tag_assignments (
+  id uuid primary key default gen_random_uuid(),
+  proposed_tag_id uuid not null references public.proposed_question_tags(id) on delete cascade,
+  import_batch_id uuid references public.question_library_import_batches(id) on delete set null,
+  source_question_id uuid not null references public.source_questions(id) on delete cascade,
+  source_question_part_id uuid references public.source_question_parts(id) on delete cascade,
+  source_question_bonus_id uuid references public.source_question_bonuses(id) on delete cascade,
+  raw_phrase text not null check (length(btrim(raw_phrase)) > 0),
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz,
+  check (num_nonnulls(source_question_part_id, source_question_bonus_id) <= 1)
+);
+
+create unique index if not exists proposed_question_tag_parent_assignment_idx
+  on public.proposed_question_tag_assignments (proposed_tag_id, source_question_id)
+  where source_question_part_id is null and source_question_bonus_id is null;
+create unique index if not exists proposed_question_tag_part_assignment_idx
+  on public.proposed_question_tag_assignments (proposed_tag_id, source_question_part_id)
+  where source_question_part_id is not null;
+create unique index if not exists proposed_question_tag_bonus_assignment_idx
+  on public.proposed_question_tag_assignments (proposed_tag_id, source_question_bonus_id)
+  where source_question_bonus_id is not null;
+create index if not exists proposed_question_tag_assignments_batch_idx
+  on public.proposed_question_tag_assignments (import_batch_id);
+
+alter table public.proposed_question_tags enable row level security;
+alter table public.proposed_question_tag_assignments enable row level security;
+revoke all on public.proposed_question_tags, public.proposed_question_tag_assignments from anon, authenticated;
+grant all on public.proposed_question_tags, public.proposed_question_tag_assignments to service_role;
 
 create unique index if not exists media_assets_import_key_idx
   on public.media_assets (import_key)
@@ -795,9 +864,12 @@ left join lateral (
     'editorial_difficulty', source_question_bonuses.editorial_difficulty,
     'stability', source_question_bonuses.stability,
     'audience_suitability', source_question_bonuses.audience_suitability,
+    'audience_fit', source_question_bonuses.audience_fit,
+    'adult_content', source_question_bonuses.adult_content,
     'audience_scope', source_question_bonuses.audience_scope,
     'audience_locale', source_question_bonuses.audience_locale,
     'content_flags', source_question_bonuses.content_flags,
+    'tag_mode', source_question_bonuses.tag_mode,
     'primary_category_id', bonus_categories.primary_category_id,
     'secondary_category_ids', coalesce(bonus_categories.secondary_category_ids, '{}'::uuid[]),
     'category_ids', coalesce(bonus_categories.category_ids, '{}'::uuid[]),
@@ -824,3 +896,25 @@ left join lateral (
   ) as bonus_tags on true
   where source_question_bonuses.source_question_id = source_questions.id
 ) as bonus_metadata on true;
+
+create or replace view public.question_library_proposed_tag_review
+with (security_invoker = true)
+as
+select
+  proposed_question_tags.id,
+  proposed_question_tags.display_phrase,
+  proposed_question_tags.normalized_phrase,
+  proposed_question_tags.status,
+  proposed_question_tags.resolved_tag_id,
+  count(proposed_question_tag_assignments.id)::integer as assignment_count,
+  count(distinct proposed_question_tag_assignments.source_question_id)::integer as question_count,
+  proposed_question_tags.first_seen_at,
+  proposed_question_tags.last_seen_at,
+  proposed_question_tags.resolved_at
+from public.proposed_question_tags
+left join public.proposed_question_tag_assignments
+  on proposed_question_tag_assignments.proposed_tag_id = proposed_question_tags.id
+group by proposed_question_tags.id;
+
+revoke all on public.question_library_proposed_tag_review from anon, authenticated;
+grant select on public.question_library_proposed_tag_review to service_role;

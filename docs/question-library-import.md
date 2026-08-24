@@ -1,55 +1,66 @@
 # Question Library spreadsheet imports
 
-The **Simple Trivia — Question Library Master Template** is the supported authoring workbook. Keep its tab names and header rows unchanged.
+The workbook is a human-friendly import/edit format. It deliberately does not mirror the normalized database.
+
+## Workbook sheets
+
+### Questions
+
+Use these columns:
+
+`Question ID | Row Type | Label | Prompt / Clue | Answer | Accepted Answers | Correct Choice? | Category | Difficulty | Tags | Audience Fit | Adult Content? | Scope | Locale | Notes`
+
+Supported Row Types are `Question`, `Choice`, `Answer`, `Part`, `Ranking`, and `Bonus`.
+
+- A simple question is one `Question` row.
+- Complex child rows repeat the same stable Question ID and remain directly beneath their parent.
+- The importer infers the mechanic from child rows. Contradictory child structures are rejected.
+- `Accepted Answers` and `Tags` use semicolon-separated values.
+- Blank Part/Bonus classification fields inherit the parent.
+- Part tags add to parent tags.
+- Blank Bonus tags inherit; populated Bonus tags replace the parent tags.
+- Choice, Answer, and Ranking rows do not have independent classification metadata.
+- Imports enter editorial review as `needs_review`; importing never publishes content directly.
+
+Normal parent defaults are `Audience Fit = Broad`, `Adult Content? = No`, and `Scope = Global`.
+
+### Tiebreakers
+
+Use these columns:
+
+`Tiebreaker ID | Prompt | Correct Numeric Answer | Unit | Category | Difficulty | Audience Fit | Adult Content? | Scope | Locale | Notes`
+
+Tiebreakers remain separate numeric closest-answer content. They are never ordinary scored questions.
+
+## Controlled tags
+
+The platform starts with a controlled vocabulary and aliases. Exact canonical names and known aliases attach automatically. Unknown phrases never invalidate an otherwise-valid question: they are retained as unresolved assignments and grouped for bulk review.
+
+A bulk decision can map a phrase to an existing tag, create a canonical tag, or ignore it. Map/create decisions backfill every affected question already imported. Ignored normalized phrases do not repeatedly return in later reports.
 
 ## Safe workflow
 
-1. Keep the master in Google Sheets.
-2. Replace the yellow example rows before the first real import.
-3. Download the complete workbook with **File → Download → Microsoft Excel (.xlsx)**.
-4. Dry-run it locally:
+1. Download the complete Google Sheet as Microsoft Excel (`.xlsx`).
+2. Dry-run locally:
 
    ```sh
    npm run questions:import -- "/path/to/question-library.xlsx"
    ```
 
-5. Correct every error. Warnings should be reviewed but do not block an import.
-6. Apply the validated batch:
+3. Correct every error. Warnings—including proposed tags—do not block the import but should be reviewed.
+4. Apply the validated workbook:
 
    ```sh
    npm run questions:import -- "/path/to/question-library.xlsx" --apply
    ```
 
-The apply step requires the server-only `SUPABASE_SERVICE_ROLE_KEY`. Never put that value in browser code, a `NEXT_PUBLIC_` variable, source control, Vercel client settings, or the workbook.
+Applying requires the server-only `SUPABASE_SERVICE_ROLE_KEY`. Never place it in browser code, source control, the workbook, or a `NEXT_PUBLIC_` variable.
 
 ## Safety guarantees
 
 - Dry-run is the default and performs no database writes.
-- The database revalidates controlled references and applies the whole workbook in one transaction.
-- Any database error rolls back the entire batch.
-- `import_key` is the permanent identity for repeatable updates.
+- The complete batch is applied atomically; database errors roll back everything.
+- Question ID and Tiebreaker ID are stable external import identifiers. Database rows retain UUID primary keys.
 - Reapplying identical file bytes is a no-op.
-- Updated workbook rows replace the imported question’s child items, category/tag links, optional bonus and media references as one unit.
-- Spreadsheet imports may only create `draft` or `needs_review` content. Publishing remains a separate editorial decision.
-- Existing quiz and game snapshots are never changed by a library import.
-
-## Workbook relationships
-
-- `Questions.import_key` identifies an ordinary reusable question.
-- `Question Items.question_import_key` attaches choices, unordered answers, multi-part clues, or ranking items to that question.
-- `Bonuses.question_import_key` attaches zero or one bonus to that question.
-- `Tiebreakers.import_key` identifies a separate numeric closest-answer question.
-- `Tags.slug` creates or updates a controlled tag. Question, part, and bonus tag fields use those slugs.
-
-Rows can be maintained in one large workbook. Smaller review batches are safer in practice: validate and import a coherent set, fix any editorial issues, and then continue. There is no requirement to split the library into CSV files.
-
-## Fast metadata entry and inheritance
-
-The normal authoring defaults are `audience_suitability = general`, `audience_scope = global`, `stability = stable`, and no content flags. Add these optional columns to **Questions**, **Question Items**, and **Bonuses** when needed:
-
-- `audience_suitability` — `family`, `general`, or `adult`
-- `audience_scope` — `global` or `country_specific`
-- `audience_locale` — required only for `country_specific`, for example `Australia`
-- `content_flags` — optional pipe-separated flags such as `alcohol|gambling`
-
-Blank metadata cells on a Multi-Part item or Bonus inherit the parent question. Only enter a child category, difficulty, audience value, stability, prompt pattern, answer type, or tags when that child genuinely differs. Effective package categories, difficulty range and audience restrictions are derived from the main content, parts and Bonus; never enter `Mixed` or `General Knowledge` as a source category.
+- Updated imports never mutate existing quiz-question or game-question snapshots.
+- Removed freshness and human-entered provenance fields remain non-destructively deprecated in the database during migration.

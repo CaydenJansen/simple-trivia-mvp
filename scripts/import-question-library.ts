@@ -69,7 +69,10 @@ async function main() {
   }
 
   const counts = importPlanCounts(result.plan)
-  console.log(`Ready: ${counts.questions} question(s), ${counts.questionParts} part(s), ${counts.bonuses} bonus(es), ${counts.tiebreakers} tiebreaker(s), ${counts.tags} tag definition(s).`)
+  console.log(`Ready: ${counts.questions} question(s), ${counts.questionParts} part(s), ${counts.bonuses} bonus(es), ${counts.tiebreakers} tiebreaker(s), ${counts.tagPhrases} tag assignment(s).`)
+  if (counts.proposedTagPhrases > 0) {
+    console.log(`${counts.proposedTagPhrases} unique tag phrase(s) may need bulk review; they will not block valid questions.`)
+  }
 
   if (!apply) {
     console.log('Dry run complete. Nothing was written. Re-run with --apply when this report is acceptable.')
@@ -103,11 +106,12 @@ async function main() {
     return
   }
 
-  const response = data as { reused?: boolean; batch_id?: string } | null
+  const response = data as { reused?: boolean; batch_id?: string; proposed_tags?: number } | null
   if (response?.reused) {
     console.log(`This exact workbook was already imported. No records changed. Batch: ${response.batch_id ?? 'unknown'}`)
   } else {
     console.log(`Import complete. Batch: ${response?.batch_id ?? 'unknown'}`)
+    if (response?.proposed_tags) console.log(`${response.proposed_tags} proposed tag phrase(s) are waiting for bulk review.`)
   }
 }
 

@@ -90,7 +90,9 @@ export function getAutoBuildAvailability({
   const shortages: AutoBuildShortage[] = []
   requirements.forEach(({ topic, required }) => {
     const available = eligibleQuestions.filter(question => (
-      topic === null || question.category?.toLocaleLowerCase() === topic.toLocaleLowerCase()
+      topic === null
+      || topic.toLocaleLowerCase() === 'general knowledge'
+      || question.category?.toLocaleLowerCase() === topic.toLocaleLowerCase()
     )).length
     matchingQuestionCount += available
     if (available < required) shortages.push({ topic, available, required })
@@ -123,6 +125,7 @@ export function buildAutoQuizPlan<
 }): AutoBuildPlan<TQuestion, TTiebreaker> {
   if (roundTopics.length === 0) throw new Error('Choose at least one round.')
   if (difficulties.length === 0) throw new Error('Choose at least one difficulty.')
+  if (questionCount < roundTopics.length) throw new Error('Add at least one question for every round.')
   if (tiebreakers.length < AUTO_BUILD_TIEBREAKER_COUNT) {
     throw new Error(`Auto-Build needs at least ${AUTO_BUILD_TIEBREAKER_COUNT} active prepared tiebreakers.`)
   }
@@ -146,7 +149,11 @@ export function buildAutoQuizPlan<
     const needed = counts[roundIndex]
     const candidates = eligibleQuestions.filter(question => (
       !usedIds.has(question.id)
-      && (topic === null || question.category?.toLocaleLowerCase() === topic.toLocaleLowerCase())
+      && (
+        topic === null
+        || topic.toLocaleLowerCase() === 'general knowledge'
+        || question.category?.toLocaleLowerCase() === topic.toLocaleLowerCase()
+      )
     ))
 
     if (candidates.length < needed) {
