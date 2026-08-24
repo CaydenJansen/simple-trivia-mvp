@@ -2326,6 +2326,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
     insertionIndex: number
     itemHeight: number
   } | null>(null)
+  const [justDroppedItemKey, setJustDroppedItemKey] = useState<string | null>(null)
   const suppressItemEditRef = useRef(false)
   const items = [
     ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, question })),
@@ -2416,8 +2417,14 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
       if (finishEvent.type === 'pointerup' && latestInsertionIndex !== originalIndex) {
         const nextOrder = moveKeyToIndex(itemKeys, itemKey, latestInsertionIndex)
         flushSync(() => {
+          setJustDroppedItemKey(itemKey)
           onReorderItems(nextOrder)
           setItemDragPreview(null)
+        })
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            setJustDroppedItemKey(current => current === itemKey ? null : current)
+          })
         })
       } else {
         setItemDragPreview(null)
@@ -2463,12 +2470,13 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
           {items.map(item => {
             const itemKey = item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`
             const dragged = itemDragPreview?.key === itemKey
+            const justDropped = justDroppedItemKey === itemKey
             return (
             <div
               key={itemKey}
               data-builder-item-key={itemKey}
               style={{ transform: itemDragTransform(itemKey) }}
-              className={`relative rounded-xl will-change-transform ${dragged ? 'z-20 cursor-grabbing opacity-90 shadow-xl ring-2 ring-violet/25 transition-[opacity,box-shadow] duration-150' : 'transition-transform duration-150 ease-out'}`}
+              className={`relative rounded-xl will-change-transform ${dragged ? 'z-20 cursor-grabbing opacity-90 shadow-xl ring-2 ring-violet/25 transition-[opacity,box-shadow] duration-150' : justDropped ? 'transition-none' : 'transition-transform duration-150 ease-out'}`}
             >
               {item.kind === 'question' ? (
               <BuilderQuestion
