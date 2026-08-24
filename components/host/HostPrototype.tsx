@@ -50,6 +50,7 @@ import {
   isValidTiebreakerNumericValue,
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
+import { checkQuizReadiness } from "@/lib/trivia/quiz-readiness";
 import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
 import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
@@ -1217,13 +1218,13 @@ function QuizBuilder({ go }: { go: Go }) {
   const [quizId, setQuizId] = useState<string | null>(null)
   const [title, setTitle] = useState('Untitled Quiz')
   const [quizStatus, setQuizStatus] = useState<'draft' | 'ready'>('draft')
-  const [savedQuizStatus, setSavedQuizStatus] = useState<'draft' | 'ready'>('draft')
   const [rounds, setRounds] = useState<BuilderRoundData[]>([])
   const [tiebreakers, setTiebreakers] = useState<BuilderTiebreakerData[]>([])
   const [persisted, setPersisted] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
@@ -1238,10 +1239,22 @@ function QuizBuilder({ go }: { go: Go }) {
   const [draggedRoundId, setDraggedRoundId] = useState<number | null>(null)
   const [roundDropTarget, setRoundDropTarget] = useState<{ id: number; placement: DropPlacement } | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [readinessOpen, setReadinessOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const questionCount = rounds.reduce((total, round) => total + round.questions.length, 0)
   const bonusCount = rounds.reduce((total, round) => total + round.questions.filter(question => question.bonus !== null).length, 0)
   const estimatedMinutes = estimatedQuizMinutes(questionCount, bonusCount)
+  const readiness = useMemo(() => checkQuizReadiness({
+    title,
+    rounds: rounds.map(round => ({
+      questionCount: round.questions.length,
+      contentScreenTitles: round.contentScreens.map(screen => screen.title),
+    })),
+    tiebreakers: tiebreakers.map(tiebreaker => ({
+      prompt: tiebreaker.prompt,
+      correctValue: tiebreaker.correctValue,
+    })),
+  }), [rounds, tiebreakers, title])
 
   useEffect(() => {
     let active = true
@@ -1258,7 +1271,6 @@ function QuizBuilder({ go }: { go: Go }) {
         setTiebreakers([])
         setQuizId(null)
         setQuizStatus('draft')
-        setSavedQuizStatus('draft')
         setPersisted(false)
         setDirty(true)
         setLoading(false)
@@ -1374,7 +1386,6 @@ function QuizBuilder({ go }: { go: Go }) {
       setQuizId(quizResult.data.id)
       const loadedStatus = quizResult.data.status === 'ready' ? 'ready' : 'draft'
       setQuizStatus(loadedStatus)
-      setSavedQuizStatus(loadedStatus)
       const loadedRounds = [...groupedRounds.values()].sort((a, b) => a.id - b.id)
       setRounds(loadedRounds.length > 0 ? loadedRounds : [{ id: 1, title: 'Round 1', questions: [], contentScreens: [] }])
       setTiebreakers((tiebreakerResult.data ?? []).map(row => ({
@@ -1519,35 +1530,33 @@ function QuizBuilder({ go }: { go: Go }) {
     window.addEventListener('pointercancel', finish)
   }
 
-  async function saveQuiz() {
-    if (saving || loading) return
+  async function saveQuiz(requestedStatus?: 'draft' | 'ready') {
+    if (saving || loading) return false
+    const statusToSave = requestedStatus ?? (quizStatus === 'ready' && !readiness.ready ? 'draft' : quizStatus)
     if (!title.trim()) {
       setSaveError('Add a quiz title before saving.')
-      return
+      return false
     }
-    if (quizStatus === 'ready' && questionCount === 0) {
-      setSaveError('Add at least one question before marking the quiz ready.')
-      return
-    }
-    if (quizStatus === 'ready' && rounds.some(round => round.contentScreens.length > 0 && round.questions.length === 0)) {
-      setSaveError('Each round with a content screen needs at least one scored question before the quiz can be hosted.')
-      return
+    if (statusToSave === 'ready' && !readiness.ready) {
+      setSaveError(readiness.blockers[0] ?? 'Finish the readiness checks before hosting this quiz.')
+      return false
     }
     if (rounds.some(round => round.contentScreens.some(screen => !screen.title.trim()))) {
       setSaveError('Give every content screen a title before saving.')
-      return
+      return false
     }
     if (tiebreakers.some(tiebreaker => !tiebreaker.prompt.trim())) {
       setSaveError('Give every tiebreaker a question before saving, or remove the unfinished tiebreaker.')
-      return
+      return false
     }
     if (tiebreakers.some(tiebreaker => !isValidTiebreakerNumericValue(tiebreaker.correctValue))) {
       setSaveError('Give every tiebreaker a numeric correct answer, without words or units.')
-      return
+      return false
     }
 
     setSaving(true)
     setSaveError(null)
+    setSaveNotice(null)
     let questionPosition = 0
     let itemPosition = 0
     const snapshots: Json[] = []
@@ -1617,7 +1626,7 @@ function QuizBuilder({ go }: { go: Go }) {
     const { data, error } = await supabase.rpc('save_quiz_with_bonus_snapshots', {
       p_quiz_id: quizId,
       p_title: title.trim(),
-      p_status: quizStatus,
+      p_status: statusToSave,
       p_estimated_minutes: estimatedMinutes,
       p_questions: snapshots,
       p_content_screens: contentScreenSnapshots,
@@ -1628,15 +1637,32 @@ function QuizBuilder({ go }: { go: Go }) {
     if (error || !data) {
       console.error('Could not save quiz:', error)
       setSaveError('Could not save this quiz. Nothing was partially saved; try again.')
-      return
+      return false
     }
 
     setQuizId(data)
     setPersisted(true)
-    setSavedQuizStatus(quizStatus)
+    setQuizStatus(statusToSave)
     setDirty(false)
+    if (quizStatus === 'ready' && statusToSave === 'draft') {
+      setSaveNotice(`Saved as Draft because it is no longer ready to host: ${readiness.blockers[0] ?? 'finish the required quiz content.'}`)
+    }
     localStorage.setItem('simple-trivia-selected-quiz-id', data)
     localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
+    return true
+  }
+
+  async function markReadyToHost() {
+    if (!readiness.ready) return
+    const saved = await saveQuiz('ready')
+    if (saved) setReadinessOpen(false)
+  }
+
+  function hostQuiz() {
+    if (!quizId || !persisted || dirty || quizStatus !== 'ready') return
+    localStorage.setItem('simple-trivia-selected-quiz-id', quizId)
+    localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
+    go('host-setup')
   }
 
   return (
@@ -1668,10 +1694,7 @@ function QuizBuilder({ go }: { go: Go }) {
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
             {loading ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : persisted ? 'Saved to Supabase' : 'New quiz'}
           </span>
-          <select
-            aria-label="Hosting status"
-            value={quizStatus}
-            onChange={event => { setQuizStatus(event.target.value as 'draft' | 'ready'); setDirty(true) }}
+          <span
             style={{
               border: `1px solid ${quizStatus === 'ready' ? '#86EFAC' : '#FCD34D'}`,
               background: quizStatus === 'ready' ? '#F0FDF4' : '#FFFBEB',
@@ -1679,19 +1702,34 @@ function QuizBuilder({ go }: { go: Go }) {
             }}
             className="rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-violet/30"
           >
-            <option value="draft">Draft — cannot host</option>
-            <option value="ready">Ready to Host</option>
-          </select>
+            {quizStatus === 'ready' ? 'Ready to host' : 'Draft'}
+          </span>
           <Btn v="secondary" sz="sm" onClick={() => setPreviewOpen(true)}>Preview</Btn>
-          <Btn sz="sm" disabled={loading || saving || !dirty} onClick={() => void saveQuiz()}>{saving ? 'Saving…' : 'Save Quiz'}</Btn>
+          <Btn
+            sz="sm"
+            disabled={loading || saving}
+            onClick={() => {
+              if (dirty || !persisted) void saveQuiz()
+              else if (quizStatus === 'draft') setReadinessOpen(true)
+              else hostQuiz()
+            }}
+          >
+            {saving
+              ? 'Saving…'
+              : dirty || !persisted
+                ? persisted ? 'Save Changes' : 'Save Quiz'
+                : quizStatus === 'draft'
+                  ? 'Review & Make Ready'
+                  : 'Host This Quiz'}
+          </Btn>
         </div>
       </header>
 
       <div className="flex" style={{ maxWidth: 1280, margin: '0 auto' }}>
         <main className="flex-1 px-6 py-7 space-y-3.5 min-w-0">
           {!loading && !loadError && (() => {
-            const statusChangePending = quizStatus !== savedQuizStatus || (!persisted && quizStatus === 'ready')
-            const readyAndSaved = quizStatus === 'ready' && persisted && !statusChangePending
+            const savedAndCurrent = persisted && !dirty
+            const readyAndSaved = quizStatus === 'ready' && savedAndCurrent
 
             return (
               <div
@@ -1699,40 +1737,43 @@ function QuizBuilder({ go }: { go: Go }) {
                   background: readyAndSaved ? '#F0FDF4' : '#FFFBEB',
                   border: `1px solid ${readyAndSaved ? '#BBF7D0' : '#FDE68A'}`,
                 }}
-                className="flex flex-col gap-3 rounded-2xl px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+                className="rounded-2xl px-5 py-4"
               >
-                <div>
+                <div className="grid grid-cols-3 gap-2" aria-label="Quiz preparation progress">
+                  {[
+                    { label: '1. Build', complete: questionCount > 0 },
+                    { label: '2. Save', complete: savedAndCurrent },
+                    { label: '3. Ready', complete: readyAndSaved },
+                  ].map(step => (
+                    <div key={step.label} className="flex items-center gap-2 rounded-xl bg-white/70 px-3 py-2">
+                      <span
+                        style={{ background: step.complete ? C.go : C.line, color: step.complete ? 'white' : C.sub }}
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
+                      >
+                        {step.complete ? '✓' : '·'}
+                      </span>
+                      <span style={{ color: step.complete ? C.ink : C.sub }} className="text-xs font-bold">{step.label}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3">
                   <p style={{ color: readyAndSaved ? '#166534' : '#92400E' }} className="text-sm font-bold">
                     {readyAndSaved
-                      ? 'Ready to Host'
-                      : quizStatus === 'ready'
-                        ? 'Ready to Host selected — save to apply'
-                        : savedQuizStatus === 'ready' && statusChangePending
-                          ? 'Draft selected — save to stop hosting'
-                          : 'Draft — not available to host'}
+                      ? 'Ready to host — launch it from this screen'
+                      : dirty
+                        ? 'Save your quiz to continue'
+                        : 'Quiz saved — next, check that it is ready to host'}
                   </p>
                   <p style={{ color: readyAndSaved ? '#15803D' : '#A16207' }} className="mt-0.5 text-xs leading-5">
                     {readyAndSaved
-                      ? dirty
-                        ? 'The last saved version can be hosted. Save again to include your latest changes.'
-                        : 'This saved quiz can be launched from My Quizzes.'
-                      : quizStatus === 'ready'
-                        ? 'Click Save Quiz to make this quiz available from My Quizzes.'
-                        : savedQuizStatus === 'ready' && statusChangePending
-                          ? 'The last saved version is still hostable until you click Save Quiz.'
-                          : 'Saving keeps your work, but Draft quizzes cannot be hosted. Mark it ready when you are finished.'}
+                      ? 'Use Host This Quiz above to choose your game settings and open a fresh lobby.'
+                      : dirty
+                        ? quizStatus === 'ready'
+                          ? 'Save your latest changes before hosting so there is no ambiguity about which version will be played.'
+                          : 'Saving keeps this as a draft. After it is saved, the readiness check becomes the next step.'
+                        : 'Use Review & Make Ready above. We will flag anything that must be fixed before hosting.'}
                   </p>
                 </div>
-                {quizStatus === 'draft' && !(savedQuizStatus === 'ready' && statusChangePending) && (
-                  <button
-                    type="button"
-                    disabled={questionCount === 0}
-                    onClick={() => { setQuizStatus('ready'); setDirty(true) }}
-                    className="shrink-0 rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-45"
-                  >
-                    {questionCount === 0 ? 'Add a question first' : 'Mark Ready to Host'}
-                  </button>
-                )}
               </div>
             )
           })()}
@@ -1744,6 +1785,11 @@ function QuizBuilder({ go }: { go: Go }) {
           {saveError && (
             <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="rounded-xl px-4 py-3 text-sm font-semibold">
               {saveError}
+            </div>
+          )}
+          {saveNotice && (
+            <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', color: '#92400E' }} className="rounded-xl px-4 py-3 text-sm font-semibold">
+              {saveNotice}
             </div>
           )}
           {replacementError && (
@@ -2049,6 +2095,54 @@ function QuizBuilder({ go }: { go: Go }) {
             setNewQuestionRoundId(null)
           }}
         />
+      )}
+
+      {readinessOpen && (
+        <div data-host-shortcuts="blocked" className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/50 px-4 backdrop-blur-sm">
+          <section className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-violet-600">Final check</p>
+                <h2 className="mt-1 text-2xl font-extrabold text-zinc-900">Ready to host?</h2>
+                <p className="mt-2 text-sm leading-6 text-zinc-500">
+                  We will save the Ready status now. You can still edit this quiz later.
+                </p>
+              </div>
+              <button type="button" onClick={() => setReadinessOpen(false)} className="rounded-lg px-3 py-2 text-sm font-semibold text-zinc-500 hover:bg-zinc-100">Close</button>
+            </div>
+
+            <div className="mt-5 space-y-2">
+              {readiness.ready ? (
+                <div className="flex items-start gap-3 rounded-2xl bg-green-50 px-4 py-3 text-green-800">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-600 text-xs font-bold text-white">✓</span>
+                  <div>
+                    <p className="text-sm font-bold">Required quiz content is complete</p>
+                    <p className="mt-0.5 text-xs leading-5 text-green-700">The quiz has a title, scored questions, and valid prepared content.</p>
+                  </div>
+                </div>
+              ) : readiness.blockers.map(blocker => (
+                <div key={blocker} className="flex items-start gap-3 rounded-2xl bg-red-50 px-4 py-3 text-red-800">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-xs font-bold text-white">!</span>
+                  <p className="text-sm font-semibold leading-5">{blocker}</p>
+                </div>
+              ))}
+
+              {readiness.warnings.map(warning => (
+                <div key={warning} className="flex items-start gap-3 rounded-2xl bg-amber-50 px-4 py-3 text-amber-800">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">i</span>
+                  <p className="text-sm font-semibold leading-5">{warning}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <Btn v="secondary" onClick={() => setReadinessOpen(false)}>{readiness.ready ? 'Not Yet' : 'Back to Quiz'}</Btn>
+              <Btn disabled={!readiness.ready || saving} onClick={() => void markReadyToHost()}>
+                {saving ? 'Saving…' : readiness.warnings.length > 0 ? 'Continue & Mark Ready' : 'Mark Ready to Host'}
+              </Btn>
+            </div>
+          </section>
+        </div>
       )}
 
       {previewOpen && <QuizPreview title={title} rounds={rounds} onClose={() => setPreviewOpen(false)} />}
