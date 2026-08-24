@@ -18,6 +18,9 @@
 -- supabase/migrations/20260821240000_add_normalized_question_catalog_api.sql.
 -- The validation-first, atomic spreadsheet ingestion boundary is versioned in
 -- supabase/migrations/20260824103000_add_question_library_import_pipeline.sql.
+-- Audience defaults, child metadata inheritance, and snapshot metadata are
+-- versioned in
+-- supabase/migrations/20260824120000_add_question_audience_inheritance.sql.
 -- Existing deployed RLS policies and Realtime publication membership are
 -- otherwise managed by Supabase and are not replaced by this file.
 
@@ -57,6 +60,12 @@ create table if not exists public.source_questions (
   source_name text,
   source_url text,
   source_checked_date date,
+  audience_suitability text not null default 'general'
+    check (audience_suitability in ('family', 'general', 'adult')),
+  audience_scope text not null default 'global'
+    check (audience_scope in ('global', 'country_specific')),
+  audience_locale text,
+  content_flags text[] not null default '{}'::text[],
   status text not null default 'draft'
     check (status in ('draft', 'needs_review', 'active', 'archived')),
   is_verified boolean not null default false,
@@ -78,7 +87,15 @@ create table if not exists public.source_questions (
       and verified_at is null
       and verified_by is null
     )
-  )
+  ),
+  check (
+    (audience_scope = 'global' and audience_locale is null)
+    or (audience_scope = 'country_specific' and length(btrim(audience_locale)) > 0)
+  ),
+  check (content_flags <@ array[
+    'sexual_health', 'sexual_content', 'alcohol', 'drugs', 'violence',
+    'death', 'profanity', 'gambling'
+  ]::text[])
 );
 
 create table if not exists public.source_tiebreakers (
@@ -125,6 +142,8 @@ create table if not exists public.quiz_questions (
   updated_at timestamptz not null default now(),
   source_question_id uuid references public.source_questions(id) on delete set null,
   source_revision integer check (source_revision is null or source_revision > 0),
+  metadata_snapshot jsonb not null default '{}'::jsonb
+    check (jsonb_typeof(metadata_snapshot) = 'object'),
   unique (quiz_id, question_key),
   unique (quiz_id, position)
 );
@@ -198,6 +217,8 @@ create table if not exists public.game_questions (
   image_url text,
   points_max integer not null default 1,
   notes text,
+  metadata_snapshot jsonb not null default '{}'::jsonb
+    check (jsonb_typeof(metadata_snapshot) = 'object'),
   created_at timestamptz not null default now(),
   unique (game_id, question_key),
   unique (game_id, position)
@@ -625,7 +646,11 @@ create table if not exists public.source_question_parts (
   prompt_pattern_id uuid references public.prompt_patterns(id) on delete set null,
   answer_type_id uuid references public.answer_types(id) on delete set null,
   editorial_difficulty smallint check (editorial_difficulty is null or editorial_difficulty between 1 and 5),
-  stability text not null default 'stable' check (stability in ('stable', 'review_periodically', 'volatile')),
+  stability text check (stability is null or stability in ('stable', 'review_periodically', 'volatile')),
+  audience_suitability text check (audience_suitability is null or audience_suitability in ('family', 'general', 'adult')),
+  audience_scope text check (audience_scope is null or audience_scope in ('global', 'country_specific')),
+  audience_locale text,
+  content_flags text[],
   as_of_date date,
   review_due_at timestamptz,
   valid_from timestamptz,
@@ -634,7 +659,12 @@ create table if not exists public.source_question_parts (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (source_question_id, position),
-  unique (source_question_id, label)
+  unique (source_question_id, label),
+  check (
+    (audience_scope is null and audience_locale is null)
+    or (audience_scope = 'global' and audience_locale is null)
+    or (audience_scope = 'country_specific' and length(btrim(audience_locale)) > 0)
+  )
 );
 
 create table if not exists public.source_question_part_categories (
@@ -663,7 +693,11 @@ create table if not exists public.source_question_bonuses (
   prompt_pattern_id uuid references public.prompt_patterns(id) on delete set null,
   answer_type_id uuid references public.answer_types(id) on delete set null,
   editorial_difficulty smallint check (editorial_difficulty is null or editorial_difficulty between 1 and 5),
-  stability text not null default 'stable' check (stability in ('stable', 'review_periodically', 'volatile')),
+  stability text check (stability is null or stability in ('stable', 'review_periodically', 'volatile')),
+  audience_suitability text check (audience_suitability is null or audience_suitability in ('family', 'general', 'adult')),
+  audience_scope text check (audience_scope is null or audience_scope in ('global', 'country_specific')),
+  audience_locale text,
+  content_flags text[],
   as_of_date date,
   review_due_at timestamptz,
   valid_from timestamptz,
@@ -674,7 +708,12 @@ create table if not exists public.source_question_bonuses (
   source_url text,
   source_checked_date date,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  check (
+    (audience_scope is null and audience_locale is null)
+    or (audience_scope = 'global' and audience_locale is null)
+    or (audience_scope = 'country_specific' and length(btrim(audience_locale)) > 0)
+  )
 );
 
 create table if not exists public.source_question_bonus_categories (
@@ -717,7 +756,8 @@ select
   category_metadata.primary_category_name,
   coalesce(category_metadata.category_names, '{}'::text[]) as category_names,
   coalesce(tag_metadata.tag_ids, '{}'::uuid[]) as tag_ids,
-  coalesce(tag_metadata.tag_names, '{}'::text[]) as tag_names
+  coalesce(tag_metadata.tag_names, '{}'::text[]) as tag_names,
+  bonus_metadata.bonus
 from public.source_questions
 left join lateral (
   select
@@ -741,4 +781,46 @@ left join lateral (
   from public.source_question_tags
   join public.tags on tags.id = source_question_tags.tag_id
   where source_question_tags.source_question_id = source_questions.id
-) as tag_metadata on true;
+) as tag_metadata on true
+left join lateral (
+  select jsonb_build_object(
+    'id', source_question_bonuses.id,
+    'prompt', source_question_bonuses.prompt,
+    'correct_answer', source_question_bonuses.correct_answer,
+    'accepted_answers', source_question_bonuses.accepted_answers,
+    'points', source_question_bonuses.points,
+    'image_url', source_question_bonuses.image_url,
+    'prompt_pattern_id', source_question_bonuses.prompt_pattern_id,
+    'answer_type_id', source_question_bonuses.answer_type_id,
+    'editorial_difficulty', source_question_bonuses.editorial_difficulty,
+    'stability', source_question_bonuses.stability,
+    'audience_suitability', source_question_bonuses.audience_suitability,
+    'audience_scope', source_question_bonuses.audience_scope,
+    'audience_locale', source_question_bonuses.audience_locale,
+    'content_flags', source_question_bonuses.content_flags,
+    'primary_category_id', bonus_categories.primary_category_id,
+    'secondary_category_ids', coalesce(bonus_categories.secondary_category_ids, '{}'::uuid[]),
+    'category_ids', coalesce(bonus_categories.category_ids, '{}'::uuid[]),
+    'tag_ids', coalesce(bonus_tags.tag_ids, '{}'::uuid[])
+  ) as bonus
+  from public.source_question_bonuses
+  left join lateral (
+    select
+      array_agg(source_question_bonus_categories.category_id order by source_question_bonus_categories.role, categories.sort_order)
+        as category_ids,
+      array_agg(source_question_bonus_categories.category_id order by categories.sort_order)
+        filter (where source_question_bonus_categories.role = 'secondary') as secondary_category_ids,
+      (array_agg(source_question_bonus_categories.category_id order by categories.sort_order)
+        filter (where source_question_bonus_categories.role = 'primary'))[1] as primary_category_id
+    from public.source_question_bonus_categories
+    join public.categories on categories.id = source_question_bonus_categories.category_id
+    where source_question_bonus_categories.source_question_bonus_id = source_question_bonuses.id
+  ) as bonus_categories on true
+  left join lateral (
+    select array_agg(tags.id order by tags.name) as tag_ids
+    from public.source_question_bonus_tags
+    join public.tags on tags.id = source_question_bonus_tags.tag_id
+    where source_question_bonus_tags.source_question_bonus_id = source_question_bonuses.id
+  ) as bonus_tags on true
+  where source_question_bonuses.source_question_id = source_questions.id
+) as bonus_metadata on true;

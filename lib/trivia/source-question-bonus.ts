@@ -1,4 +1,4 @@
-import type { FactualStability, Json } from '@/lib/supabase/database.types'
+import type { AudienceScope, AudienceSuitability, ContentFlag, FactualStability, Json } from '@/lib/supabase/database.types'
 
 export type SourceQuestionBonusDraft = {
   enabled: boolean
@@ -13,7 +13,11 @@ export type SourceQuestionBonusDraft = {
   tagIds: string[]
   promptPatternId: string
   answerTypeId: string
-  stability: FactualStability
+  stability: FactualStability | ''
+  audienceSuitability: AudienceSuitability | ''
+  audienceScope: AudienceScope | ''
+  audienceLocale: string
+  contentFlags: ContentFlag[] | null
 }
 
 export const EMPTY_SOURCE_QUESTION_BONUS: SourceQuestionBonusDraft = {
@@ -29,7 +33,11 @@ export const EMPTY_SOURCE_QUESTION_BONUS: SourceQuestionBonusDraft = {
   tagIds: [],
   promptPatternId: '',
   answerTypeId: '',
-  stability: 'stable',
+  stability: '',
+  audienceSuitability: '',
+  audienceScope: '',
+  audienceLocale: '',
+  contentFlags: null,
 }
 
 function objectValue(value: Json | null | undefined): Record<string, Json | undefined> | null {
@@ -57,7 +65,11 @@ export function sourceQuestionBonusDraft(value: Json | null | undefined): Source
     tagIds: stringArray(bonus.tag_ids),
     promptPatternId: String(bonus.prompt_pattern_id ?? ''),
     answerTypeId: String(bonus.answer_type_id ?? ''),
-    stability: (bonus.stability as FactualStability | undefined) ?? 'stable',
+    stability: (bonus.stability as FactualStability | undefined) ?? '',
+    audienceSuitability: (bonus.audience_suitability as AudienceSuitability | undefined) ?? '',
+    audienceScope: (bonus.audience_scope as AudienceScope | undefined) ?? '',
+    audienceLocale: String(bonus.audience_locale ?? ''),
+    contentFlags: bonus.content_flags == null ? null : stringArray(bonus.content_flags) as ContentFlag[],
   }
 }
 
@@ -68,6 +80,9 @@ export function validateSourceQuestionBonus(draft: SourceQuestionBonusDraft): st
   if (!Number.isInteger(draft.points) || draft.points < 1) return 'Bonus points must be a whole number greater than zero.'
   if (draft.editorialDifficulty !== '' && (draft.editorialDifficulty < 1 || draft.editorialDifficulty > 5)) {
     return 'Bonus difficulty must be between Very Easy and Very Hard.'
+  }
+  if (draft.audienceScope === 'country_specific' && !draft.audienceLocale.trim()) {
+    return 'Add a country or locale for a country-specific bonus.'
   }
   return null
 }
@@ -87,7 +102,11 @@ export function sourceQuestionBonusPayload(draft: SourceQuestionBonusDraft): Jso
     tag_ids: draft.tagIds,
     prompt_pattern_id: draft.promptPatternId || null,
     answer_type_id: draft.answerTypeId || null,
-    stability: draft.stability,
+    stability: draft.stability || null,
+    audience_suitability: draft.audienceSuitability || null,
+    audience_scope: draft.audienceScope || null,
+    audience_locale: draft.audienceScope === 'country_specific' ? draft.audienceLocale.trim() : null,
+    content_flags: draft.contentFlags,
   }
 }
 

@@ -46,7 +46,11 @@ describe('source question bonus authoring', () => {
       tag_ids: ['tag-1'],
       prompt_pattern_id: null,
       answer_type_id: null,
-      stability: 'stable',
+      stability: null,
+      audience_suitability: null,
+      audience_scope: null,
+      audience_locale: null,
+      content_flags: null,
     })
   })
 

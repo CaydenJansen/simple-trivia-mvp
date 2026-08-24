@@ -42,3 +42,14 @@ The apply step requires the server-only `SUPABASE_SERVICE_ROLE_KEY`. Never put t
 - `Tags.slug` creates or updates a controlled tag. Question, part, and bonus tag fields use those slugs.
 
 Rows can be maintained in one large workbook. Smaller review batches are safer in practice: validate and import a coherent set, fix any editorial issues, and then continue. There is no requirement to split the library into CSV files.
+
+## Fast metadata entry and inheritance
+
+The normal authoring defaults are `audience_suitability = general`, `audience_scope = global`, `stability = stable`, and no content flags. Add these optional columns to **Questions**, **Question Items**, and **Bonuses** when needed:
+
+- `audience_suitability` — `family`, `general`, or `adult`
+- `audience_scope` — `global` or `country_specific`
+- `audience_locale` — required only for `country_specific`, for example `Australia`
+- `content_flags` — optional pipe-separated flags such as `alcohol|gambling`
+
+Blank metadata cells on a Multi-Part item or Bonus inherit the parent question. Only enter a child category, difficulty, audience value, stability, prompt pattern, answer type, or tags when that child genuinely differs. Effective package categories, difficulty range and audience restrictions are derived from the main content, parts and Bonus; never enter `Mixed` or `General Knowledge` as a source category.

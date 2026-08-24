@@ -11,6 +11,17 @@ export type QuestionStatus = 'draft' | 'needs_review' | 'active' | 'archived'
 export type QuestionMechanic = 'single-answer' | 'multiple-choice' | 'multi-answer' | 'multi-part' | 'ranking'
 export type ScoringMode = 'fixed' | 'per-item' | 'all-or-nothing'
 export type FactualStability = 'stable' | 'review_periodically' | 'volatile'
+export type AudienceSuitability = 'family' | 'general' | 'adult'
+export type AudienceScope = 'global' | 'country_specific'
+export type ContentFlag =
+  | 'sexual_health'
+  | 'sexual_content'
+  | 'alcohol'
+  | 'drugs'
+  | 'violence'
+  | 'death'
+  | 'profanity'
+  | 'gambling'
 export type CategoryRole = 'primary' | 'secondary'
 export type MediaKind = 'image' | 'audio' | 'video'
 export type QuestionType =
@@ -93,6 +104,10 @@ export type Database = {
           prompt_pattern_id: string | null
           answer_type_id: string | null
           stability: FactualStability
+          audience_suitability: AudienceSuitability
+          audience_scope: AudienceScope
+          audience_locale: string | null
+          content_flags: ContentFlag[]
           as_of_date: string | null
           review_due_at: string | null
           valid_from: string | null
@@ -132,6 +147,10 @@ export type Database = {
           prompt_pattern_id?: string | null
           answer_type_id?: string | null
           stability?: FactualStability
+          audience_suitability?: AudienceSuitability
+          audience_scope?: AudienceScope
+          audience_locale?: string | null
+          content_flags?: ContentFlag[]
           as_of_date?: string | null
           review_due_at?: string | null
           valid_from?: string | null
@@ -171,6 +190,10 @@ export type Database = {
           prompt_pattern_id?: string | null
           answer_type_id?: string | null
           stability?: FactualStability
+          audience_suitability?: AudienceSuitability
+          audience_scope?: AudienceScope
+          audience_locale?: string | null
+          content_flags?: ContentFlag[]
           as_of_date?: string | null
           review_due_at?: string | null
           valid_from?: string | null
@@ -738,6 +761,17 @@ export type Database = {
         }
         Returns: string
       }
+      save_my_question_with_inherited_metadata: {
+        Args: {
+          p_question_id: string | null
+          p_question: Json
+          p_primary_category_id?: string | null
+          p_secondary_category_ids?: string[]
+          p_tag_ids?: string[]
+          p_bonus?: Json | null
+        }
+        Returns: string
+      }
       import_question_library_batch: {
         Args: {
           p_file_name: string
@@ -772,6 +806,7 @@ type QuestionRow = {
   image_url: string | null
   points_max: number
   bonus: Json | null
+  metadata_snapshot: Json
   notes: string | null
   created_at: string
 }
@@ -796,6 +831,7 @@ type QuestionInsert = {
   image_url?: string | null
   points_max?: number
   bonus?: Json | null
+  metadata_snapshot?: Json
   notes?: string | null
   created_at?: string
 }
@@ -865,6 +901,10 @@ type SourceQuestionCatalogRow = {
   prompt_pattern_id: string | null
   answer_type_id: string | null
   stability: FactualStability
+  audience_suitability: AudienceSuitability
+  audience_scope: AudienceScope
+  audience_locale: string | null
+  content_flags: ContentFlag[]
   as_of_date: string | null
   review_due_at: string | null
   valid_from: string | null
@@ -1093,7 +1133,11 @@ type SourceQuestionPartTable = {
     prompt_pattern_id: string | null
     answer_type_id: string | null
     editorial_difficulty: number | null
-    stability: FactualStability
+    stability: FactualStability | null
+    audience_suitability: AudienceSuitability | null
+    audience_scope: AudienceScope | null
+    audience_locale: string | null
+    content_flags: ContentFlag[] | null
     as_of_date: string | null
     review_due_at: string | null
     valid_from: string | null
@@ -1113,7 +1157,11 @@ type SourceQuestionPartTable = {
     prompt_pattern_id?: string | null
     answer_type_id?: string | null
     editorial_difficulty?: number | null
-    stability?: FactualStability
+    stability?: FactualStability | null
+    audience_suitability?: AudienceSuitability | null
+    audience_scope?: AudienceScope | null
+    audience_locale?: string | null
+    content_flags?: ContentFlag[] | null
     as_of_date?: string | null
     review_due_at?: string | null
     valid_from?: string | null
@@ -1229,7 +1277,11 @@ type SourceQuestionBonusTable = {
     prompt_pattern_id: string | null
     answer_type_id: string | null
     editorial_difficulty: number | null
-    stability: FactualStability
+    stability: FactualStability | null
+    audience_suitability: AudienceSuitability | null
+    audience_scope: AudienceScope | null
+    audience_locale: string | null
+    content_flags: ContentFlag[] | null
     as_of_date: string | null
     review_due_at: string | null
     valid_from: string | null
@@ -1253,7 +1305,11 @@ type SourceQuestionBonusTable = {
     prompt_pattern_id?: string | null
     answer_type_id?: string | null
     editorial_difficulty?: number | null
-    stability?: FactualStability
+    stability?: FactualStability | null
+    audience_suitability?: AudienceSuitability | null
+    audience_scope?: AudienceScope | null
+    audience_locale?: string | null
+    content_flags?: ContentFlag[] | null
     as_of_date?: string | null
     review_due_at?: string | null
     valid_from?: string | null

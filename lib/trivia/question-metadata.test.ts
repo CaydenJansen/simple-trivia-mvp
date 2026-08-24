@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildDiversityFingerprint,
+  deriveQuestionPackageMetadata,
   deriveMultiPartSummary,
   editorialDifficultyFromLegacy,
   isSourceQuestionCategory,
   mechanicFromLegacyQuestionType,
+  resolveInheritedQuestionMetadata,
 } from './question-metadata'
 
 describe('legacy question metadata compatibility', () => {
@@ -73,6 +75,64 @@ describe('multi-part metadata', () => {
       hasMedia: true,
       hasBonus: true,
       stabilities: ['stable', 'review_periodically'],
+    })
+  })
+})
+
+describe('question-package metadata inheritance', () => {
+  const parent = {
+    categories: ['Science & Nature'],
+    tags: ['eclipses'],
+    editorialDifficulty: 2,
+    stability: 'stable' as const,
+    audienceSuitability: 'family' as const,
+    audienceScope: 'global' as const,
+    contentFlags: [],
+  }
+
+  it('inherits omitted child metadata and keeps explicit overrides', () => {
+    expect(resolveInheritedQuestionMetadata(parent, {
+      categories: ['Arts & Literature'],
+      editorialDifficulty: 4,
+      audienceSuitability: 'adult',
+      audienceScope: 'country_specific',
+      audienceLocale: 'Australia',
+    })).toMatchObject({
+      categories: ['Arts & Literature'],
+      tags: ['eclipses'],
+      editorialDifficulty: 4,
+      stability: 'stable',
+      audienceSuitability: 'adult',
+      audienceScope: 'country_specific',
+      audienceLocale: 'Australia',
+      contentFlags: [],
+    })
+  })
+
+  it('derives the effective package range and most restrictive audience', () => {
+    expect(deriveQuestionPackageMetadata({
+      question: parent,
+      parts: [
+        {},
+        { categories: ['History'], editorialDifficulty: 4 },
+        { categories: ['Sport'] },
+      ],
+      bonus: {
+        categories: ['Arts & Literature'],
+        audienceSuitability: 'adult',
+        audienceScope: 'country_specific',
+        audienceLocale: 'Australia',
+        contentFlags: ['violence'],
+      },
+    })).toEqual({
+      categories: ['Science & Nature', 'History', 'Sport', 'Arts & Literature'],
+      tags: ['eclipses'],
+      difficultyMin: 2,
+      difficultyMax: 4,
+      audienceSuitability: 'adult',
+      audienceScope: 'country_specific',
+      audienceLocales: ['Australia'],
+      contentFlags: ['violence'],
     })
   })
 })

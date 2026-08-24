@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
 import type {
+  AudienceScope,
+  AudienceSuitability,
+  ContentFlag,
   Database,
   FactualStability,
   Json,
@@ -44,6 +47,10 @@ type QuestionDraft = {
   promptPatternId: string;
   answerTypeId: string;
   stability: FactualStability;
+  audienceSuitability: AudienceSuitability;
+  audienceScope: AudienceScope;
+  audienceLocale: string;
+  contentFlags: ContentFlag[];
   imageUrl: string;
   notes: string;
   status: QuestionStatus;
@@ -62,6 +69,17 @@ const QUESTION_TYPES: { value: EditableQuestionType; label: string }[] = [
   { value: "ranking", label: "Ranking" },
 ];
 
+const CONTENT_FLAG_OPTIONS: { value: ContentFlag; label: string }[] = [
+  { value: "sexual_health", label: "Sexual health" },
+  { value: "sexual_content", label: "Sexual content" },
+  { value: "alcohol", label: "Alcohol" },
+  { value: "drugs", label: "Drugs" },
+  { value: "violence", label: "Violence" },
+  { value: "death", label: "Death" },
+  { value: "profanity", label: "Profanity" },
+  { value: "gambling", label: "Gambling" },
+];
+
 const EMPTY_DRAFT: QuestionDraft = {
   prompt: "",
   questionType: "single-answer",
@@ -72,6 +90,10 @@ const EMPTY_DRAFT: QuestionDraft = {
   promptPatternId: "",
   answerTypeId: "",
   stability: "stable",
+  audienceSuitability: "general",
+  audienceScope: "global",
+  audienceLocale: "",
+  contentFlags: [],
   imageUrl: "",
   notes: "",
   status: "active",
@@ -130,6 +152,10 @@ function draftFromQuestion(question: SourceQuestion): QuestionDraft {
     promptPatternId: question.prompt_pattern_id ?? "",
     answerTypeId: question.answer_type_id ?? "",
     stability: question.stability,
+    audienceSuitability: question.audience_suitability,
+    audienceScope: question.audience_scope,
+    audienceLocale: question.audience_locale ?? "",
+    contentFlags: question.content_flags,
     imageUrl: question.image_url ?? "",
     notes: question.notes ?? "",
     status: question.status,
@@ -187,6 +213,10 @@ function questionPayload(draft: QuestionDraft) {
     answer_type_id: draft.answerTypeId || null,
     scoring_mode: draft.questionType === "multi-answer" || draft.questionType === "multi-part" || draft.questionType === "ranking" ? "per-item" : "fixed",
     stability: draft.stability,
+    audience_suitability: draft.audienceSuitability,
+    audience_scope: draft.audienceScope,
+    audience_locale: draft.audienceScope === "country_specific" ? draft.audienceLocale.trim() : null,
+    content_flags: draft.contentFlags,
     image_url: draft.imageUrl.trim() || null,
     notes: draft.notes.trim() || null,
     status: draft.status,
@@ -195,6 +225,7 @@ function questionPayload(draft: QuestionDraft) {
 
 function validateDraft(draft: QuestionDraft) {
   if (!draft.prompt.trim()) return "Add the question text.";
+  if (draft.audienceScope === "country_specific" && !draft.audienceLocale.trim()) return "Add a country or locale for a country-specific question.";
 
   if (draft.questionType === "multiple-choice") {
     const options = draft.options.map((option) => option.trim());
@@ -593,6 +624,25 @@ function TagPicker({ tags, selectedIds, onChange }: { tags: Tag[]; selectedIds: 
   );
 }
 
+function ContentFlagPicker({ selected, onChange }: { selected: ContentFlag[]; onChange: (flags: ContentFlag[]) => void }) {
+  return (
+    <fieldset>
+      <legend className="text-sm font-semibold text-zinc-700">Content flags (Optional)</legend>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {CONTENT_FLAG_OPTIONS.map((flag) => {
+          const checked = selected.includes(flag.value);
+          return (
+            <label key={flag.value} className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs font-semibold ${checked ? "border-violet-300 bg-violet-50 text-violet-700" : "border-zinc-200 bg-white text-zinc-600"}`}>
+              <input type="checkbox" checked={checked} onChange={() => onChange(checked ? selected.filter((value) => value !== flag.value) : [...selected, flag.value])} className="sr-only" />
+              {flag.label}
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
+
 function OptionalEditorField({
   label,
   shown,
@@ -644,6 +694,11 @@ function QuestionEditor({
   const [showCategory, setShowCategory] = useState(() => Boolean(question && (question.primary_category_id || question.secondary_category_ids.length > 0)));
   const [showDifficulty, setShowDifficulty] = useState(() => Boolean(question?.editorial_difficulty));
   const [showTags, setShowTags] = useState(() => Boolean(question && question.tag_ids.length > 0));
+  const [showAudience, setShowAudience] = useState(() => Boolean(question && (
+    question.audience_suitability !== "general"
+    || question.audience_scope !== "global"
+    || question.content_flags.length > 0
+  )));
   const [showImage, setShowImage] = useState(() => Boolean(question?.image_url));
   const [showBonus, setShowBonus] = useState(() => bonus.enabled);
   const [showBonusDetails, setShowBonusDetails] = useState(() => Boolean(
@@ -653,7 +708,10 @@ function QuestionEditor({
     || bonus.tagIds.length > 0
     || bonus.promptPatternId
     || bonus.answerTypeId
-    || bonus.stability !== "stable"
+    || bonus.stability
+    || bonus.audienceSuitability
+    || bonus.audienceScope
+    || bonus.contentFlags !== null
   ));
   const [showMetadata, setShowMetadata] = useState(() => Boolean(question && (
     question.prompt_pattern_id
@@ -675,6 +733,7 @@ function QuestionEditor({
   const tagSummary = selectedTagNames.length > 0
     ? `${selectedTagNames.slice(0, 3).join(", ")}${selectedTagNames.length > 3 ? ` + ${selectedTagNames.length - 3} more` : ""}`
     : null;
+  const audienceSummary = `${draft.audienceSuitability === "family" ? "Family" : draft.audienceSuitability === "adult" ? "Adult" : "General"} · ${draft.audienceScope === "country_specific" ? draft.audienceLocale || "Country-specific" : "Global"}`;
   const metadataSummary = draft.status !== "active" || draft.stability !== "stable" || draft.promptPatternId || draft.answerTypeId
     ? `${draft.status.replace("_", " ")} · ${draft.stability.replace("_", " ")}`
     : null;
@@ -719,7 +778,7 @@ function QuestionEditor({
     setSaving(true);
     setError(null);
     const payload = questionPayload(draft);
-    const result = await supabase.rpc("save_my_question_with_metadata", {
+    const result = await supabase.rpc("save_my_question_with_inherited_metadata", {
       p_question_id: question?.id ?? null,
       p_question: payload,
       p_primary_category_id: draft.primaryCategoryId || null,
@@ -846,7 +905,7 @@ function QuestionEditor({
                         <label className="block">
                           <span className="text-sm font-semibold text-zinc-700">Primary category</span>
                           <select value={bonus.primaryCategoryId} onChange={(event) => setBonus({ ...bonus, primaryCategoryId: event.target.value, secondaryCategoryIds: bonus.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
-                            <option value="">Not set</option>
+                            <option value="">Inherit from main question</option>
                             {taxonomy.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                           </select>
                         </label>
@@ -855,9 +914,24 @@ function QuestionEditor({
                       <label className="block">
                         <span className="text-sm font-semibold text-zinc-700">Difficulty</span>
                         <select value={bonus.editorialDifficulty} onChange={(event) => setBonus({ ...bonus, editorialDifficulty: event.target.value ? Number(event.target.value) : "" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
-                          <option value="">Not set</option>{TRIVIA_DIFFICULTIES.map((option, index) => <option key={option} value={index + 1}>{index + 1} · {option}</option>)}
+                          <option value="">Inherit from main question</option>{TRIVIA_DIFFICULTIES.map((option, index) => <option key={option} value={index + 1}>{index + 1} · {option}</option>)}
                         </select>
                       </label>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <label className="block">
+                          <span className="text-sm font-semibold text-zinc-700">Audience suitability</span>
+                          <select value={bonus.audienceSuitability} onChange={(event) => setBonus({ ...bonus, audienceSuitability: event.target.value as AudienceSuitability | "" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
+                            <option value="">Inherit from main question</option><option value="family">Family</option><option value="general">General</option><option value="adult">Adult</option>
+                          </select>
+                        </label>
+                        <label className="block">
+                          <span className="text-sm font-semibold text-zinc-700">Audience scope</span>
+                          <select value={bonus.audienceScope} onChange={(event) => setBonus({ ...bonus, audienceScope: event.target.value as AudienceScope | "", audienceLocale: event.target.value === "country_specific" ? bonus.audienceLocale : "" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
+                            <option value="">Inherit from main question</option><option value="global">Global</option><option value="country_specific">Country-specific</option>
+                          </select>
+                        </label>
+                      </div>
+                      {bonus.audienceScope === "country_specific" ? <label className="block"><span className="text-sm font-semibold text-zinc-700">Country or locale</span><input value={bonus.audienceLocale} onChange={(event) => setBonus({ ...bonus, audienceLocale: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" placeholder="Australia" /></label> : null}
                       <TagPicker tags={taxonomy.tags} selectedIds={bonus.tagIds} onChange={(tagIds) => setBonus({ ...bonus, tagIds })} />
                     </div>
                   </OptionalEditorField>
@@ -891,6 +965,27 @@ function QuestionEditor({
               <select value={draft.editorialDifficulty} onChange={(event) => setDraft({ ...draft, editorialDifficulty: event.target.value ? Number(event.target.value) : "" })} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
                 <option value="">Not set</option>{TRIVIA_DIFFICULTIES.map((option, index) => <option key={option} value={index + 1}>{index + 1} · {option}</option>)}
               </select>
+            </OptionalEditorField>
+
+            <OptionalEditorField label="Audience" shown={showAudience} summary={audienceSummary} onToggle={() => setShowAudience((value) => !value)}>
+              <div className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block">
+                    <span className="text-sm font-semibold text-zinc-700">Suitability</span>
+                    <select value={draft.audienceSuitability} onChange={(event) => setDraft({ ...draft, audienceSuitability: event.target.value as AudienceSuitability })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
+                      <option value="family">Family</option><option value="general">General</option><option value="adult">Adult</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-sm font-semibold text-zinc-700">Audience scope</span>
+                    <select value={draft.audienceScope} onChange={(event) => setDraft({ ...draft, audienceScope: event.target.value as AudienceScope, audienceLocale: event.target.value === "global" ? "" : draft.audienceLocale })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
+                      <option value="global">Global</option><option value="country_specific">Country-specific</option>
+                    </select>
+                  </label>
+                </div>
+                {draft.audienceScope === "country_specific" ? <label className="block"><span className="text-sm font-semibold text-zinc-700">Country or locale</span><input value={draft.audienceLocale} onChange={(event) => setDraft({ ...draft, audienceLocale: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="Australia" /></label> : null}
+                <ContentFlagPicker selected={draft.contentFlags} onChange={(contentFlags) => setDraft({ ...draft, contentFlags })} />
+              </div>
             </OptionalEditorField>
 
             <OptionalEditorField label="Tags (Optional)" shown={showTags} summary={tagSummary} onToggle={() => setShowTags((value) => !value)}>

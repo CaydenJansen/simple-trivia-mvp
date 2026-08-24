@@ -1,6 +1,13 @@
-import type { FactualStability, QuestionMechanic, QuestionStatus } from '@/lib/supabase/database.types'
+import type {
+  AudienceScope,
+  AudienceSuitability,
+  ContentFlag,
+  FactualStability,
+  QuestionMechanic,
+  QuestionStatus,
+} from '@/lib/supabase/database.types'
 
-export const QUESTION_LIBRARY_IMPORT_VERSION = 1
+export const QUESTION_LIBRARY_IMPORT_VERSION = 2
 
 export const IMPORT_SHEET_NAMES = [
   'Questions',
@@ -50,13 +57,17 @@ export type ImportQuestionPart = {
   prompt: string
   correctAnswer: string
   acceptedAnswers: string[]
-  primaryCategory: string
+  primaryCategory: string | null
   secondaryCategories: string[]
   tags: string[]
-  promptPattern: string
-  answerType: string
-  editorialDifficulty: number
-  stability: FactualStability
+  promptPattern: string | null
+  answerType: string | null
+  editorialDifficulty: number | null
+  stability: FactualStability | null
+  audienceSuitability: AudienceSuitability | null
+  audienceScope: AudienceScope | null
+  audienceLocale: string | null
+  contentFlags: ContentFlag[] | null
   media: ImportMedia | null
 }
 
@@ -65,13 +76,17 @@ export type ImportBonus = {
   correctAnswer: string
   acceptedAnswers: string[]
   points: number
-  primaryCategory: string
+  primaryCategory: string | null
   secondaryCategories: string[]
   tags: string[]
-  promptPattern: string
-  answerType: string
-  editorialDifficulty: number
-  stability: FactualStability
+  promptPattern: string | null
+  answerType: string | null
+  editorialDifficulty: number | null
+  stability: FactualStability | null
+  audienceSuitability: AudienceSuitability | null
+  audienceScope: AudienceScope | null
+  audienceLocale: string | null
+  contentFlags: ContentFlag[] | null
   media: ImportMedia | null
   notes: string | null
   source: ImportSourceReference
@@ -91,6 +106,10 @@ export type ImportQuestion = {
   answerType: string | null
   editorialDifficulty: number | null
   stability: FactualStability
+  audienceSuitability: AudienceSuitability
+  audienceScope: AudienceScope
+  audienceLocale: string | null
+  contentFlags: ContentFlag[]
   asOfDate: string | null
   reviewDueAt: string | null
   validFrom: string | null
@@ -163,6 +182,12 @@ const REQUIRED_HEADERS: Record<ImportSheetName, readonly string[]> = {
   Tags: ['slug', 'name', 'parent_tag', 'specificity', 'diversity_weight', 'aliases', 'active'],
 }
 
+export const OPTIONAL_AUDIENCE_HEADERS: Partial<Record<ImportSheetName, readonly string[]>> = {
+  Questions: ['audience_suitability', 'audience_scope', 'audience_locale', 'content_flags'],
+  'Question Items': ['audience_suitability', 'audience_scope', 'audience_locale', 'content_flags'],
+  Bonuses: ['audience_suitability', 'audience_scope', 'audience_locale', 'content_flags'],
+}
+
 const CATEGORY_SLUGS = new Set([
   'geography', 'history', 'science-nature', 'sport', 'music', 'film-television',
   'arts-literature', 'food-drink', 'society-culture', 'language-words',
@@ -175,6 +200,11 @@ const MECHANICS = new Set<QuestionMechanic>([
 
 const ITEM_KINDS = new Set(['choice', 'answer', 'part', 'ranking_item'])
 const STABILITIES = new Set<FactualStability>(['stable', 'review_periodically', 'volatile'])
+const AUDIENCE_SUITABILITIES = new Set<AudienceSuitability>(['family', 'general', 'adult'])
+const AUDIENCE_SCOPES = new Set<AudienceScope>(['global', 'country_specific'])
+const CONTENT_FLAGS = new Set<ContentFlag>([
+  'sexual_health', 'sexual_content', 'alcohol', 'drugs', 'violence', 'death', 'profanity', 'gambling',
+])
 const IMPORTABLE_STATUSES = new Set(['draft', 'needs_review'])
 const PROMPT_PATTERNS = new Set([
   'name-term-identification', 'person-identification', 'place-identification', 'quantity',
@@ -404,8 +434,7 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
   }
 
   const validatePattern = (value: string, sheet: ImportSheetName, row: number) => {
-    if (!value) addIssue('error', sheet, row, 'prompt_pattern', 'required', 'Prompt pattern is required.')
-    else if (!PROMPT_PATTERNS.has(value)) addIssue('error', sheet, row, 'prompt_pattern', 'invalid_prompt_pattern', `“${value}” is not an approved prompt pattern.`)
+    if (value && !PROMPT_PATTERNS.has(value)) addIssue('error', sheet, row, 'prompt_pattern', 'invalid_prompt_pattern', `“${value}” is not an approved prompt pattern.`)
   }
 
   const validateAnswerType = (value: string | null, sheet: ImportSheetName, row: number, required: boolean) => {
@@ -424,12 +453,50 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
     }
   }
 
-  const validateStability = (value: string, sheet: ImportSheetName, row: number): FactualStability => {
-    if (!STABILITIES.has(value as FactualStability)) {
+  const validateStability = (value: string, sheet: ImportSheetName, row: number, inherit = false): FactualStability | null => {
+    const normalized = value || (inherit ? null : 'stable')
+    if (normalized === null) return null
+    if (!STABILITIES.has(normalized as FactualStability)) {
       addIssue('error', sheet, row, 'stability', 'invalid_stability', 'Use stable, review_periodically or volatile.')
-      return 'stable'
+      return inherit ? null : 'stable'
     }
-    return value as FactualStability
+    return normalized as FactualStability
+  }
+
+  const validateAudience = (row: WorkbookRow, sheet: ImportSheetName, inherit = false) => {
+    const suitabilityValue = text(valueAt(row, 'audience_suitability'))
+    const scopeValue = text(valueAt(row, 'audience_scope'))
+    const locale = text(valueAt(row, 'audience_locale')) || null
+    const rawFlags = text(valueAt(row, 'content_flags'))
+    const contentFlags = rawFlags ? pipeList(rawFlags) as ContentFlag[] : inherit ? null : []
+    let audienceSuitability: AudienceSuitability | null = suitabilityValue
+      ? suitabilityValue as AudienceSuitability
+      : inherit ? null : 'general'
+    let audienceScope: AudienceScope | null = scopeValue
+      ? scopeValue as AudienceScope
+      : inherit ? null : 'global'
+
+    if (audienceSuitability && !AUDIENCE_SUITABILITIES.has(audienceSuitability)) {
+      addIssue('error', sheet, row.rowNumber, 'audience_suitability', 'invalid_audience_suitability', 'Use family, general or adult.')
+      audienceSuitability = inherit ? null : 'general'
+    }
+    if (audienceScope && !AUDIENCE_SCOPES.has(audienceScope)) {
+      addIssue('error', sheet, row.rowNumber, 'audience_scope', 'invalid_audience_scope', 'Use global or country_specific.')
+      audienceScope = inherit ? null : 'global'
+    }
+    if (audienceScope === 'country_specific' && !locale) {
+      addIssue('error', sheet, row.rowNumber, 'audience_locale', 'required_with_scope', 'Add a country or locale when audience scope is country_specific.')
+    }
+    if ((audienceScope === 'global' || audienceScope === null) && locale) {
+      addIssue('error', sheet, row.rowNumber, 'audience_locale', 'unexpected_locale', 'Audience locale is only used with country_specific scope.')
+    }
+    for (const flag of contentFlags ?? []) {
+      if (!CONTENT_FLAGS.has(flag)) {
+        addIssue('error', sheet, row.rowNumber, 'content_flags', 'invalid_content_flag', `“${flag}” is not an approved content flag.`)
+      }
+    }
+
+    return { audienceSuitability, audienceScope, audienceLocale: locale, contentFlags }
   }
 
   const validateStatus = (value: string, sheet: ImportSheetName, row: number): Extract<QuestionStatus, 'draft' | 'needs_review'> => {
@@ -492,7 +559,8 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
     const pattern = text(valueAt(row, 'prompt_pattern'))
     const answerType = text(valueAt(row, 'answer_type')) || null
     const difficulty = text(valueAt(row, 'difficulty')) ? parseInteger(valueAt(row, 'difficulty')) : null
-    const stability = validateStability(text(valueAt(row, 'stability')), 'Questions', row.rowNumber)
+    const stability = validateStability(text(valueAt(row, 'stability')), 'Questions', row.rowNumber) ?? 'stable'
+    const audience = validateAudience(row, 'Questions')
     const status = validateStatus(text(valueAt(row, 'status')), 'Questions', row.rowNumber)
     const media = validateMedia(valueAt(row, 'image_url'), valueAt(row, 'image_alt'), 'Questions', row.rowNumber)
     const source = validateSource(row, 'Questions')
@@ -513,9 +581,9 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
     if (!MECHANICS.has(mechanic)) addIssue('error', 'Questions', row.rowNumber, 'mechanic', 'invalid_mechanic', `“${mechanicValue}” is not a supported mechanic.`)
     const metadataOnParts = mechanic === 'multi-part'
     validateCategories(primaryCategory, secondaryCategories, 'Questions', row.rowNumber, !metadataOnParts)
-    validateTags(topicTags, 'Questions', row.rowNumber, !metadataOnParts)
+    validateTags(topicTags, 'Questions', row.rowNumber, false)
     validatePattern(pattern, 'Questions', row.rowNumber)
-    validateAnswerType(answerType, 'Questions', row.rowNumber, !metadataOnParts)
+    validateAnswerType(answerType, 'Questions', row.rowNumber, false)
     validateDifficulty(difficulty, 'Questions', row.rowNumber, !metadataOnParts)
     if (notes?.toLocaleUpperCase().includes('EXAMPLE')) addIssue('error', 'Questions', row.rowNumber, 'notes', 'example_row', 'Delete the yellow example row before importing.')
 
@@ -603,27 +671,34 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
       if (partItems.length !== normalizedItems.length) addIssue('error', 'Question Items', rows[0]?.rowNumber ?? null, 'item_kind', 'wrong_item_kind', 'Multi-part questions may only use part rows.')
       if (partItems.length < 2) addIssue('error', 'Question Items', rows[0]?.rowNumber ?? null, 'item_kind', 'part_count', 'Multi-part questions need at least two parts.')
       for (const item of partItems) {
-        const partPrimaryCategory = text(valueAt(item.row, 'primary_category'))
+        const partPrimaryCategory = text(valueAt(item.row, 'primary_category')) || null
         const partSecondaryCategories = pipeList(valueAt(item.row, 'secondary_categories'))
         const partTags = pipeList(valueAt(item.row, 'topic_tags'))
-        const partPattern = text(valueAt(item.row, 'prompt_pattern'))
-        const partAnswerType = text(valueAt(item.row, 'answer_type'))
-        const partDifficulty = parseInteger(valueAt(item.row, 'difficulty'))
-        const partStability = validateStability(text(valueAt(item.row, 'stability')), 'Question Items', item.row.rowNumber)
+        const partPattern = text(valueAt(item.row, 'prompt_pattern')) || null
+        const partAnswerType = text(valueAt(item.row, 'answer_type')) || null
+        const partDifficulty = text(valueAt(item.row, 'difficulty')) ? parseInteger(valueAt(item.row, 'difficulty')) : null
+        const partStability = validateStability(text(valueAt(item.row, 'stability')), 'Question Items', item.row.rowNumber, true)
+        const partAudience = validateAudience(item.row, 'Question Items', true)
         const imageUrl = text(valueAt(item.row, 'image_url'))
         const partMedia = imageUrl ? { url: imageUrl, alt: null } : null
 
         if (!item.label) addIssue('error', 'Question Items', item.row.rowNumber, 'label', 'required', 'Part label is required.')
         if (!item.clue) addIssue('error', 'Question Items', item.row.rowNumber, 'clue', 'required', 'Part clue is required.')
         if (!item.correctAnswer) addIssue('error', 'Question Items', item.row.rowNumber, 'correct_answer', 'required', 'Part answer is required.')
-        validateCategories(partPrimaryCategory, partSecondaryCategories, 'Question Items', item.row.rowNumber, true)
-        validateTags(partTags, 'Question Items', item.row.rowNumber, true)
-        validatePattern(partPattern, 'Question Items', item.row.rowNumber)
-        validateAnswerType(partAnswerType, 'Question Items', item.row.rowNumber, true)
-        validateDifficulty(partDifficulty, 'Question Items', item.row.rowNumber, true)
+        validateCategories(partPrimaryCategory, partSecondaryCategories, 'Question Items', item.row.rowNumber, false)
+        validateTags(partTags, 'Question Items', item.row.rowNumber, false)
+        validatePattern(partPattern ?? '', 'Question Items', item.row.rowNumber)
+        validateAnswerType(partAnswerType, 'Question Items', item.row.rowNumber, false)
+        validateDifficulty(partDifficulty, 'Question Items', item.row.rowNumber, false)
+        if (!partPrimaryCategory && !primaryCategory) {
+          addIssue('error', 'Question Items', item.row.rowNumber, 'primary_category', 'missing_effective_category', 'Add a parent category or a category override for this part.')
+        }
+        if (partDifficulty === null && difficulty === null) {
+          addIssue('error', 'Question Items', item.row.rowNumber, 'difficulty', 'missing_effective_difficulty', 'Add a parent difficulty or a difficulty override for this part.')
+        }
         if (imageUrl && !isHttpsUrl(imageUrl)) addIssue('error', 'Question Items', item.row.rowNumber, 'image_url', 'invalid_url', 'Image URL must be a valid HTTPS URL.')
 
-        if (item.position > 0 && item.label && item.clue && item.correctAnswer && partDifficulty !== null) {
+        if (item.position > 0 && item.label && item.clue && item.correctAnswer) {
           parts.push({
             position: item.position,
             label: item.label,
@@ -637,6 +712,10 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
             answerType: partAnswerType,
             editorialDifficulty: partDifficulty,
             stability: partStability,
+            audienceSuitability: partAudience.audienceSuitability,
+            audienceScope: partAudience.audienceScope,
+            audienceLocale: partAudience.audienceLocale,
+            contentFlags: partAudience.contentFlags,
             media: partMedia,
           })
         }
@@ -664,26 +743,33 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
       const bonusPrompt = text(valueAt(bonusRow, 'prompt'))
       const bonusAnswer = text(valueAt(bonusRow, 'correct_answer'))
       const bonusPoints = parseInteger(valueAt(bonusRow, 'points'))
-      const bonusPrimaryCategory = text(valueAt(bonusRow, 'primary_category'))
+      const bonusPrimaryCategory = text(valueAt(bonusRow, 'primary_category')) || null
       const bonusSecondaryCategories = pipeList(valueAt(bonusRow, 'secondary_categories'))
       const bonusTags = pipeList(valueAt(bonusRow, 'topic_tags'))
-      const bonusPattern = text(valueAt(bonusRow, 'prompt_pattern'))
-      const bonusAnswerType = text(valueAt(bonusRow, 'answer_type'))
-      const bonusDifficulty = parseInteger(valueAt(bonusRow, 'difficulty'))
-      const bonusStability = validateStability(text(valueAt(bonusRow, 'stability')), 'Bonuses', bonusRow.rowNumber)
+      const bonusPattern = text(valueAt(bonusRow, 'prompt_pattern')) || null
+      const bonusAnswerType = text(valueAt(bonusRow, 'answer_type')) || null
+      const bonusDifficulty = text(valueAt(bonusRow, 'difficulty')) ? parseInteger(valueAt(bonusRow, 'difficulty')) : null
+      const bonusStability = validateStability(text(valueAt(bonusRow, 'stability')), 'Bonuses', bonusRow.rowNumber, true)
+      const bonusAudience = validateAudience(bonusRow, 'Bonuses', true)
       const bonusMedia = validateMedia(valueAt(bonusRow, 'image_url'), valueAt(bonusRow, 'image_alt'), 'Bonuses', bonusRow.rowNumber)
       const bonusNotes = text(valueAt(bonusRow, 'notes')) || null
       const bonusSource = validateSource(bonusRow, 'Bonuses')
       if (!bonusPrompt) addIssue('error', 'Bonuses', bonusRow.rowNumber, 'prompt', 'required', 'Bonus prompt is required.')
       if (!bonusAnswer) addIssue('error', 'Bonuses', bonusRow.rowNumber, 'correct_answer', 'required', 'Bonus answer is required.')
       if (bonusPoints === null || bonusPoints < 1) addIssue('error', 'Bonuses', bonusRow.rowNumber, 'points', 'invalid_points', 'Bonus points must be a positive whole number.')
-      validateCategories(bonusPrimaryCategory, bonusSecondaryCategories, 'Bonuses', bonusRow.rowNumber, true)
-      validateTags(bonusTags, 'Bonuses', bonusRow.rowNumber, true)
-      validatePattern(bonusPattern, 'Bonuses', bonusRow.rowNumber)
-      validateAnswerType(bonusAnswerType, 'Bonuses', bonusRow.rowNumber, true)
-      validateDifficulty(bonusDifficulty, 'Bonuses', bonusRow.rowNumber, true)
+      validateCategories(bonusPrimaryCategory, bonusSecondaryCategories, 'Bonuses', bonusRow.rowNumber, false)
+      validateTags(bonusTags, 'Bonuses', bonusRow.rowNumber, false)
+      validatePattern(bonusPattern ?? '', 'Bonuses', bonusRow.rowNumber)
+      validateAnswerType(bonusAnswerType, 'Bonuses', bonusRow.rowNumber, false)
+      validateDifficulty(bonusDifficulty, 'Bonuses', bonusRow.rowNumber, false)
+      if (!bonusPrimaryCategory && !primaryCategory) {
+        addIssue('error', 'Bonuses', bonusRow.rowNumber, 'primary_category', 'missing_effective_category', 'Add a parent category or a category override for this bonus.')
+      }
+      if (bonusDifficulty === null && difficulty === null) {
+        addIssue('error', 'Bonuses', bonusRow.rowNumber, 'difficulty', 'missing_effective_difficulty', 'Add a parent difficulty or a difficulty override for this bonus.')
+      }
       if (bonusNotes?.toLocaleUpperCase().includes('EXAMPLE')) addIssue('error', 'Bonuses', bonusRow.rowNumber, 'notes', 'example_row', 'Delete the yellow example row before importing.')
-      if (bonusPrompt && bonusAnswer && bonusPoints !== null && bonusPoints > 0 && bonusDifficulty !== null) {
+      if (bonusPrompt && bonusAnswer && bonusPoints !== null && bonusPoints > 0) {
         bonus = {
           prompt: bonusPrompt,
           correctAnswer: bonusAnswer,
@@ -696,6 +782,10 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
           answerType: bonusAnswerType,
           editorialDifficulty: bonusDifficulty,
           stability: bonusStability,
+          audienceSuitability: bonusAudience.audienceSuitability,
+          audienceScope: bonusAudience.audienceScope,
+          audienceLocale: bonusAudience.audienceLocale,
+          contentFlags: bonusAudience.contentFlags,
           media: bonusMedia,
           notes: bonusNotes,
           source: bonusSource,
@@ -718,6 +808,10 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
         answerType,
         editorialDifficulty: difficulty,
         stability,
+        audienceSuitability: audience.audienceSuitability ?? 'general',
+        audienceScope: audience.audienceScope ?? 'global',
+        audienceLocale: audience.audienceLocale,
+        contentFlags: audience.contentFlags ?? [],
         asOfDate: dates.as_of_date,
         reviewDueAt: dates.review_due_at,
         validFrom: dates.valid_from,

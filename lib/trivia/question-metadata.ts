@@ -24,6 +24,8 @@ export type QuestionMechanic =
   | 'multi-part'
   | 'ranking'
 export type FactualStability = 'stable' | 'review_periodically' | 'volatile'
+export type AudienceSuitability = 'family' | 'general' | 'adult'
+export type AudienceScope = 'global' | 'country_specific'
 
 export type DiversityMetadata = {
   categories?: readonly string[]
@@ -34,6 +36,21 @@ export type DiversityMetadata = {
   editorialDifficulty?: number | null
   hasMedia?: boolean
   stability?: FactualStability | null
+  audienceSuitability?: AudienceSuitability | null
+  audienceScope?: AudienceScope | null
+  audienceLocale?: string | null
+  contentFlags?: readonly string[] | null
+}
+
+export type EffectiveQuestionPackageMetadata = {
+  categories: string[]
+  tags: string[]
+  difficultyMin: EditorialDifficulty | null
+  difficultyMax: EditorialDifficulty | null
+  audienceSuitability: AudienceSuitability
+  audienceScope: AudienceScope
+  audienceLocales: string[]
+  contentFlags: string[]
 }
 
 export type DiversityFingerprint = {
@@ -57,6 +74,70 @@ function asEditorialDifficulty(value: number | null | undefined): EditorialDiffi
   return Number.isInteger(value) && value !== undefined && value !== null && value >= 1 && value <= 5
     ? value as EditorialDifficulty
     : null
+}
+
+function inheritedList(child: readonly string[] | null | undefined, parent: readonly string[] | null | undefined) {
+  return child && child.length > 0 ? child : parent ?? []
+}
+
+export function resolveInheritedQuestionMetadata(
+  parent: DiversityMetadata,
+  child: DiversityMetadata,
+): DiversityMetadata {
+  const audienceScope = child.audienceScope ?? parent.audienceScope ?? 'global'
+  return {
+    ...child,
+    categories: inheritedList(child.categories, parent.categories),
+    tags: inheritedList(child.tags, parent.tags),
+    promptPattern: child.promptPattern ?? parent.promptPattern ?? null,
+    answerType: child.answerType ?? parent.answerType ?? null,
+    editorialDifficulty: child.editorialDifficulty ?? parent.editorialDifficulty ?? null,
+    stability: child.stability ?? parent.stability ?? 'stable',
+    audienceSuitability: child.audienceSuitability ?? parent.audienceSuitability ?? 'general',
+    audienceScope,
+    audienceLocale: audienceScope === 'country_specific'
+      ? child.audienceLocale ?? parent.audienceLocale ?? null
+      : null,
+    contentFlags: child.contentFlags ?? parent.contentFlags ?? [],
+  }
+}
+
+export function deriveQuestionPackageMetadata({
+  question,
+  parts = [],
+  bonus = null,
+}: {
+  question: DiversityMetadata
+  parts?: readonly DiversityMetadata[]
+  bonus?: DiversityMetadata | null
+}): EffectiveQuestionPackageMetadata {
+  const base = resolveInheritedQuestionMetadata({}, question)
+  const mainComponents = parts.length > 0
+    ? parts.map(part => resolveInheritedQuestionMetadata(base, part))
+    : [base]
+  const components = bonus
+    ? [...mainComponents, resolveInheritedQuestionMetadata(base, bonus)]
+    : mainComponents
+  const difficulties = components
+    .map(component => asEditorialDifficulty(component.editorialDifficulty))
+    .filter((value): value is EditorialDifficulty => value !== null)
+  const suitabilityRank: Record<AudienceSuitability, number> = { family: 0, general: 1, adult: 2 }
+  const audienceSuitability = components.reduce<AudienceSuitability>((mostRestrictive, component) => {
+    const candidate = component.audienceSuitability ?? 'general'
+    return suitabilityRank[candidate] > suitabilityRank[mostRestrictive] ? candidate : mostRestrictive
+  }, 'family')
+  const countrySpecific = components.filter(component => component.audienceScope === 'country_specific')
+
+  return {
+    categories: distinct(components.flatMap(component => component.categories ?? [])),
+    tags: distinct(components.flatMap(component => component.tags ?? [])),
+    difficultyMin: difficulties.length > 0 ? Math.min(...difficulties) as EditorialDifficulty : null,
+    difficultyMax: difficulties.length > 0 ? Math.max(...difficulties) as EditorialDifficulty : null,
+    audienceSuitability,
+    audienceScope: countrySpecific.length > 0 ? 'country_specific' : 'global',
+    audienceLocales: distinct(countrySpecific.flatMap(component => component.audienceLocale ? [component.audienceLocale] : [])),
+    contentFlags: distinct(components.flatMap(component => component.contentFlags ?? [])),
+  }
 }
 
 export function mechanicFromLegacyQuestionType(value: string): QuestionMechanic | null {
@@ -107,9 +188,13 @@ export function buildDiversityFingerprint({
   parts?: readonly DiversityMetadata[]
   bonus?: DiversityMetadata | null
 }): DiversityFingerprint {
-  const semanticComponents = parts.length > 0 ? parts : [question]
-  const diversityComponents = bonus ? [...semanticComponents, bonus] : semanticComponents
-  const styleComponents = bonus ? [question, ...parts, bonus] : [question, ...parts]
+  const base = resolveInheritedQuestionMetadata({}, question)
+  const semanticComponents = parts.length > 0
+    ? parts.map(part => resolveInheritedQuestionMetadata(base, part))
+    : [base]
+  const resolvedBonus = bonus ? resolveInheritedQuestionMetadata(base, bonus) : null
+  const diversityComponents = resolvedBonus ? [...semanticComponents, resolvedBonus] : semanticComponents
+  const styleComponents = resolvedBonus ? [base, ...semanticComponents, resolvedBonus] : [base, ...semanticComponents]
   const difficulties = diversityComponents
     .map(component => asEditorialDifficulty(component.editorialDifficulty))
     .filter((value): value is EditorialDifficulty => value !== null)

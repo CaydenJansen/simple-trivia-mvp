@@ -222,6 +222,64 @@ describe('Question Library workbook validation', () => {
     ]))
   })
 
+  it('defaults parent audience metadata and preserves blank child fields as inheritance', () => {
+    const workbook = validWorkbook()
+    workbook.Questions!.headers.push('audience_suitability', 'audience_scope', 'audience_locale', 'content_flags')
+    workbook.Bonuses!.headers.push('audience_suitability', 'audience_scope', 'audience_locale', 'content_flags')
+    Object.assign(workbook.Questions!.rows[0].values, {
+      audience_suitability: 'family',
+      audience_scope: 'global',
+      audience_locale: '',
+      content_flags: '',
+    })
+    Object.assign(workbook.Bonuses!.rows[0].values, {
+      primary_category: '',
+      secondary_categories: '',
+      topic_tags: '',
+      prompt_pattern: '',
+      answer_type: '',
+      difficulty: '',
+      stability: '',
+      audience_suitability: 'adult',
+      audience_scope: 'country_specific',
+      audience_locale: 'Australia',
+      content_flags: 'violence|death',
+    })
+
+    const result = validateQuestionLibraryWorkbook(workbook)
+
+    expect(result.valid).toBe(true)
+    expect(result.plan?.questions[0]).toMatchObject({
+      audienceSuitability: 'family',
+      audienceScope: 'global',
+      audienceLocale: null,
+      contentFlags: [],
+      bonus: {
+        primaryCategory: null,
+        editorialDifficulty: null,
+        stability: null,
+        audienceSuitability: 'adult',
+        audienceScope: 'country_specific',
+        audienceLocale: 'Australia',
+        contentFlags: ['violence', 'death'],
+      },
+    })
+  })
+
+  it('rejects a country-specific audience without a locale', () => {
+    const workbook = validWorkbook()
+    workbook.Questions!.headers.push('audience_suitability', 'audience_scope', 'audience_locale', 'content_flags')
+    Object.assign(workbook.Questions!.rows[0].values, {
+      audience_scope: 'country_specific',
+      audience_locale: '',
+    })
+
+    const result = validateQuestionLibraryWorkbook(workbook)
+
+    expect(result.valid).toBe(false)
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'required_with_scope' }))
+  })
+
   it('rejects a workbook with a renamed or deleted required header', () => {
     const workbook = validWorkbook()
     workbook.Questions!.headers = workbook.Questions!.headers.filter(header => header !== 'import_key')

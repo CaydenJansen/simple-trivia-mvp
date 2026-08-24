@@ -1002,6 +1002,7 @@ type BuilderQuestionData = {
   imageUrl: string | null
   pointsMax: number
   bonus: Json | null
+  metadataSnapshot: Json
   notes: string
   sourceQuestionId: string | null
   sourceRevision: number | null
@@ -1088,6 +1089,7 @@ function prototypeEditorQuestion(type: 'single' | 'multi'): BuilderQuestionData 
     imageUrl: null,
     pointsMax: 1,
     bonus: null,
+    metadataSnapshot: {},
     notes: '',
     sourceQuestionId: null,
     sourceRevision: null,
@@ -1118,6 +1120,7 @@ function blankBuilderQuestion(): BuilderQuestionData {
     imageUrl: null,
     pointsMax: 1,
     bonus: null,
+    metadataSnapshot: {},
     notes: '',
     sourceQuestionId: null,
     sourceRevision: null,
@@ -1152,6 +1155,17 @@ function sourceToBuilderQuestion(source: PickerSourceQuestion): BuilderQuestionD
     imageUrl: source.image_url,
     pointsMax: Array.isArray(source.correct_answer) ? Math.max(1, source.correct_answer.length) : 1,
     bonus: source.bonus,
+    metadataSnapshot: {
+      audience_suitability: source.audience_suitability,
+      audience_scope: source.audience_scope,
+      audience_locale: source.audience_locale,
+      content_flags: source.content_flags,
+      editorial_difficulty: source.editorial_difficulty,
+      stability: source.stability,
+      category_ids: source.category_ids,
+      tag_ids: source.tag_ids,
+      bonus: source.bonus,
+    },
     notes: source.notes ?? '',
     sourceQuestionId: source.id,
     sourceRevision: source.revision,
@@ -1242,7 +1256,7 @@ function QuizBuilder({ go }: { go: Go }) {
           .maybeSingle(),
         supabase
           .from('quiz_questions')
-          .select('id, question_key, position, item_position, round_number, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, tags, image_url, points_max, bonus, notes, source_question_id, source_revision')
+          .select('id, question_key, position, item_position, round_number, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, tags, image_url, points_max, bonus, metadata_snapshot, notes, source_question_id, source_revision')
           .eq('quiz_id', selectedId)
           .order('position', { ascending: true }),
         supabase
@@ -1310,6 +1324,7 @@ function QuizBuilder({ go }: { go: Go }) {
           imageUrl: row.image_url,
           pointsMax: row.points_max,
           bonus: row.bonus,
+          metadataSnapshot: row.metadata_snapshot,
           notes: row.notes ?? '',
           sourceQuestionId: row.source_question_id,
           sourceRevision: row.source_revision,
@@ -1574,6 +1589,7 @@ function QuizBuilder({ go }: { go: Go }) {
           image_url: question.imageUrl,
           points_max: question.pointsMax,
           bonus: question.bonus,
+          metadata_snapshot: question.metadataSnapshot,
           notes: question.notes || null,
           source_question_id: question.sourceQuestionId,
           source_revision: question.sourceRevision,
@@ -1982,7 +1998,7 @@ function QuizBuilder({ go }: { go: Go }) {
               .filter(tag => requestedTags.has(tag.name.toLocaleLowerCase()))
               .map(tag => tag.id)
 
-            const { data: sourceId, error: saveSourceError } = await supabase.rpc('save_my_question_with_metadata', {
+            const { data: sourceId, error: saveSourceError } = await supabase.rpc('save_my_question_with_inherited_metadata', {
               p_question_id: null,
               p_question: {
                 question_type: question.questionType,
