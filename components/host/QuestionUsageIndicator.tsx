@@ -16,19 +16,15 @@ export default function QuestionUsageIndicator({ usages }: { usages: readonly Qu
   }
 
   return (
-    <div
+    <p
       title={`Used in: ${fullUsage}`}
-      className="mt-3 flex items-start gap-3 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 shadow-sm"
+      className="mt-3 flex flex-wrap items-center gap-2 text-xs text-orange-800"
     >
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-violet-600 text-sm font-bold text-white" aria-hidden="true">
-        ↻
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-orange-300 bg-orange-100 px-2.5 py-1 font-extrabold text-orange-800">
+        <span className="flex h-4 w-4 items-center justify-center rounded-full bg-orange-600 text-[10px] text-white" aria-hidden="true">!</span>
+        Already used in {usages.length} {usages.length === 1 ? "quiz" : "quizzes"}
       </span>
-      <div className="min-w-0">
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-violet-600">
-          Used in {usages.length} {usages.length === 1 ? "quiz" : "quizzes"}
-        </p>
-        <p className="mt-0.5 text-sm font-bold leading-5 text-violet-950">{questionQuizUsageSummary(usages)}</p>
-      </div>
-    </div>
+      <span className="min-w-0 font-semibold leading-5">{questionQuizUsageSummary(usages)}</span>
+    </p>
   );
 }
