@@ -48,6 +48,7 @@ import { hostRecoveryScreen } from "@/lib/trivia/session-recovery";
 import { buildGameJoinUrl } from "@/lib/trivia/join-code";
 import {
   AUTO_BUILD_TIEBREAKER_COUNT,
+  availableTiebreakerReplacements,
   isValidTiebreakerNumericValue,
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
@@ -57,6 +58,7 @@ import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reord
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib/trivia/question-metadata";
 import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
+import { loadAllSourceRows } from "@/lib/trivia/paginated-source-load";
 import {
   EMPTY_SOURCE_QUESTION_BONUS,
   estimatedQuizMinutes,
@@ -860,7 +862,7 @@ function Dashboard({ go }: { go: Go }) {
             <button
               onClick={() => go('create-quiz')}
               style={{ border: `2px dashed ${C.line}` }}
-              className="rounded-2xl flex flex-col items-center justify-center gap-2.5 min-h-[210px] group hover:border-violet transition-colors"
+              className="cursor-pointer rounded-2xl flex flex-col items-center justify-center gap-2.5 min-h-[210px] group hover:border-violet transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet/40"
             >
               <div style={{ background: C.violetMist }} className="w-10 h-10 rounded-xl flex items-center justify-center transition-colors group-hover:bg-violet-pale">
                 <I.plus />
@@ -1056,6 +1058,7 @@ type BuilderRoundData = {
 type BuilderTiebreakerData = {
   id: string
   tiebreakerKey: string
+  sourceTiebreakerId: string | null
   prompt: string
   correctValue: string
   answerUnit: string
@@ -1066,11 +1069,16 @@ function blankBuilderTiebreaker(): BuilderTiebreakerData {
   return {
     id: `tiebreaker-${crypto.randomUUID()}`,
     tiebreakerKey: `tiebreaker-${crypto.randomUUID()}`,
+    sourceTiebreakerId: null,
     prompt: '',
     correctValue: '',
     answerUnit: '',
     notes: '',
   }
+}
+
+function tiebreakerMatchKey(prompt: string, correctValue: string | number) {
+  return `${prompt.trim().toLocaleLowerCase()}\u0000${String(correctValue).trim()}`
 }
 
 function questionTypeLabel(value: string) {
@@ -1243,8 +1251,11 @@ function QuizBuilder({ go }: { go: Go }) {
   const [replaceTarget, setReplaceTarget] = useState<{ roundId: number; questionId: string } | null>(null)
   const [replaceOrigin, setReplaceOrigin] = useState<'user' | 'platform' | null>(null)
   const [replacingLibraryQuestionId, setReplacingLibraryQuestionId] = useState<string | null>(null)
+  const [replacingLibraryTiebreakerId, setReplacingLibraryTiebreakerId] = useState<string | null>(null)
   const [replacementError, setReplacementError] = useState<string | null>(null)
+  const [tiebreakerReplacementError, setTiebreakerReplacementError] = useState<string | null>(null)
   const replacementHistoryRef = useRef(new Map<string, Set<string>>())
+  const tiebreakerReplacementHistoryRef = useRef(new Map<string, Set<string>>())
   const [draggedRoundId, setDraggedRoundId] = useState<number | null>(null)
   const [roundDropTarget, setRoundDropTarget] = useState<{ id: number; placement: DropPlacement } | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -1320,6 +1331,20 @@ function QuizBuilder({ go }: { go: Go }) {
         setLoading(false)
         return
       }
+
+      const { data: sourceTiebreakerRows, error: sourceTiebreakerError } = await supabase
+        .from('source_tiebreakers')
+        .select('id, prompt, correct_value')
+        .eq('status', 'active')
+        .eq('is_verified', true)
+        .range(0, 199)
+
+      if (!active) return
+      if (sourceTiebreakerError) console.warn('Could not load prepared tiebreaker provenance:', sourceTiebreakerError)
+      const sourceTiebreakerIdsByContent = new Map((sourceTiebreakerRows ?? []).map(row => [
+        tiebreakerMatchKey(row.prompt, row.correct_value),
+        row.id,
+      ]))
 
       const sourceQuestionIds = [...new Set((questionResult.data ?? [])
         .map(row => row.source_question_id)
@@ -1403,6 +1428,7 @@ function QuizBuilder({ go }: { go: Go }) {
       setTiebreakers((tiebreakerResult.data ?? []).map(row => ({
         id: row.id,
         tiebreakerKey: row.tiebreaker_key,
+        sourceTiebreakerId: sourceTiebreakerIdsByContent.get(tiebreakerMatchKey(row.prompt, row.correct_value)) ?? null,
         prompt: row.prompt,
         correctValue: String(row.correct_value),
         answerUnit: row.answer_unit ?? '',
@@ -1491,6 +1517,66 @@ function QuizBuilder({ go }: { go: Go }) {
     } : round))
     setDirty(true)
     setReplacingLibraryQuestionId(null)
+  }
+
+  async function cycleLibraryTiebreaker(tiebreakerId: string) {
+    if (replacingLibraryTiebreakerId) return
+    const currentTiebreaker = tiebreakers.find(tiebreaker => tiebreaker.id === tiebreakerId)
+    if (!currentTiebreaker?.sourceTiebreakerId) return
+
+    setReplacingLibraryTiebreakerId(tiebreakerId)
+    setTiebreakerReplacementError(null)
+
+    const { data, error } = await supabase
+      .from('source_tiebreakers')
+      .select('id, prompt, correct_value, answer_unit, notes, primary_category_id, editorial_difficulty')
+      .eq('status', 'active')
+      .eq('is_verified', true)
+      .range(0, 199)
+
+    if (error) {
+      console.error('Could not replace prepared tiebreaker:', error)
+      setTiebreakerReplacementError('Could not find another prepared tiebreaker. Try again in a moment.')
+      setReplacingLibraryTiebreakerId(null)
+      return
+    }
+
+    const usedSourceIds = new Set(tiebreakers
+      .map(tiebreaker => tiebreaker.sourceTiebreakerId)
+      .filter((id): id is string => Boolean(id)))
+    const candidates = availableTiebreakerReplacements(
+      data ?? [],
+      currentTiebreaker.sourceTiebreakerId,
+      usedSourceIds,
+    )
+
+    let history = tiebreakerReplacementHistoryRef.current.get(currentTiebreaker.tiebreakerKey)
+      ?? new Set([currentTiebreaker.sourceTiebreakerId])
+    let replacement = candidates.find(candidate => !history.has(candidate.id))
+
+    if (!replacement && candidates.length > 0) {
+      history = new Set([currentTiebreaker.sourceTiebreakerId])
+      replacement = candidates[0]
+    }
+
+    if (!replacement) {
+      setTiebreakerReplacementError('There are no other unused prepared tiebreakers available.')
+      setReplacingLibraryTiebreakerId(null)
+      return
+    }
+
+    history.add(replacement.id)
+    tiebreakerReplacementHistoryRef.current.set(currentTiebreaker.tiebreakerKey, history)
+    setTiebreakers(current => current.map(tiebreaker => tiebreaker.id === tiebreakerId ? {
+      ...tiebreaker,
+      sourceTiebreakerId: replacement.id,
+      prompt: replacement.prompt,
+      correctValue: String(replacement.correct_value),
+      answerUnit: replacement.answer_unit ?? '',
+      notes: replacement.notes ?? '',
+    } : tiebreaker))
+    setDirty(true)
+    setReplacingLibraryTiebreakerId(null)
   }
 
   function reorderRound(draggedId: number, targetId: number, placement: DropPlacement) {
@@ -1855,6 +1941,8 @@ function QuizBuilder({ go }: { go: Go }) {
           </button>
           <TiebreakerBuilder
             tiebreakers={tiebreakers}
+            replacingId={replacingLibraryTiebreakerId}
+            replacementError={tiebreakerReplacementError}
             onAdd={() => {
               setTiebreakers(current => [...current, blankBuilderTiebreaker()])
               setDirty(true)
@@ -1869,6 +1957,7 @@ function QuizBuilder({ go }: { go: Go }) {
               setTiebreakers(current => current.filter(tiebreaker => tiebreaker.id !== id))
               setDirty(true)
             }}
+            onCycle={id => { void cycleLibraryTiebreaker(id) }}
           />
         </main>
 
@@ -2056,55 +2145,85 @@ function QuizBuilder({ go }: { go: Go }) {
   )
 }
 
-function TiebreakerBuilder({ tiebreakers, onAdd, onUpdate, onDelete }: {
+function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, onUpdate, onDelete, onCycle }: {
   tiebreakers: BuilderTiebreakerData[]
+  replacingId: string | null
+  replacementError: string | null
   onAdd: () => void
   onUpdate: (id: string, updates: Partial<BuilderTiebreakerData>) => void
   onDelete: (id: string) => void
+  onCycle: (id: string) => void
 }) {
   const belowRecommendation = needsMoreManualTiebreakers(tiebreakers.length)
 
   return (
-    <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
-      <div className="flex items-start justify-between gap-4">
+    <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-4">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <h2 style={{ color: C.ink }} className="text-lg font-extrabold">Tiebreakers</h2>
             <span style={{ background: C.violetMist, color: C.violet }} className="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider">Optional</span>
           </div>
-          <p style={{ color: C.sub }} className="mt-1 text-sm leading-6">
-            We recommend adding at least 2 closest-answer questions, just in case.<br />
-            Already have your own way of settling a tie? You can skip these.
+          <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">
+            We recommend 2 closest-answer questions. Already settle ties another way? Skip these.
           </p>
         </div>
         <Btn v="secondary" sz="sm" onClick={onAdd}><I.plus /> Add Tiebreaker</Btn>
       </div>
 
       {tiebreakers.length === 0 ? (
-        <div style={{ border: `1px dashed ${C.line}`, color: C.sub }} className="mt-4 rounded-xl px-4 py-5 text-center text-sm">
+        <div style={{ border: `1px dashed ${C.line}`, color: C.sub }} className="mt-3 rounded-xl px-4 py-4 text-center text-sm">
           No prepared tiebreakers. This will not prevent you from saving or hosting the quiz.
         </div>
       ) : (
-        <div className="mt-4 space-y-3">
-          {tiebreakers.map((tiebreaker, index) => (
-            <div key={tiebreaker.id} style={{ border: `1px solid ${C.line}` }} className="rounded-xl p-4">
-              <div className="mb-3 flex items-center justify-between">
+        <div className="mt-3 space-y-2.5">
+          {tiebreakers.map((tiebreaker, index) => {
+            const isLibraryTiebreaker = tiebreaker.sourceTiebreakerId !== null
+            const replacing = replacingId === tiebreaker.id
+            return (
+            <div key={tiebreaker.id} style={{
+              border: `1px solid ${isLibraryTiebreaker ? '#C4B5FD' : C.line}`,
+              background: isLibraryTiebreaker ? '#F7F5FF' : 'white',
+              boxShadow: isLibraryTiebreaker ? `inset 3px 0 0 ${C.violet}` : undefined,
+              opacity: replacing ? 0.6 : 1,
+            }} className="rounded-xl px-3 py-3 transition-all">
+              <div className="mb-2.5 flex flex-wrap items-center gap-2">
                 <p style={{ color: C.ink }} className="text-sm font-bold">Tiebreaker {index + 1}</p>
-                <button type="button" onClick={() => onDelete(tiebreaker.id)} style={{ color: C.stop }} className="text-xs font-bold hover:underline">Remove</button>
+                {isLibraryTiebreaker && (
+                  <span className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-violet-700">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-md bg-violet-100">★</span>
+                    Question Library
+                  </span>
+                )}
+                <div className="ml-auto flex items-center gap-2">
+                  {isLibraryTiebreaker && (
+                    <button
+                      type="button"
+                      disabled={replacingId !== null}
+                      onClick={() => onCycle(tiebreaker.id)}
+                      title="Automatically find another unused prepared tiebreaker"
+                      className="flex items-center gap-1.5 rounded-xl border border-violet-200 bg-white px-3 py-1.5 text-xs font-bold text-violet-700 shadow-sm transition hover:border-violet-400 hover:bg-violet-50 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      <I.refresh /> {replacing ? 'Finding…' : 'Try another'}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => onDelete(tiebreaker.id)} style={{ color: C.stop }} className="px-1 text-xs font-bold hover:underline">Remove</button>
+                </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-[1fr_12rem]">
+              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_9rem_8rem_12rem]">
                 <label className="text-xs font-semibold" style={{ color: C.sub }}>
                   Closest-answer question
                   <textarea
+                    rows={2}
                     value={tiebreaker.prompt}
                     onChange={event => onUpdate(tiebreaker.id, { prompt: event.target.value })}
                     placeholder="Approximately how many kilometres long is the Great Wall of China?"
                     style={{ border: `1px solid ${C.line}`, color: C.ink }}
-                    className="mt-1.5 min-h-20 w-full resize-y rounded-xl bg-white px-3 py-2.5 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
+                    className="mt-1 min-h-14 w-full resize-none rounded-lg bg-white px-2.5 py-2 text-sm font-normal leading-5 focus:outline-none focus:ring-2 focus:ring-violet/30"
                   />
                 </label>
                 <label className="text-xs font-semibold" style={{ color: C.sub }}>
-                  Correct numeric answer
+                  Correct answer
                   <input
                     type="text"
                     inputMode="decimal"
@@ -2112,36 +2231,36 @@ function TiebreakerBuilder({ tiebreakers, onAdd, onUpdate, onDelete }: {
                     onChange={event => onUpdate(tiebreaker.id, { correctValue: event.target.value })}
                     placeholder="21196"
                     style={{ border: `1px solid ${C.line}`, color: C.ink }}
-                    className="mt-1.5 w-full rounded-xl bg-white px-3 py-2.5 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
+                    className="mt-1 w-full rounded-lg bg-white px-2.5 py-2 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
                   />
                 </label>
-              </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <label className="text-xs font-semibold" style={{ color: C.sub }}>
-                  Unit (optional)
+                  Unit
                   <input
                     value={tiebreaker.answerUnit}
                     onChange={event => onUpdate(tiebreaker.id, { answerUnit: event.target.value })}
                     placeholder="kilometres"
                     style={{ border: `1px solid ${C.line}`, color: C.ink }}
-                    className="mt-1.5 w-full rounded-xl bg-white px-3 py-2.5 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
+                    className="mt-1 w-full rounded-lg bg-white px-2.5 py-2 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
                   />
                 </label>
                 <label className="text-xs font-semibold" style={{ color: C.sub }}>
-                  Host notes (optional)
+                  Host notes
                   <input
                     value={tiebreaker.notes}
                     onChange={event => onUpdate(tiebreaker.id, { notes: event.target.value })}
                     placeholder="Source or context"
                     style={{ border: `1px solid ${C.line}`, color: C.ink }}
-                    className="mt-1.5 w-full rounded-xl bg-white px-3 py-2.5 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
+                    className="mt-1 w-full rounded-lg bg-white px-2.5 py-2 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
                   />
                 </label>
               </div>
             </div>
-          ))}
+          )})}
         </div>
       )}
+
+      {replacementError && <p style={{ color: C.stop }} className="mt-2 text-xs font-semibold">{replacementError}</p>}
 
       {belowRecommendation && tiebreakers.length > 0 && (
         <p style={{ color: C.caution }} className="mt-3 text-xs font-semibold">
@@ -3464,13 +3583,17 @@ function AutoBuild({ go }: { go: Go }) {
   useEffect(() => {
     let cancelled = false
     void Promise.all([
-      supabase
-        .from('source_question_catalog')
-        .select('*')
-        .eq('origin', 'platform')
-        .eq('status', 'active')
-        .eq('is_verified', true)
-        .range(0, 999),
+      loadAllSourceRows<AutoBuildSourceQuestion>(async (from, to) => {
+        const { data, error } = await supabase
+          .from('source_question_catalog')
+          .select('*')
+          .eq('origin', 'platform')
+          .eq('status', 'active')
+          .eq('is_verified', true)
+          .order('id', { ascending: true })
+          .range(from, to)
+        return { data, error }
+      }),
       supabase
         .from('source_tiebreakers')
         .select('*')

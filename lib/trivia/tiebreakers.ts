@@ -15,6 +15,27 @@ export function hasRequiredAutoBuildTiebreakers(count: number) {
   return count === AUTO_BUILD_TIEBREAKER_COUNT
 }
 
+export type TiebreakerReplacementOption = {
+  id: string
+  primary_category_id: string | null
+  editorial_difficulty: number | null
+}
+
+export function availableTiebreakerReplacements<T extends TiebreakerReplacementOption>(
+  options: T[],
+  currentSourceId: string,
+  usedSourceIds: ReadonlySet<string>,
+) {
+  const current = options.find(option => option.id === currentSourceId)
+  const fit = (option: T) =>
+    Number(Boolean(current?.primary_category_id && option.primary_category_id === current.primary_category_id)) * 4
+    + Number(Boolean(current?.editorial_difficulty && option.editorial_difficulty === current.editorial_difficulty)) * 2
+
+  return options
+    .filter(option => !usedSourceIds.has(option.id))
+    .sort((a, b) => fit(b) - fit(a) || a.id.localeCompare(b.id))
+}
+
 export type NumericTiebreakerAnswer = {
   teamId: string
   value: number
