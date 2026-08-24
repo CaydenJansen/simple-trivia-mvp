@@ -889,7 +889,7 @@ function QuizCard({ q, go, onDelete }: { q: QuizSummary; go: Go; onDelete: () =>
 // ─── SCREEN 2: CREATE QUIZ ────────────────────────────────────────────────────
 
 function CreateQuiz({ go }: { go: Go }) {
-  const [sel, setSel] = useState<'scratch' | 'auto' | null>(null)
+  const [sel, setSel] = useState<'scratch' | 'auto' | null>('auto')
   const [n, setN] = useState(30)
   const [nInput, setNInput] = useState('30')
   const est = Math.round(n * 2.4)
@@ -919,20 +919,20 @@ function CreateQuiz({ go }: { go: Go }) {
         <div className="grid grid-cols-2 gap-5 mb-8">
           {[
             {
-              id: 'scratch' as const,
-              icon: <I.plus />,
-              title: 'Build it myself',
-              desc: 'Start with an empty quiz and add your own questions, or pick from the question library.',
-              cta: 'Start from scratch',
-              next: 'quiz-builder' as Screen,
-            },
-            {
               id: 'auto' as const,
               icon: <I.star />,
               title: 'Build it for me',
               desc: "We'll assemble a draft from the Question Library. Review and change everything in Quiz Builder.",
               cta: 'Build my quiz',
               next: 'auto-build' as Screen,
+            },
+            {
+              id: 'scratch' as const,
+              icon: <I.plus />,
+              title: 'Write it myself',
+              desc: 'Start with an empty quiz and choose every question yourself—from the Question Library, My Questions, or something new.',
+              cta: 'Start writing',
+              next: 'quiz-builder' as Screen,
             },
           ].map(opt => (
             <div
@@ -951,7 +951,10 @@ function CreateQuiz({ go }: { go: Go }) {
               >
                 <span style={{ color: sel === opt.id ? 'white' : C.violet }}>{opt.icon}</span>
               </div>
-              <h3 style={{ color: C.ink }} className="font-bold text-base mb-1.5">{opt.title}</h3>
+              <div className="mb-1.5 flex items-center gap-2">
+                <h3 style={{ color: C.ink }} className="font-bold text-base">{opt.title}</h3>
+                {opt.id === 'auto' && <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-violet-700">Recommended</span>}
+              </div>
               <p style={{ color: C.sub }} className="text-sm leading-relaxed mb-5">{opt.desc}</p>
               <Btn
                 v={sel === opt.id ? 'primary' : 'secondary'}
@@ -966,7 +969,7 @@ function CreateQuiz({ go }: { go: Go }) {
 
         <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-6">
           <label style={{ color: C.ink }} className="block font-bold mb-1">How many questions?</label>
-          <p style={{ color: C.sub }} className="text-xs mb-4">This applies whichever route you choose above.</p>
+          <p style={{ color: C.sub }} className="text-xs mb-4">Used when we build the draft for you. Writing it yourself starts with an empty quiz.</p>
           <div className="flex items-center gap-4 mb-4">
             <button
               onClick={() => { const v = Math.max(1, n - 1); setN(v); setNInput(String(v)) }}
@@ -2166,9 +2169,9 @@ function AddQuestionMenu({ onClose, onWriteNew, onPickMine, onPickLibrary }: {
   onPickLibrary: () => void
 }) {
   const choices = [
-    { title: 'Write New', description: 'Create a new reusable question in My Questions and add an independent quiz copy.', action: onWriteNew },
-    { title: 'My Questions', description: 'Choose one of your reusable questions and copy it into this quiz.', action: onPickMine },
     { title: 'Question Library', description: 'Browse platform questions and add an editable snapshot.', action: onPickLibrary },
+    { title: 'My Questions', description: 'Choose one of your reusable questions and copy it into this quiz.', action: onPickMine },
+    { title: 'Write New', description: 'Create a new reusable question in My Questions and add an independent quiz copy.', action: onWriteNew },
   ]
 
   return (
@@ -2204,13 +2207,13 @@ function ReplaceQuestionMenu({ onClose, onPickMine, onPickLibrary }: {
           <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-semibold text-zinc-500 hover:bg-zinc-100">Close</button>
         </div>
         <div className="space-y-3">
-          <button type="button" onClick={onPickMine} className="w-full rounded-2xl border border-zinc-200 p-4 text-left transition hover:border-violet-300 hover:bg-violet-50">
-            <span className="font-bold text-zinc-900">My Questions</span>
-            <span className="mt-1 block text-sm leading-6 text-zinc-500">Replace it with an independent copy of one of your reusable questions.</span>
-          </button>
           <button type="button" onClick={onPickLibrary} className="w-full rounded-2xl border border-zinc-200 p-4 text-left transition hover:border-violet-300 hover:bg-violet-50">
             <span className="font-bold text-zinc-900">Question Library</span>
             <span className="mt-1 block text-sm leading-6 text-zinc-500">Replace it with an editable snapshot from the platform library.</span>
+          </button>
+          <button type="button" onClick={onPickMine} className="w-full rounded-2xl border border-zinc-200 p-4 text-left transition hover:border-violet-300 hover:bg-violet-50">
+            <span className="font-bold text-zinc-900">My Questions</span>
+            <span className="mt-1 block text-sm leading-6 text-zinc-500">Replace it with an independent copy of one of your reusable questions.</span>
           </button>
         </div>
       </section>
@@ -2238,10 +2241,31 @@ function QuizPreview({ title, rounds, onClose }: {
   onClose: () => void
 }) {
   const [activeIndex, setActiveIndex] = useState(0)
-  const items = rounds.flatMap(round => [
-    ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, round, question })),
-    ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, round, screen })),
-  ].sort((a, b) => a.itemPosition - b.itemPosition))
+  const items = rounds.flatMap((round, roundIndex) => {
+    const questionNumbers = new Map(
+      [...round.questions]
+        .sort((a, b) => a.itemPosition - b.itemPosition)
+        .map((question, questionIndex) => [question.id, questionIndex + 1]),
+    )
+    return [
+      ...round.questions.map(question => ({
+        kind: 'question' as const,
+        itemPosition: question.itemPosition,
+        round,
+        roundNumber: roundIndex + 1,
+        roundQuestionCount: round.questions.length,
+        questionNumber: questionNumbers.get(question.id) ?? 1,
+        question,
+      })),
+      ...round.contentScreens.map(screen => ({
+        kind: 'content' as const,
+        itemPosition: screen.itemPosition,
+        round,
+        roundNumber: roundIndex + 1,
+        screen,
+      })),
+    ].sort((a, b) => a.itemPosition - b.itemPosition)
+  })
   const active = items[activeIndex]
   const activeBonus = active?.kind === 'question' ? sourceQuestionBonusDraft(active.question.bonus) : null
 
@@ -2253,7 +2277,7 @@ function QuizPreview({ title, rounds, onClose }: {
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-violet-300">Player Preview</p>
             <h2 className="truncate text-lg font-bold">{title || 'Untitled Quiz'}</h2>
           </div>
-          <span className="text-sm text-zinc-400">{items.length === 0 ? 'No screens yet' : `${activeIndex + 1} of ${items.length}`}</span>
+          <span className="text-sm text-zinc-400">{items.length === 0 ? 'No screens yet' : `Screen ${activeIndex + 1} of ${items.length}`}</span>
           <button onClick={onClose} className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold hover:bg-white/10">Close</button>
         </header>
 
@@ -2262,14 +2286,17 @@ function QuizPreview({ title, rounds, onClose }: {
             <div className="text-center"><h3 className="text-2xl font-bold">Nothing to preview yet</h3><p className="mt-2 text-zinc-400">Add a question or content screen first.</p></div>
           ) : active.kind === 'content' ? (
             <div className="w-full max-w-2xl text-center">
-              <p className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{active.round.title} · Content Screen</p>
+              <p className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-violet-300">Round {active.roundNumber} · {active.round.title || 'Untitled Round'} · Content Screen</p>
               {active.screen.imageUrl && <div role="img" aria-label="Content screen image" className="mx-auto mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.screen.imageUrl})` }} />}
               <h3 className="text-4xl font-black leading-tight">{active.screen.title || 'Untitled screen'}</h3>
               {active.screen.body && <p className="mx-auto mt-5 max-w-xl text-lg leading-8 text-zinc-300">{active.screen.body}</p>}
             </div>
           ) : (
             <div className="w-full max-w-2xl">
-              <p className="mb-4 text-center text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{active.round.title} · {active.question.type}</p>
+              <div className="mb-4 text-center text-xs font-bold uppercase tracking-[0.2em] text-violet-300">
+                <p>Round {active.roundNumber} · {active.round.title || 'Untitled Round'}</p>
+                <p className="mt-1 text-violet-200">Question {active.questionNumber} of {active.roundQuestionCount} · {active.question.type}</p>
+              </div>
               {active.question.imageUrl && <div role="img" aria-label="Question image" className="mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.question.imageUrl})` }} />}
               <h3 className="text-center text-3xl font-black leading-tight">{active.question.text}</h3>
               <div className="mx-auto mt-8 max-w-md rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-5 py-4 text-center">

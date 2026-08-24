@@ -15,6 +15,7 @@ import type {
   QuestionType,
 } from "@/lib/supabase/database.types";
 import { TRIVIA_DIFFICULTIES } from "@/lib/trivia/difficulty";
+import { sourceQuestionSearchOrFilter } from "@/lib/trivia/source-question-search";
 import {
   EMPTY_SOURCE_QUESTION_BONUS,
   sourceQuestionBonusDraft,
@@ -25,16 +26,12 @@ import {
 type SourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"];
 type Category = Database["public"]["Tables"]["categories"]["Row"];
 type Tag = Database["public"]["Tables"]["tags"]["Row"];
-type PromptPattern = Database["public"]["Tables"]["prompt_patterns"]["Row"];
-type AnswerType = Database["public"]["Tables"]["answer_types"]["Row"];
 type EditableQuestionType = Exclude<QuestionType, "image-question">;
 type QuestionTab = "mine" | "library";
 
 type QuestionTaxonomy = {
   categories: Category[];
   tags: Tag[];
-  promptPatterns: PromptPattern[];
-  answerTypes: AnswerType[];
 };
 
 type QuestionDraft = {
@@ -67,17 +64,6 @@ const QUESTION_TYPES: { value: EditableQuestionType; label: string }[] = [
   { value: "multi-answer", label: "Multi-Answer" },
   { value: "multi-part", label: "Multi-Part" },
   { value: "ranking", label: "Ranking" },
-];
-
-const CONTENT_FLAG_OPTIONS: { value: ContentFlag; label: string }[] = [
-  { value: "sexual_health", label: "Sexual health" },
-  { value: "sexual_content", label: "Sexual content" },
-  { value: "alcohol", label: "Alcohol" },
-  { value: "drugs", label: "Drugs" },
-  { value: "violence", label: "Violence" },
-  { value: "death", label: "Death" },
-  { value: "profanity", label: "Profanity" },
-  { value: "gambling", label: "Gambling" },
 ];
 
 const EMPTY_DRAFT: QuestionDraft = {
@@ -268,9 +254,9 @@ function difficultyLabel(value: number | null) {
 }
 
 export default function QuestionsArea() {
-  const [tab, setTab] = useState<QuestionTab>("mine");
+  const [tab, setTab] = useState<QuestionTab>("library");
   const [questions, setQuestions] = useState<SourceQuestion[]>([]);
-  const [taxonomy, setTaxonomy] = useState<QuestionTaxonomy>({ categories: [], tags: [], promptPatterns: [], answerTypes: [] });
+  const [taxonomy, setTaxonomy] = useState<QuestionTaxonomy>({ categories: [], tags: [] });
   const [count, setCount] = useState(0);
   const [search, setSearch] = useState("");
   const [questionType, setQuestionType] = useState<QuestionMechanic | "all">("all");
@@ -288,11 +274,9 @@ export default function QuestionsArea() {
     void Promise.all([
       supabase.from("categories").select("*").eq("is_active", true).order("sort_order"),
       supabase.from("tags").select("*").eq("is_active", true).order("name"),
-      supabase.from("prompt_patterns").select("*").eq("is_active", true).order("name"),
-      supabase.from("answer_types").select("*").eq("is_active", true).order("name"),
-    ]).then(([categories, tags, promptPatterns, answerTypes]) => {
+    ]).then(([categories, tags]) => {
       if (!active) return;
-      const error = categories.error ?? tags.error ?? promptPatterns.error ?? answerTypes.error;
+      const error = categories.error ?? tags.error;
       if (error) {
         console.error("Could not load question taxonomy:", error);
         setLoadError("Could not load question filters. Refresh and try again.");
@@ -301,8 +285,6 @@ export default function QuestionsArea() {
       setTaxonomy({
         categories: categories.data ?? [],
         tags: tags.data ?? [],
-        promptPatterns: promptPatterns.data ?? [],
-        answerTypes: answerTypes.data ?? [],
       });
     });
     return () => { active = false; };
@@ -322,7 +304,8 @@ export default function QuestionsArea() {
           .order("updated_at", { ascending: false })
           .range(0, 49);
 
-        if (search.trim()) query = query.ilike("prompt", `%${search.trim()}%`);
+        const searchFilter = sourceQuestionSearchOrFilter(search, taxonomy.categories, taxonomy.tags);
+        if (searchFilter) query = query.or(searchFilter);
         if (questionType !== "all") query = query.eq("mechanic", questionType);
         if (difficulty) query = query.eq("editorial_difficulty", Number(difficulty));
         if (categoryId) query = query.contains("category_ids", [categoryId]);
@@ -351,7 +334,7 @@ export default function QuestionsArea() {
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [tab, search, questionType, difficulty, categoryId, tagId, status, refresh]);
+  }, [tab, search, questionType, difficulty, categoryId, tagId, status, taxonomy.categories, taxonomy.tags, refresh]);
 
   function changeTab(nextTab: QuestionTab) {
     setTab(nextTab);
@@ -371,7 +354,7 @@ export default function QuestionsArea() {
   return (
     <main className="mx-auto max-w-6xl px-6 py-9">
       <div className="mb-7 inline-flex rounded-xl border border-zinc-200 bg-white p-1">
-        {(["mine", "library"] as const).map((value) => (
+        {(["library", "mine"] as const).map((value) => (
           <button
             key={value}
             type="button"
@@ -407,7 +390,7 @@ export default function QuestionsArea() {
           type="search"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder={`Search ${title.toLowerCase()}…`}
+          placeholder="Search question, category, or topic…"
           className="rounded-xl border border-zinc-200 px-3.5 py-2.5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100 lg:col-span-2"
         />
         <select
@@ -574,36 +557,6 @@ function QuestionCard({
   );
 }
 
-function CategoryPicker({
-  label,
-  categories,
-  selectedIds,
-  onChange,
-}: {
-  label: string;
-  categories: Category[];
-  selectedIds: string[];
-  onChange: (ids: string[]) => void;
-}) {
-  const selected = categories.filter((category) => selectedIds.includes(category.id));
-  return (
-    <div>
-      <span className="text-sm font-semibold text-zinc-700">{label}</span>
-      <select
-        value=""
-        onChange={(event) => {
-          if (event.target.value && !selectedIds.includes(event.target.value)) onChange([...selectedIds, event.target.value]);
-        }}
-        className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"
-      >
-        <option value="">Add a secondary category…</option>
-        {categories.filter((category) => !selectedIds.includes(category.id)).map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-      </select>
-      {selected.length > 0 ? <div className="mt-2 flex flex-wrap gap-1.5">{selected.map((category) => <button type="button" key={category.id} onClick={() => onChange(selectedIds.filter((id) => id !== category.id))} className="rounded-md bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100">{category.name} ×</button>)}</div> : null}
-    </div>
-  );
-}
-
 function TagPicker({ tags, selectedIds, onChange }: { tags: Tag[]; selectedIds: string[]; onChange: (ids: string[]) => void }) {
   const selected = tags.filter((tag) => selectedIds.includes(tag.id));
   return (
@@ -621,25 +574,6 @@ function TagPicker({ tags, selectedIds, onChange }: { tags: Tag[]; selectedIds: 
       </select>
       {selected.length > 0 ? <div className="mt-2 flex flex-wrap gap-1.5">{selected.map((tag) => <button type="button" key={tag.id} onClick={() => onChange(selectedIds.filter((id) => id !== tag.id))} className="rounded-md bg-zinc-100 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-200">{tag.name} ×</button>)}</div> : null}
     </div>
-  );
-}
-
-function ContentFlagPicker({ selected, onChange }: { selected: ContentFlag[]; onChange: (flags: ContentFlag[]) => void }) {
-  return (
-    <fieldset>
-      <legend className="text-sm font-semibold text-zinc-700">Content flags (Optional)</legend>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {CONTENT_FLAG_OPTIONS.map((flag) => {
-          const checked = selected.includes(flag.value);
-          return (
-            <label key={flag.value} className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs font-semibold ${checked ? "border-violet-300 bg-violet-50 text-violet-700" : "border-zinc-200 bg-white text-zinc-600"}`}>
-              <input type="checkbox" checked={checked} onChange={() => onChange(checked ? selected.filter((value) => value !== flag.value) : [...selected, flag.value])} className="sr-only" />
-              {flag.label}
-            </label>
-          );
-        })}
-      </div>
-    </fieldset>
   );
 }
 
@@ -691,51 +625,26 @@ function QuestionEditor({
   const [bonus, setBonus] = useState(() => sourceQuestionBonusDraft(question?.bonus));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showCategory, setShowCategory] = useState(() => Boolean(question && (question.primary_category_id || question.secondary_category_ids.length > 0)));
+  const [showCategory, setShowCategory] = useState(() => Boolean(question?.primary_category_id));
   const [showDifficulty, setShowDifficulty] = useState(() => Boolean(question?.editorial_difficulty));
   const [showTags, setShowTags] = useState(() => Boolean(question && question.tag_ids.length > 0));
-  const [showAudience, setShowAudience] = useState(() => Boolean(question && (
-    question.audience_suitability !== "general"
-    || question.audience_scope !== "global"
-    || question.content_flags.length > 0
-  )));
   const [showImage, setShowImage] = useState(() => Boolean(question?.image_url));
   const [showBonus, setShowBonus] = useState(() => bonus.enabled);
   const [showBonusDetails, setShowBonusDetails] = useState(() => Boolean(
     bonus.primaryCategoryId
-    || bonus.secondaryCategoryIds.length > 0
     || bonus.editorialDifficulty
     || bonus.tagIds.length > 0
-    || bonus.promptPatternId
-    || bonus.answerTypeId
-    || bonus.stability
-    || bonus.audienceSuitability
-    || bonus.audienceScope
-    || bonus.contentFlags !== null
   ));
-  const [showMetadata, setShowMetadata] = useState(() => Boolean(question && (
-    question.prompt_pattern_id
-    || question.answer_type_id
-    || question.stability !== "stable"
-    || question.status !== "active"
-  )));
   const [showNotes, setShowNotes] = useState(() => Boolean(question?.notes));
   const isCompound = draft.questionType === "multi-answer" || draft.questionType === "multi-part" || draft.questionType === "ranking";
 
   const rowCount = useMemo(() => Math.max(1, draft.answers.length), [draft.answers.length]);
   const primaryCategoryName = taxonomy.categories.find((category) => category.id === draft.primaryCategoryId)?.name;
-  const secondaryCategoryCount = draft.secondaryCategoryIds.length;
-  const categorySummary = primaryCategoryName
-    ? `${primaryCategoryName}${secondaryCategoryCount ? ` + ${secondaryCategoryCount} secondary` : ""}`
-    : secondaryCategoryCount ? `${secondaryCategoryCount} secondary ${secondaryCategoryCount === 1 ? "category" : "categories"}` : null;
+  const categorySummary = primaryCategoryName ?? null;
   const difficultySummary = draft.editorialDifficulty ? TRIVIA_DIFFICULTIES[draft.editorialDifficulty - 1] : null;
   const selectedTagNames = taxonomy.tags.filter((tag) => draft.tagIds.includes(tag.id)).map((tag) => tag.name);
   const tagSummary = selectedTagNames.length > 0
     ? `${selectedTagNames.slice(0, 3).join(", ")}${selectedTagNames.length > 3 ? ` + ${selectedTagNames.length - 3} more` : ""}`
-    : null;
-  const audienceSummary = `${draft.audienceSuitability === "family" ? "Family" : draft.audienceSuitability === "adult" ? "Adult" : "General"} · ${draft.audienceScope === "country_specific" ? draft.audienceLocale || "Country-specific" : "Global"}`;
-  const metadataSummary = draft.status !== "active" || draft.stability !== "stable" || draft.promptPatternId || draft.answerTypeId
-    ? `${draft.status.replace("_", " ")} · ${draft.stability.replace("_", " ")}`
     : null;
   const bonusSummary = bonus.enabled
     ? `${bonus.points} ${bonus.points === 1 ? "point" : "points"}${bonus.prompt.trim() ? ` · ${bonus.prompt.trim()}` : " · Incomplete bonus"}`
@@ -901,37 +810,19 @@ function QuestionEditor({
                 <div className="rounded-xl border border-amber-200 bg-white p-4">
                   <OptionalEditorField label="Bonus details (Optional)" shown={showBonusDetails} summary={bonusDetailsSummary} onToggle={() => setShowBonusDetails((value) => !value)}>
                     <div className="space-y-4">
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <label className="block">
-                          <span className="text-sm font-semibold text-zinc-700">Primary category</span>
-                          <select value={bonus.primaryCategoryId} onChange={(event) => setBonus({ ...bonus, primaryCategoryId: event.target.value, secondaryCategoryIds: bonus.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
-                            <option value="">Inherit from main question</option>
-                            {taxonomy.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-                          </select>
-                        </label>
-                        <CategoryPicker label="Secondary categories" categories={taxonomy.categories.filter((category) => category.id !== bonus.primaryCategoryId)} selectedIds={bonus.secondaryCategoryIds} onChange={(secondaryCategoryIds) => setBonus({ ...bonus, secondaryCategoryIds })} />
-                      </div>
+                      <label className="block">
+                        <span className="text-sm font-semibold text-zinc-700">Category</span>
+                        <select value={bonus.primaryCategoryId} onChange={(event) => setBonus({ ...bonus, primaryCategoryId: event.target.value, secondaryCategoryIds: bonus.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
+                          <option value="">Inherit from main question</option>
+                          {taxonomy.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                        </select>
+                      </label>
                       <label className="block">
                         <span className="text-sm font-semibold text-zinc-700">Difficulty</span>
                         <select value={bonus.editorialDifficulty} onChange={(event) => setBonus({ ...bonus, editorialDifficulty: event.target.value ? Number(event.target.value) : "" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
                           <option value="">Inherit from main question</option>{TRIVIA_DIFFICULTIES.map((option, index) => <option key={option} value={index + 1}>{index + 1} · {option}</option>)}
                         </select>
                       </label>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <label className="block">
-                          <span className="text-sm font-semibold text-zinc-700">Audience suitability</span>
-                          <select value={bonus.audienceSuitability} onChange={(event) => setBonus({ ...bonus, audienceSuitability: event.target.value as AudienceSuitability | "" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
-                            <option value="">Inherit from main question</option><option value="family">Family</option><option value="general">General</option><option value="adult">Adult</option>
-                          </select>
-                        </label>
-                        <label className="block">
-                          <span className="text-sm font-semibold text-zinc-700">Audience scope</span>
-                          <select value={bonus.audienceScope} onChange={(event) => setBonus({ ...bonus, audienceScope: event.target.value as AudienceScope | "", audienceLocale: event.target.value === "country_specific" ? bonus.audienceLocale : "" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
-                            <option value="">Inherit from main question</option><option value="global">Global</option><option value="country_specific">Country-specific</option>
-                          </select>
-                        </label>
-                      </div>
-                      {bonus.audienceScope === "country_specific" ? <label className="block"><span className="text-sm font-semibold text-zinc-700">Country or locale</span><input value={bonus.audienceLocale} onChange={(event) => setBonus({ ...bonus, audienceLocale: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" placeholder="Australia" /></label> : null}
                       <TagPicker tags={taxonomy.tags} selectedIds={bonus.tagIds} onChange={(tagIds) => setBonus({ ...bonus, tagIds })} />
                     </div>
                   </OptionalEditorField>
@@ -944,21 +835,10 @@ function QuestionEditor({
 
           <div className="space-y-5 rounded-2xl border border-zinc-200 bg-zinc-50/70 p-5">
             <OptionalEditorField label="Category (Optional)" shown={showCategory} summary={categorySummary} onToggle={() => setShowCategory((value) => !value)}>
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="block">
-                  <span className="text-sm font-semibold text-zinc-700">Primary category</span>
-                  <select value={draft.primaryCategoryId} onChange={(event) => setDraft({ ...draft, primaryCategoryId: event.target.value, secondaryCategoryIds: draft.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
-                    <option value="">Not set</option>
-                    {taxonomy.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-                  </select>
-                </label>
-                <CategoryPicker
-                  label="Secondary categories"
-                  categories={taxonomy.categories.filter((category) => category.id !== draft.primaryCategoryId)}
-                  selectedIds={draft.secondaryCategoryIds}
-                  onChange={(secondaryCategoryIds) => setDraft({ ...draft, secondaryCategoryIds })}
-                />
-              </div>
+              <select value={draft.primaryCategoryId} onChange={(event) => setDraft({ ...draft, primaryCategoryId: event.target.value, secondaryCategoryIds: draft.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
+                <option value="">Not set</option>
+                {taxonomy.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+              </select>
             </OptionalEditorField>
 
             <OptionalEditorField label="Difficulty (Optional)" shown={showDifficulty} summary={difficultySummary} onToggle={() => setShowDifficulty((value) => !value)}>
@@ -967,38 +847,8 @@ function QuestionEditor({
               </select>
             </OptionalEditorField>
 
-            <OptionalEditorField label="Audience" shown={showAudience} summary={audienceSummary} onToggle={() => setShowAudience((value) => !value)}>
-              <div className="space-y-4">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <label className="block">
-                    <span className="text-sm font-semibold text-zinc-700">Suitability</span>
-                    <select value={draft.audienceSuitability} onChange={(event) => setDraft({ ...draft, audienceSuitability: event.target.value as AudienceSuitability })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
-                      <option value="family">Family</option><option value="general">General</option><option value="adult">Adult</option>
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="text-sm font-semibold text-zinc-700">Audience scope</span>
-                    <select value={draft.audienceScope} onChange={(event) => setDraft({ ...draft, audienceScope: event.target.value as AudienceScope, audienceLocale: event.target.value === "global" ? "" : draft.audienceLocale })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
-                      <option value="global">Global</option><option value="country_specific">Country-specific</option>
-                    </select>
-                  </label>
-                </div>
-                {draft.audienceScope === "country_specific" ? <label className="block"><span className="text-sm font-semibold text-zinc-700">Country or locale</span><input value={draft.audienceLocale} onChange={(event) => setDraft({ ...draft, audienceLocale: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="Australia" /></label> : null}
-                <ContentFlagPicker selected={draft.contentFlags} onChange={(contentFlags) => setDraft({ ...draft, contentFlags })} />
-              </div>
-            </OptionalEditorField>
-
             <OptionalEditorField label="Tags (Optional)" shown={showTags} summary={tagSummary} onToggle={() => setShowTags((value) => !value)}>
               <TagPicker tags={taxonomy.tags} selectedIds={draft.tagIds} onChange={(tagIds) => setDraft({ ...draft, tagIds })} />
-            </OptionalEditorField>
-
-            <OptionalEditorField label="Publishing & metadata" shown={showMetadata} summary={metadataSummary} onToggle={() => setShowMetadata((value) => !value)}>
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="block"><span className="text-sm font-semibold text-zinc-700">Prompt pattern</span><select value={draft.promptPatternId} onChange={(event) => setDraft({ ...draft, promptPatternId: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="">Not set</option>{taxonomy.promptPatterns.map((pattern) => <option key={pattern.id} value={pattern.id}>{pattern.name}</option>)}</select></label>
-                <label className="block"><span className="text-sm font-semibold text-zinc-700">Answer type</span><select value={draft.answerTypeId} onChange={(event) => setDraft({ ...draft, answerTypeId: event.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="">Not set</option>{taxonomy.answerTypes.map((answerType) => <option key={answerType.id} value={answerType.id}>{answerType.name}</option>)}</select></label>
-                <label className="block"><span className="text-sm font-semibold text-zinc-700">Factual stability</span><select value={draft.stability} onChange={(event) => setDraft({ ...draft, stability: event.target.value as FactualStability })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="stable">Stable</option><option value="review_periodically">Review periodically</option><option value="volatile">Volatile</option></select></label>
-                <label className="block"><span className="text-sm font-semibold text-zinc-700">Status</span><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as QuestionStatus })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500"><option value="active">Active</option><option value="draft">Draft</option><option value="needs_review">Needs review</option><option value="archived">Archived</option></select></label>
-              </div>
             </OptionalEditorField>
 
             <OptionalEditorField label="Host notes (Optional)" shown={showNotes} summary={draft.notes ? "Notes added" : null} onToggle={() => setShowNotes((value) => !value)}>
