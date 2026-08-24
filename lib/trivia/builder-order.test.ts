@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys } from './builder-order'
+import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys } from './builder-order'
 
 describe('quiz builder ordering', () => {
   it('moves an item before a later item', () => {
@@ -48,5 +48,9 @@ describe('quiz builder live drag placement', () => {
   it('can cross several slots in one pointer update', () => {
     expect(insertionIndexWithHysteresis([100, 200, 300], 0, 400)).toBe(3)
     expect(insertionIndexWithHysteresis([100, 200, 300], 3, 0)).toBe(0)
+  })
+
+  it('uses the dragged card centre even when its handle is near the top', () => {
+    expect(draggedItemCentreY(200, 100, 220, 290)).toBe(320)
   })
 })

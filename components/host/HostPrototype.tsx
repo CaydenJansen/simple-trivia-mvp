@@ -49,7 +49,7 @@ import {
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
 import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
-import { insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
+import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy } from "@/lib/trivia/question-metadata";
 import {
@@ -2380,7 +2380,8 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
     const otherItemCentres = otherItems.map(item => item.bounds.top + item.bounds.height / 2)
 
     const insertionIndexForY = (pointerY: number) => {
-      return insertionIndexWithHysteresis(otherItemCentres, latestInsertionIndex, pointerY)
+      const draggedCentreY = draggedItemCentreY(draggedBounds.top, draggedBounds.height, startY, pointerY)
+      return insertionIndexWithHysteresis(otherItemCentres, latestInsertionIndex, draggedCentreY)
     }
 
     const updatePreview = () => {

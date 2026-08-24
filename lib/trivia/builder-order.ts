@@ -54,3 +54,12 @@ export function insertionIndexWithHysteresis(
 
   return insertionIndex
 }
+
+export function draggedItemCentreY(
+  initialItemTop: number,
+  itemHeight: number,
+  initialPointerY: number,
+  pointerY: number,
+) {
+  return initialItemTop + itemHeight / 2 + (pointerY - initialPointerY)
+}
