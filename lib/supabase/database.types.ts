@@ -102,6 +102,9 @@ export type Database = {
           tags: string[]
           image_url: string | null
           notes: string | null
+          source_name: string | null
+          source_url: string | null
+          source_checked_date: string | null
           status: QuestionStatus
           is_verified: boolean
           verified_at: string | null
@@ -138,6 +141,9 @@ export type Database = {
           tags?: string[]
           image_url?: string | null
           notes?: string | null
+          source_name?: string | null
+          source_url?: string | null
+          source_checked_date?: string | null
           status?: QuestionStatus
           is_verified?: boolean
           verified_at?: string | null
@@ -174,6 +180,9 @@ export type Database = {
           tags?: string[]
           image_url?: string | null
           notes?: string | null
+          source_name?: string | null
+          source_url?: string | null
+          source_checked_date?: string | null
           status?: QuestionStatus
           is_verified?: boolean
           verified_at?: string | null
@@ -230,6 +239,7 @@ export type Database = {
       source_question_bonuses: SourceQuestionBonusTable
       source_question_bonus_categories: SourceQuestionBonusCategoryTable
       source_question_bonus_tags: SourceQuestionBonusTagTable
+      question_library_import_batches: QuestionLibraryImportBatchTable
       source_tiebreakers: {
         Row: {
           id: string
@@ -241,6 +251,9 @@ export type Database = {
           is_verified: boolean
           last_reviewed_at: string | null
           import_key: string | null
+          source_name: string | null
+          source_url: string | null
+          source_checked_date: string | null
           created_at: string
           updated_at: string
         }
@@ -254,6 +267,9 @@ export type Database = {
           is_verified?: boolean
           last_reviewed_at?: string | null
           import_key?: string | null
+          source_name?: string | null
+          source_url?: string | null
+          source_checked_date?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -267,6 +283,9 @@ export type Database = {
           is_verified?: boolean
           last_reviewed_at?: string | null
           import_key?: string | null
+          source_name?: string | null
+          source_url?: string | null
+          source_checked_date?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -719,6 +738,14 @@ export type Database = {
         }
         Returns: string
       }
+      import_question_library_batch: {
+        Args: {
+          p_file_name: string
+          p_file_sha256: string
+          p_payload: Json
+        }
+        Returns: Json
+      }
     }
     Enums: Record<string, never>
     CompositeTypes: Record<string, never>
@@ -847,6 +874,9 @@ type SourceQuestionCatalogRow = {
   tags: string[]
   image_url: string | null
   notes: string | null
+  source_name: string | null
+  source_url: string | null
+  source_checked_date: string | null
   status: QuestionStatus
   is_verified: boolean
   verified_at: string | null
@@ -962,6 +992,7 @@ type MediaAssetTable = {
     alt_text: string | null
     caption: string | null
     credit: string | null
+    import_key: string | null
     created_at: string
     updated_at: string
   }
@@ -974,6 +1005,7 @@ type MediaAssetTable = {
     alt_text?: string | null
     caption?: string | null
     credit?: string | null
+    import_key?: string | null
     created_at?: string
     updated_at?: string
   }
@@ -1203,6 +1235,10 @@ type SourceQuestionBonusTable = {
     valid_from: string | null
     expires_at: string | null
     media_asset_id: string | null
+    notes: string | null
+    source_name: string | null
+    source_url: string | null
+    source_checked_date: string | null
     created_at: string
     updated_at: string
   }
@@ -1223,6 +1259,10 @@ type SourceQuestionBonusTable = {
     valid_from?: string | null
     expires_at?: string | null
     media_asset_id?: string | null
+    notes?: string | null
+    source_name?: string | null
+    source_url?: string | null
+    source_checked_date?: string | null
     created_at?: string
     updated_at?: string
   }
@@ -1257,6 +1297,29 @@ type SourceQuestionBonusTable = {
       referencedColumns: ['id']
     },
   ]
+}
+
+type QuestionLibraryImportBatchTable = {
+  Row: {
+    id: string
+    file_name: string
+    file_sha256: string
+    format_version: number
+    normalized_payload: Json
+    counts: Json
+    imported_at: string
+  }
+  Insert: {
+    id?: string
+    file_name: string
+    file_sha256: string
+    format_version: number
+    normalized_payload: Json
+    counts: Json
+    imported_at?: string
+  }
+  Update: Partial<QuestionLibraryImportBatchTable['Insert']>
+  Relationships: []
 }
 
 type SourceQuestionBonusCategoryTable = {

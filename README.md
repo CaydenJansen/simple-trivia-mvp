@@ -31,6 +31,10 @@ npm run lint
 npm run build
 ```
 
+## Question Library imports
+
+Question Library spreadsheets are validated with a no-write dry run before any database import. See [the importer guide](docs/question-library-import.md) for the workbook rules and commands.
+
 ## Deployment checklist
 
 - Add both variables from `.env.example` to the hosting provider.

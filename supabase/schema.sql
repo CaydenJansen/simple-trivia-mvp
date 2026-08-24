@@ -16,6 +16,8 @@
 -- The RLS-aware normalized catalog read model and atomic host-question save are
 -- versioned in
 -- supabase/migrations/20260821240000_add_normalized_question_catalog_api.sql.
+-- The validation-first, atomic spreadsheet ingestion boundary is versioned in
+-- supabase/migrations/20260824103000_add_question_library_import_pipeline.sql.
 -- Existing deployed RLS policies and Realtime publication membership are
 -- otherwise managed by Supabase and are not replaced by this file.
 
@@ -52,6 +54,9 @@ create table if not exists public.source_questions (
   tags text[] not null default '{}'::text[],
   image_url text,
   notes text,
+  source_name text,
+  source_url text,
+  source_checked_date date,
   status text not null default 'draft'
     check (status in ('draft', 'needs_review', 'active', 'archived')),
   is_verified boolean not null default false,
@@ -87,6 +92,9 @@ create table if not exists public.source_tiebreakers (
   is_verified boolean not null default false,
   last_reviewed_at timestamptz,
   import_key text unique,
+  source_name text,
+  source_url text,
+  source_checked_date date,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -568,6 +576,7 @@ create table if not exists public.media_assets (
   alt_text text,
   caption text,
   credit text,
+  import_key text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   check (
@@ -650,6 +659,7 @@ create table if not exists public.source_question_bonuses (
   correct_answer jsonb not null,
   accepted_answers jsonb not null default '[]'::jsonb,
   points integer not null default 1 check (points > 0),
+  image_url text,
   prompt_pattern_id uuid references public.prompt_patterns(id) on delete set null,
   answer_type_id uuid references public.answer_types(id) on delete set null,
   editorial_difficulty smallint check (editorial_difficulty is null or editorial_difficulty between 1 and 5),
@@ -659,6 +669,10 @@ create table if not exists public.source_question_bonuses (
   valid_from timestamptz,
   expires_at timestamptz,
   media_asset_id uuid references public.media_assets(id) on delete set null,
+  notes text,
+  source_name text,
+  source_url text,
+  source_checked_date date,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -677,6 +691,20 @@ create table if not exists public.source_question_bonus_tags (
   created_at timestamptz not null default now(),
   primary key (source_question_bonus_id, tag_id)
 );
+
+create table if not exists public.question_library_import_batches (
+  id uuid primary key default gen_random_uuid(),
+  file_name text not null check (length(btrim(file_name)) between 1 and 255),
+  file_sha256 text not null unique check (file_sha256 ~ '^[0-9a-f]{64}$'),
+  format_version integer not null check (format_version > 0),
+  normalized_payload jsonb not null check (jsonb_typeof(normalized_payload) = 'object'),
+  counts jsonb not null check (jsonb_typeof(counts) = 'object'),
+  imported_at timestamptz not null default now()
+);
+
+create unique index if not exists media_assets_import_key_idx
+  on public.media_assets (import_key)
+  where import_key is not null;
 
 create or replace view public.source_question_catalog
 with (security_invoker = true)
