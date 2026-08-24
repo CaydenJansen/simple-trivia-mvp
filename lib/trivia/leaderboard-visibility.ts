@@ -17,3 +17,7 @@ export function roundResultsScreen(visibility: LeaderboardVisibility) {
 export function playersSeeFinalLeaderboard(visibility: LeaderboardVisibility) {
   return visibility !== 'host'
 }
+
+export function playersSeeLiveLeaderboard(visibility: LeaderboardVisibility) {
+  return visibility === 'always'
+}

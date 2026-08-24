@@ -5,3 +5,7 @@ export function hostKeyboardNavigation(key: string, code = ''): HostKeyboardNavi
   if (key === 'ArrowLeft') return 'back'
   return null
 }
+
+export function hostSpaceOverridesFocusedReviewControl(key: string, code = '') {
+  return (key === ' ' || code === 'Space') && hostKeyboardNavigation(key, code) === 'forward'
+}

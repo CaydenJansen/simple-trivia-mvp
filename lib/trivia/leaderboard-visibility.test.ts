@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   leaderboardVisibilityFromSettings,
   playersSeeFinalLeaderboard,
+  playersSeeLiveLeaderboard,
   roundResultsScreen,
 } from './leaderboard-visibility'
 
@@ -18,6 +19,13 @@ describe('leaderboard visibility', () => {
     expect(playersSeeFinalLeaderboard('round')).toBe(true)
     expect(playersSeeFinalLeaderboard('final')).toBe(true)
     expect(playersSeeFinalLeaderboard('host')).toBe(false)
+  })
+
+  it('shows live standings throughout play only in always-show mode', () => {
+    expect(playersSeeLiveLeaderboard('always')).toBe(true)
+    expect(playersSeeLiveLeaderboard('round')).toBe(false)
+    expect(playersSeeLiveLeaderboard('final')).toBe(false)
+    expect(playersSeeLiveLeaderboard('host')).toBe(false)
   })
 
   it('defaults old or malformed settings to end-of-round visibility', () => {

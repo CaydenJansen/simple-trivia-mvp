@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { hostKeyboardNavigation } from './host-keyboard-navigation'
+import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl } from './host-keyboard-navigation'
 
 describe('host keyboard navigation', () => {
   it('maps Space and Right Arrow to the forward action', () => {
@@ -14,5 +14,11 @@ describe('host keyboard navigation', () => {
 
   it('ignores unrelated keys', () => {
     expect(hostKeyboardNavigation('Enter')).toBeNull()
+  })
+
+  it('lets Space advance after a host grading control was clicked', () => {
+    expect(hostSpaceOverridesFocusedReviewControl(' ', 'Space')).toBe(true)
+    expect(hostSpaceOverridesFocusedReviewControl('ArrowRight')).toBe(false)
+    expect(hostSpaceOverridesFocusedReviewControl('Enter')).toBe(false)
   })
 })

@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase/client";
 import {
   leaderboardVisibilityFromSettings,
   playersSeeFinalLeaderboard,
+  playersSeeLiveLeaderboard,
   type LeaderboardVisibility,
 } from "@/lib/trivia/leaderboard-visibility";
 import {
@@ -901,6 +902,44 @@ function useLiveLeaderboard(enabled = true) {
   }
 }
 
+function AlwaysVisibleLeaderboard({ enabled }: { enabled: boolean }) {
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
+  const { teams, teamId } = useLiveLeaderboard(enabled)
+
+  if (!enabled) return null
+
+  const myIndex = teams.findIndex(team => team.id === teamId)
+
+  return (
+    <section aria-label="Live leaderboard" style={{ background: C.violetMist, borderBottom: `1px solid ${C.line}` }} className="shrink-0 px-4 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <p style={{ color: C.violet }} className="text-[11px] font-black uppercase tracking-[0.12em]">Live leaderboard</p>
+        <p style={{ color: C.sub }} className="text-xs font-bold">
+          {myIndex >= 0 ? `You’re #${myIndex + 1}` : 'Updating…'}
+        </p>
+      </div>
+      <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
+        {teams.length === 0 ? (
+          <p style={{ color: C.sub }} className="rounded-lg bg-white/70 px-3 py-2 text-center text-xs">Waiting for standings…</p>
+        ) : teams.map((team, index) => (
+          <div
+            key={team.id}
+            style={{
+              background: team.id === teamId ? C.violetPale : 'rgba(255,255,255,0.75)',
+              border: `1px solid ${team.id === teamId ? C.violet : C.line}`,
+            }}
+            className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs"
+          >
+            <span style={{ color: C.sub }} className="w-5 shrink-0 font-black">{index + 1}</span>
+            <span style={{ color: C.ink }} className="min-w-0 flex-1 truncate font-bold">{team.name}</span>
+            {scoresVisible && <span style={{ color: C.violet }} className="shrink-0 font-black tabular-nums">{team.score}</span>}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 // ─── PALETTE ──────────────────────────────────────────────────────────────────
 const C = {
   violet: '#7C3AED',
@@ -1234,6 +1273,7 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   const [pin, setPin] = useState('')
   const [pinMode, setPinMode] = useState<PinMode>('none')
   const [taken, setTaken] = useState(false)
+  const [joining, setJoining] = useState(false)
   const [gameTitle, setGameTitle] = useState('Trivia game')
 
   useEffect(() => {
@@ -1244,11 +1284,14 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   }, [])
 
 async function handleJoin() {
+  if (!name.trim() || joining) return;
   setTaken(false);
+  setJoining(true);
 
   const gameId = localStorage.getItem("simple-trivia-game-id");
 
   if (!gameId) {
+    setJoining(false);
     go("join");
     return;
   }
@@ -1267,6 +1310,7 @@ async function handleJoin() {
       setTaken(true);
     }
 
+    setJoining(false);
     return;
   }
 
@@ -1298,8 +1342,14 @@ async function handleJoin() {
 
         <input
           type="text"
+          enterKeyHint="go"
           value={name}
           onChange={e => { setName(e.target.value); setTaken(false) }}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' || !name.trim() || joining) return
+            event.preventDefault()
+            void handleJoin()
+          }}
           placeholder="Trivia Newton John"
           style={{
             border: `2px solid ${taken ? C.stop : name ? C.violet : C.line}`,
@@ -1329,6 +1379,15 @@ async function handleJoin() {
             <p style={{ color: C.stop, fontSize: 14, marginTop: 2 }}>Try another name.</p>
           </div>
         )}
+
+        <div style={{ marginTop: 14 }}>
+          <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || joining}>
+            {joining ? 'Joining…' : 'Join Game'}
+          </Btn>
+          <p style={{ color: C.sub, fontSize: 12, marginTop: 7 }} className="text-center">
+            One phone per team. You can also press Go on your keyboard.
+          </p>
+        </div>
 
         {/* ── Team PIN section ── */}
         <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 28, paddingTop: 22 }}>
@@ -1390,10 +1449,11 @@ async function handleJoin() {
                 </span>
               </button>
               <button
-                onClick={() => {}}
-                style={{ color: C.sub, fontSize: 14, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: '6px 0', textAlign: 'left' }}
+                onClick={() => { void handleJoin() }}
+                disabled={!name.trim() || joining}
+                style={{ color: C.sub, fontSize: 14, background: 'none', border: 'none', cursor: !name.trim() || joining ? 'not-allowed' : 'pointer', opacity: !name.trim() || joining ? 0.45 : 1, fontFamily: 'inherit', padding: '6px 0', textAlign: 'left' }}
               >
-                Skip for now →
+                {joining ? 'Joining…' : 'Skip for now →'}
               </button>
             </div>
           )}
@@ -1478,11 +1538,6 @@ async function handleJoin() {
           )}
         </div>
       </div>
-
-      <StickyBottom>
-        <Btn onClick={handleJoin} disabled={!name.trim()}>Join Game</Btn>
-        <p style={{ color: C.sub, fontSize: 13, marginTop: 8 }} className="text-center">One phone per team.</p>
-      </StickyBottom>
     </div>
   )
 }
@@ -2672,6 +2727,7 @@ export function PlayerFlow() {
   const [restoringSession, setRestoringSession] = useState(true)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [scoresVisible, setScoresVisible] = useState(true)
+  const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility | null>(null)
   useLivePlayerSync(screen, setScreen, !restoringSession)
 
   useEffect(() => {
@@ -2681,17 +2737,18 @@ export function PlayerFlow() {
     const activeGameId = gameId
     let active = true
 
-    async function loadScoreVisibility() {
+    async function loadPlayerSettings() {
       const { data, error } = await supabase.from('games').select('settings').eq('id', activeGameId).maybeSingle()
       if (!active) return
       if (error) {
-        console.error('Could not load player score visibility:', error)
+        console.error('Could not load player visibility settings:', error)
         return
       }
       setScoresVisible(playersSeeScoresFromSettings(data?.settings))
+      setLeaderboardVisibility(leaderboardVisibilityFromSettings(data?.settings))
     }
 
-    void loadScoreVisibility()
+    void loadPlayerSettings()
     return () => { active = false }
   }, [screen])
 
@@ -2812,6 +2869,12 @@ export function PlayerFlow() {
   }
 
   const canLeaveGame = screen !== 'join' && screen !== 'team-setup' && screen !== 'game-ended'
+  const dedicatedLeaderboardScreen = screen === 'round-results' || screen === 'final-result' || screen === 'winner'
+  const showLiveLeaderboard = canLeaveGame
+    && !dedicatedLeaderboardScreen
+    && screen !== 'reconnecting'
+    && leaderboardVisibility !== null
+    && playersSeeLiveLeaderboard(leaderboardVisibility)
 
   return (
     <main
@@ -2830,19 +2893,20 @@ export function PlayerFlow() {
           flexDirection: 'column',
         }}
       >
-        {canLeaveGame && (
-          <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="flex shrink-0 justify-end px-4 py-2">
-            <button
-              type="button"
-              onClick={() => setConfirmingLeave(true)}
-              style={{ color: C.sub }}
-              className="rounded-lg px-2 py-1 text-xs font-bold transition-colors hover:bg-red-50 hover:text-red-700"
-            >
-              Leave game
-            </button>
-          </div>
-        )}
         <PlayerScoreVisibilityContext.Provider value={scoresVisible}>
+          {canLeaveGame && (
+            <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="flex shrink-0 justify-end px-4 py-2">
+              <button
+                type="button"
+                onClick={() => setConfirmingLeave(true)}
+                style={{ color: C.sub }}
+                className="rounded-lg px-2 py-1 text-xs font-bold transition-colors hover:bg-red-50 hover:text-red-700"
+              >
+                Leave game
+              </button>
+            </div>
+          )}
+          <AlwaysVisibleLeaderboard enabled={showLiveLeaderboard} />
           {renderScreen(screen, go)}
         </PlayerScoreVisibilityContext.Provider>
       </div>

@@ -55,7 +55,7 @@ import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-b
 import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib/trivia/question-metadata";
-import { hostKeyboardNavigation, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
+import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
 import {
   EMPTY_SOURCE_QUESTION_BONUS,
   estimatedQuizMinutes,
@@ -221,13 +221,21 @@ function useHostKeyboardShortcuts(enabled: boolean) {
       if (!navigation) return
 
       const eventTarget = event.target
-      if (eventTarget instanceof Element && eventTarget.closest('input, textarea, select, button, a, [contenteditable="true"], [role="button"]')) return
+      const focusedReviewControl = eventTarget instanceof Element
+        ? eventTarget.closest<HTMLElement>('[data-host-review-control]')
+        : null
+      const mayAdvanceFromReviewControl = focusedReviewControl
+        && hostSpaceOverridesFocusedReviewControl(event.key, event.code)
+      if (eventTarget instanceof Element
+        && eventTarget.closest('input, textarea, select, button, a, [contenteditable="true"], [role="button"]')
+        && !mayAdvanceFromReviewControl) return
       if (document.querySelector('[data-host-shortcuts="blocked"]')) return
 
       const action = document.querySelector<HTMLButtonElement>(`button[data-host-navigation="${navigation}"]:not(:disabled)`)
       if (!action || action.offsetParent === null) return
 
       event.preventDefault()
+      focusedReviewControl?.blur()
       action.click()
     }
 
@@ -4622,7 +4630,8 @@ function ReviewBadge({
     return (
       <div className="flex items-center gap-1 shrink-0">
         <button
-          onClick={onCorrect}
+          data-host-review-control
+          onClick={event => { event.currentTarget.blur(); onCorrect() }}
           style={{ background: C.go, color: 'white' }}
           className="px-2 py-1 rounded-md text-[10px] font-extrabold hover:opacity-90"
           title="Mark correct"
@@ -4630,7 +4639,8 @@ function ReviewBadge({
           ✓
         </button>
         <button
-          onClick={onIncorrect}
+          data-host-review-control
+          onClick={event => { event.currentTarget.blur(); onIncorrect() }}
           style={{ background: C.stop, color: 'white' }}
           className="px-2 py-1 rounded-md text-[10px] font-extrabold hover:opacity-90"
           title="Mark incorrect"
@@ -4645,7 +4655,12 @@ function ReviewBadge({
 
   return (
     <button
-      onClick={correct ? onIncorrect : onCorrect}
+      data-host-review-control
+      onClick={event => {
+        event.currentTarget.blur()
+        if (correct) onIncorrect()
+        else onCorrect()
+      }}
       disabled={disabled}
       style={{
         background: correct ? `${C.go}25` : `${C.stop}20`,
