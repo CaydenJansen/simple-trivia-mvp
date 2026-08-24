@@ -13,6 +13,7 @@ const SEARCH_SYNONYM_GROUPS = [
   ['sport', 'sports'],
   ['music', 'song', 'songs', 'singer', 'singers', 'band', 'bands'],
   ['book', 'books', 'literature', 'novel', 'novels', 'author', 'authors'],
+  ['art', 'arts'],
   ['food', 'foods', 'drink', 'drinks', 'cuisine'],
   ['technology', 'tech'],
   ['politics', 'political', 'government'],
@@ -73,7 +74,7 @@ export function sourceQuestionSearchOrFilter(
   ])
 
   return [
-    ...variants.map(variant => `prompt.ilike.*${variant.split(' ').join('*')}*`),
+    ...variants.map(variant => `prompt.wfts(english).${variant}`),
     matchingCategoryIds.length > 0 ? `category_ids.ov.{${matchingCategoryIds.join(',')}}` : null,
     matchingTagIds.size > 0 ? `tag_ids.ov.{${[...matchingTagIds].join(',')}}` : null,
   ].filter(Boolean).join(',')

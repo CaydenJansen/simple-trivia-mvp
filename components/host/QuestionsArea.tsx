@@ -15,6 +15,13 @@ import type {
   QuestionType,
 } from "@/lib/supabase/database.types";
 import { TRIVIA_DIFFICULTIES } from "@/lib/trivia/difficulty";
+import QuestionUsageIndicator from "@/components/host/QuestionUsageIndicator";
+import {
+  groupQuestionQuizUsage,
+  questionQuizUsageRowsFromDatabase,
+  type QuestionQuizUsage,
+  type QuestionQuizUsageDatabaseRow,
+} from "@/lib/trivia/question-usage";
 import { sourceQuestionSearchOrFilter } from "@/lib/trivia/source-question-search";
 import {
   EMPTY_SOURCE_QUESTION_BONUS,
@@ -258,6 +265,7 @@ function difficultyLabel(value: number | null) {
 export default function QuestionsArea() {
   const [tab, setTab] = useState<QuestionTab>("library");
   const [questions, setQuestions] = useState<SourceQuestion[]>([]);
+  const [usageByQuestion, setUsageByQuestion] = useState<Record<string, QuestionQuizUsage[]> | null>(null);
   const [taxonomy, setTaxonomy] = useState<QuestionTaxonomy>({ categories: [], tags: [], tagAliases: [] });
   const [count, setCount] = useState(0);
   const [search, setSearch] = useState("");
@@ -300,6 +308,7 @@ export default function QuestionsArea() {
       async function loadQuestions() {
         setLoading(true);
         setLoadError(null);
+        setUsageByQuestion(null);
 
         let query = supabase
           .from("source_question_catalog")
@@ -325,8 +334,30 @@ export default function QuestionsArea() {
           setQuestions([]);
           setCount(0);
         } else {
-          setQuestions(data ?? []);
+          const loadedQuestions = data ?? [];
+          setQuestions(loadedQuestions);
           setCount(total ?? 0);
+
+          const sourceQuestionIds = loadedQuestions.map((question) => question.id);
+          if (sourceQuestionIds.length === 0) {
+            setUsageByQuestion({});
+          } else {
+            const usageResult = await supabase
+              .from("quiz_questions")
+              .select("source_question_id, quiz_id, quiz:quizzes!inner(title, updated_at)")
+              .in("source_question_id", sourceQuestionIds);
+
+            if (!active) return;
+            if (usageResult.error) {
+              console.error("Could not load question quiz usage:", usageResult.error);
+              setUsageByQuestion(null);
+            } else {
+              const usageRows = questionQuizUsageRowsFromDatabase(
+                (usageResult.data ?? []) as unknown as QuestionQuizUsageDatabaseRow[],
+              );
+              setUsageByQuestion(groupQuestionQuizUsage(usageRows));
+            }
+          }
         }
         setLoading(false);
       }
@@ -475,6 +506,7 @@ export default function QuestionsArea() {
               key={question.id}
               question={question}
               editable={tab === "mine"}
+              usages={usageByQuestion ? usageByQuestion[question.id] ?? [] : null}
               onEdit={() => setEditing(question)}
               onChanged={() => setRefresh((value) => value + 1)}
             />
@@ -500,11 +532,13 @@ export default function QuestionsArea() {
 function QuestionCard({
   question,
   editable,
+  usages,
   onEdit,
   onChanged,
 }: {
   question: SourceQuestion;
   editable: boolean;
+  usages: readonly QuestionQuizUsage[] | null;
   onEdit: () => void;
   onChanged: () => void;
 }) {
@@ -549,6 +583,7 @@ function QuestionCard({
               {question.tag_names.map((tag) => <span key={tag} className="rounded-md bg-zinc-100 px-2 py-1 text-[11px] text-zinc-500">{tag}</span>)}
             </div>
           ) : null}
+          <QuestionUsageIndicator usages={usages} />
         </div>
         {editable ? (
           <div className="flex shrink-0 gap-2">

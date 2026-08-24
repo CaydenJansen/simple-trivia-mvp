@@ -3,8 +3,15 @@
 import { useEffect, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
+import QuestionUsageIndicator from "@/components/host/QuestionUsageIndicator";
 import type { Database, QuestionMechanic } from "@/lib/supabase/database.types";
 import { TRIVIA_DIFFICULTIES } from "@/lib/trivia/difficulty";
+import {
+  groupQuestionQuizUsage,
+  questionQuizUsageRowsFromDatabase,
+  type QuestionQuizUsage,
+  type QuestionQuizUsageDatabaseRow,
+} from "@/lib/trivia/question-usage";
 import { sourceQuestionSearchOrFilter } from "@/lib/trivia/source-question-search";
 
 export type PickerSourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"];
@@ -22,6 +29,7 @@ export default function BuilderQuestionPicker({
   onClose: () => void;
 }) {
   const [questions, setQuestions] = useState<PickerSourceQuestion[]>([]);
+  const [usageByQuestion, setUsageByQuestion] = useState<Record<string, QuestionQuizUsage[]> | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [tagAliases, setTagAliases] = useState<TagAlias[]>([]);
@@ -58,6 +66,7 @@ export default function BuilderQuestionPicker({
       async function load() {
         setLoading(true);
         setError(null);
+        setUsageByQuestion(null);
         let query = supabase
           .from("source_question_catalog")
           .select("*")
@@ -75,13 +84,35 @@ export default function BuilderQuestionPicker({
 
         const { data, error: queryError } = await query;
         if (!active) return;
-        setLoading(false);
         if (queryError) {
           setError("Could not load questions.");
           setQuestions([]);
         } else {
-          setQuestions(data ?? []);
+          const loadedQuestions = data ?? [];
+          setQuestions(loadedQuestions);
+
+          const sourceQuestionIds = loadedQuestions.map((question) => question.id);
+          if (sourceQuestionIds.length === 0) {
+            setUsageByQuestion({});
+          } else {
+            const usageResult = await supabase
+              .from("quiz_questions")
+              .select("source_question_id, quiz_id, quiz:quizzes!inner(title, updated_at)")
+              .in("source_question_id", sourceQuestionIds);
+
+            if (!active) return;
+            if (usageResult.error) {
+              console.error("Could not load question quiz usage:", usageResult.error);
+              setUsageByQuestion(null);
+            } else {
+              const usageRows = questionQuizUsageRowsFromDatabase(
+                (usageResult.data ?? []) as unknown as QuestionQuizUsageDatabaseRow[],
+              );
+              setUsageByQuestion(groupQuestionQuizUsage(usageRows));
+            }
+          }
         }
+        setLoading(false);
       }
       void load();
     }, 200);
@@ -147,6 +178,7 @@ export default function BuilderQuestionPicker({
                     </div>
                     <h3 className="text-sm font-bold leading-6 text-zinc-900">{question.prompt}</h3>
                     {question.tag_names.length > 0 ? <p className="mt-2 text-xs text-zinc-500">{question.tag_names.join(" · ")}</p> : null}
+                    <QuestionUsageIndicator usages={usageByQuestion ? usageByQuestion[question.id] ?? [] : null} />
                   </div>
                   <button type="button" onClick={() => onSelect(question)} className="shrink-0 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700">Add</button>
                 </article>
