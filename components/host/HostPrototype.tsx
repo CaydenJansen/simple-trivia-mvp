@@ -7,6 +7,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { flushSync } from "react-dom";
 import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase/client";
 import QuestionsArea from "@/components/host/QuestionsArea";
@@ -49,7 +50,7 @@ import {
 } from "@/lib/trivia/tiebreakers";
 import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
 import { insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
-import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, type TriviaDifficulty } from "@/lib/trivia/difficulty";
+import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy } from "@/lib/trivia/question-metadata";
 import {
   EMPTY_SOURCE_QUESTION_BONUS,
@@ -201,14 +202,16 @@ function Btn({
 
 function Chip({
   children, color = 'default',
-}: { children: React.ReactNode; color?: 'default' | 'ready' | 'draft' | 'easy' | 'medium' | 'hard' | 'violet' | 'live' }) {
+}: { children: React.ReactNode; color?: 'default' | 'ready' | 'draft' | 'very-easy' | 'easy' | 'medium' | 'hard' | 'very-hard' | 'violet' | 'live' }) {
   const colors: Record<string, string> = {
     default: 'bg-ground text-sub border border-line',
     ready: 'bg-go/10 text-go',
     draft: 'bg-caution/10 text-caution',
-    easy: 'bg-go/10 text-go',
-    medium: 'bg-caution/10 text-caution',
-    hard: 'bg-stop/10 text-stop',
+    'very-easy': 'bg-emerald-50 text-emerald-700',
+    easy: 'bg-lime-50 text-lime-700',
+    medium: 'bg-amber-50 text-amber-700',
+    hard: 'bg-orange-50 text-orange-700',
+    'very-hard': 'bg-red-50 text-red-700',
     violet: 'bg-violet-pale text-violet',
     live: 'bg-stop/20 text-red-400',
   }
@@ -217,6 +220,26 @@ function Chip({
       {children}
     </span>
   )
+}
+
+function difficultyChipColor(difficulty: string) {
+  const tone = triviaDifficultyTone(difficulty)
+  return tone === 'unrated' ? 'default' as const : tone
+}
+
+const DIFFICULTY_TONE_STYLES: Record<TriviaDifficultyTone, { background: string; border: string; text: string }> = {
+  'very-easy': { background: '#ecfdf5', border: '#34d399', text: '#047857' },
+  easy: { background: '#f7fee7', border: '#a3e635', text: '#4d7c0f' },
+  medium: { background: '#fffbeb', border: '#fbbf24', text: '#a16207' },
+  hard: { background: '#fff7ed', border: '#fb923c', text: '#c2410c' },
+  'very-hard': { background: '#fef2f2', border: '#f87171', text: '#b91c1c' },
+}
+
+function difficultyToneStyle(difficulty: string) {
+  const tone = triviaDifficultyTone(difficulty)
+  return tone === 'unrated'
+    ? { background: 'white', border: C.line, text: C.sub }
+    : DIFFICULTY_TONE_STYLES[tone]
 }
 
 function useGameJoinQr(gameCode: string) {
@@ -2303,6 +2326,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
     insertionIndex: number
     itemHeight: number
   } | null>(null)
+  const suppressItemEditRef = useRef(false)
   const items = [
     ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, question })),
     ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, screen })),
@@ -2333,6 +2357,8 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
     event.preventDefault()
     event.stopPropagation()
     const pointerId = event.pointerId
+    const dragHandle = event.currentTarget
+    if (!dragHandle.hasPointerCapture(pointerId)) dragHandle.setPointerCapture(pointerId)
     const originalIndex = itemKeys.indexOf(itemKey)
     const itemList = event.currentTarget.closest<HTMLElement>('[data-builder-item-list]')
     const itemBounds = itemList
@@ -2344,9 +2370,11 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
     if (originalIndex < 0 || !draggedBounds) return
 
     const otherItems = itemBounds.filter(item => item.key !== itemKey)
+    const startX = event.clientX
     const startY = event.clientY
     let latestPointerY = startY
     let latestInsertionIndex = originalIndex
+    let moved = false
     let animationFrame: number | null = null
     const otherItemCentres = otherItems.map(item => item.bounds.top + item.bounds.height / 2)
 
@@ -2369,6 +2397,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
     const move = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return
       latestPointerY = moveEvent.clientY
+      if (Math.hypot(moveEvent.clientX - startX, latestPointerY - startY) > 4) moved = true
       if (animationFrame === null) animationFrame = window.requestAnimationFrame(updatePreview)
     }
     const finish = (finishEvent: PointerEvent) => {
@@ -2378,14 +2407,25 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
         animationFrame = null
       }
       latestPointerY = finishEvent.clientY
+      if (Math.hypot(finishEvent.clientX - startX, latestPointerY - startY) > 4) moved = true
       latestInsertionIndex = insertionIndexForY(latestPointerY)
+      if (moved) {
+        suppressItemEditRef.current = true
+        window.setTimeout(() => { suppressItemEditRef.current = false }, 100)
+      }
       if (finishEvent.type === 'pointerup' && latestInsertionIndex !== originalIndex) {
-        onReorderItems(moveKeyToIndex(itemKeys, itemKey, latestInsertionIndex))
+        const nextOrder = moveKeyToIndex(itemKeys, itemKey, latestInsertionIndex)
+        flushSync(() => {
+          onReorderItems(nextOrder)
+          setItemDragPreview(null)
+        })
+      } else {
+        setItemDragPreview(null)
       }
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
-      setItemDragPreview(null)
+      if (dragHandle.hasPointerCapture(pointerId)) dragHandle.releasePointerCapture(pointerId)
     }
 
     updatePreview()
@@ -2434,7 +2474,9 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
               <BuilderQuestion
               q={item.question}
               idx={round.questions.filter(question => question.itemPosition <= item.question.itemPosition).length - 1}
-              onEdit={() => onEdit(item.question.id)}
+              onEdit={() => {
+                if (!suppressItemEditRef.current) onEdit(item.question.id)
+              }}
               onReplace={() => onReplace(item.question.id)}
               onCycleLibrary={() => onCycleLibrary(item.question.id)}
               replacing={replacingLibraryQuestionId === item.question.id}
@@ -2596,7 +2638,7 @@ function BuilderQuestion({ q, idx, replacing, onEdit, onReplace, onCycleLibrary,
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <Chip>{q.cat}</Chip>
-          <Chip color={q.diff === 'Easy' ? 'easy' : q.diff === 'Medium' ? 'medium' : 'hard'}>{q.diff}</Chip>
+          <Chip color={difficultyChipColor(q.diff)}>{q.diff}</Chip>
           <Chip color="violet">{q.type}</Chip>
           {q.hasImage && <Chip color="violet">📷 Image</Chip>}
           {q.bonus !== null && <Chip color="medium">+ Bonus</Chip>}
@@ -3162,16 +3204,19 @@ function QuestionEditor({ question, title, onClose, onSave }: {
             <OptionalField label="Difficulty (Optional)" shown={showDiff} onToggle={() => { setShowDiff(v => !v); setDiff(null) }}>
               {showDiff && (
                 <div className="flex flex-wrap gap-2">
-                  {TRIVIA_DIFFICULTIES.map(d => (
-                    <button key={d} onClick={() => setDiff(d)}
-                      style={{
-                        border: `1.5px solid ${diff === d ? (d === 'Very Easy' || d === 'Easy' ? C.go : d === 'Medium' ? C.caution : C.stop) : C.line}`,
-                        background: diff === d ? (d === 'Very Easy' || d === 'Easy' ? '#f0fdf9' : d === 'Medium' ? '#fffbeb' : '#fef2f2') : 'white',
-                        color: diff === d ? (d === 'Very Easy' || d === 'Easy' ? C.go : d === 'Medium' ? C.caution : C.stop) : C.sub,
-                      }}
-                      className="flex-1 min-w-[82px] py-2.5 rounded-xl text-xs font-semibold transition-all">{d}
-                    </button>
-                  ))}
+                  {TRIVIA_DIFFICULTIES.map(d => {
+                    const toneStyle = difficultyToneStyle(d)
+                    return (
+                      <button key={d} onClick={() => setDiff(d)}
+                        style={{
+                          border: `1.5px solid ${diff === d ? toneStyle.border : C.line}`,
+                          background: diff === d ? toneStyle.background : 'white',
+                          color: diff === d ? toneStyle.text : C.sub,
+                        }}
+                        className="flex-1 min-w-[82px] py-2.5 rounded-xl text-xs font-semibold transition-all">{d}
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </OptionalField>
@@ -3508,12 +3553,17 @@ function AutoBuild({ go }: { go: Go }) {
             </div>
             {/* Labels */}
             <div className="flex justify-between mb-3">
-              {diffLabels.map((l, i) => (
-                <span key={l} style={{
-                  color: i >= diff[0] && i <= diff[1] ? C.violet : C.sub,
-                  fontWeight: (i === diff[0] || i === diff[1]) ? 700 : 400,
-                }} className="flex-1 text-center text-[11px]">{l}</span>
-              ))}
+              {diffLabels.map((l, i) => {
+                const toneStyle = difficultyToneStyle(l)
+                const isInRange = i >= diff[0] && i <= diff[1]
+                return (
+                  <span key={l} style={{
+                    color: toneStyle.text,
+                    fontWeight: (i === diff[0] || i === diff[1]) ? 700 : 500,
+                    opacity: isInRange ? 1 : 0.38,
+                  }} className="flex-1 text-center text-[11px]">{l}</span>
+                )
+              })}
             </div>
             <p style={{ color: C.sub }} className="text-sm">
               Sourcing: <span style={{ color: C.ink }} className="font-semibold">{diffText()}</span>
@@ -3734,7 +3784,7 @@ function ReviewQuestion({ item, idx, onEdit }: {
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <Chip>{item.cat}</Chip>
-          <Chip color={item.diff === 'Easy' ? 'easy' : item.diff === 'Medium' ? 'medium' : 'hard'}>{item.diff}</Chip>
+          <Chip color={difficultyChipColor(item.diff)}>{item.diff}</Chip>
           <Chip color="violet">{item.type}</Chip>
           <span style={{ color: C.sub }} className="text-[11px]">Ans: <span style={{ color: C.ink }} className="font-semibold">{item.ans}</span></span>
           <span style={{ color: C.violet }} className="text-[11px] font-semibold opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 ml-1">
