@@ -10,6 +10,7 @@ describe('host session recovery', () => {
     expect(hostRecoveryScreen('live', 'single-answer')).toBe('live-question')
     expect(hostRecoveryScreen('live', 'content-screen')).toBe('live-question')
     expect(hostRecoveryScreen('live', 'round-start')).toBe('live-question')
+    expect(hostRecoveryScreen('live', 'question-results')).toBe('live-question')
   })
 
   it('restores round results and delayed reveals to the round console', () => {

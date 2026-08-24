@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkQuizReadiness } from './quiz-readiness'
+import { checkQuizReadiness, quizBuilderPrimaryAction, quizStatusFromReadiness } from './quiz-readiness'
 
 function readyQuiz() {
   return {
@@ -42,5 +42,18 @@ describe('quiz readiness', () => {
     expect(result.warnings).toEqual([
       'Only 0 prepared tiebreakers. We recommend at least 2, but you can continue without them.',
     ])
+  })
+
+  it('automatically derives Draft or Ready from current content', () => {
+    expect(quizStatusFromReadiness({ ready: true })).toBe('ready')
+    expect(quizStatusFromReadiness({ ready: false })).toBe('draft')
+  })
+
+  it('uses one primary action for saving and hosting', () => {
+    expect(quizBuilderPrimaryAction({ persisted: false, dirty: true, ready: false, status: 'draft' })).toBe('save')
+    expect(quizBuilderPrimaryAction({ persisted: false, dirty: true, ready: true, status: 'draft' })).toBe('save-and-host')
+    expect(quizBuilderPrimaryAction({ persisted: true, dirty: false, ready: true, status: 'ready' })).toBe('host')
+    expect(quizBuilderPrimaryAction({ persisted: true, dirty: false, ready: true, status: 'draft' })).toBe('save-and-host')
+    expect(quizBuilderPrimaryAction({ persisted: true, dirty: false, ready: false, status: 'draft' })).toBe('blocked')
   })
 })

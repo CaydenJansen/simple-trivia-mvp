@@ -59,8 +59,9 @@
 - Multi-part Parts and Bonuses inherit parent category, difficulty, audience, and locality when their override is absent. Part tags are additive. Blank Bonus tags inherit; populated Bonus tags replace, and replacement intent must survive even while every supplied tag is unresolved.
 - Effective package Adult Content is true when any content shown to players is adult. Any country-specific child makes the package not fully international-friendly.
 - Prevent duplicate team names within a game.
-- Only joinable lobby games should accept new teams.
+- Games accept new zero-score teams while they are in the lobby or actively running. Finished and cancelled games are never joinable.
 - Host live controls and question content must remain usable on small laptop screens.
+- Quiz readiness is derived automatically when saving: complete quizzes become Ready, incomplete quizzes remain Draft with specific blockers. Do not reintroduce a manual readiness step or preparation progress wizard.
 - Prepared tiebreakers are optional for manually built quizzes; recommend at least two without blocking save or hosting. Automatically built quizzes must prepare exactly three.
 - Auto-Build must fail clearly when active source content cannot satisfy the requested count, topics, difficulty range, or three-tiebreaker requirement. Never silently duplicate questions or reduce the requested quiz.
 - Auto-Build is conceptually two-stage: select an eligible candidate set using hard requirements, then sequence it with soft diversity penalties. Its diversity fingerprint includes part and bonus metadata.
@@ -74,6 +75,7 @@
 - Do not add post-reveal undo without safely reversing awarded points.
 - Review-required answers sort first, then graded submissions, then waiting teams. Keep ordering stable within each group.
 - Leaderboard visibility rules must not leak prohibited team names, scores, or ranks. A team sees point totals only when the host enables player score visibility; this setting is independent from leaderboard visibility.
+- **After every question** leaderboard mode inserts a dedicated standings screen between scored questions; it must never become a persistent overlay on question or answer screens.
 - Preserve the established visual language: purple brand surfaces, light builder UI, dark host console, rounded cards, Plus Jakarta Sans, and restrained SaaS styling.
 
 ## Question and Grading Semantics

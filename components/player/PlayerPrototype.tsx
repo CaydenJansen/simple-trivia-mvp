@@ -5,7 +5,6 @@ import { supabase } from "@/lib/supabase/client";
 import {
   leaderboardVisibilityFromSettings,
   playersSeeFinalLeaderboard,
-  playersSeeLiveLeaderboard,
   type LeaderboardVisibility,
 } from "@/lib/trivia/leaderboard-visibility";
 import {
@@ -19,6 +18,7 @@ import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
 import type { Json } from "@/lib/supabase/database.types";
 import { playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
 import { playersSeeScoresFromSettings } from "@/lib/trivia/score-visibility";
+import { gameAcceptsNewTeams, JOINABLE_GAME_STATUSES } from "@/lib/trivia/game-joining";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -28,7 +28,7 @@ type PlayerScreen =
   | 'bonus-answer' | 'bonus-submitted'
   | 'submitted' | 'no-answer' | 'correct' | 'incorrect'
   | 'partial-correct'
-  | 'content-screen' | 'intermission' | 'round-results' | 'round-results-hidden'
+  | 'content-screen' | 'intermission' | 'question-results' | 'round-results' | 'round-results-hidden'
   | 'delayed-reveal' | 'winner' | 'final-result'
   | 'tiebreaker-pending' | 'tiebreaker' | 'tiebreaker-result'
   | 'reconnecting' | 'game-ended'
@@ -40,7 +40,7 @@ const LIVE_PLAYER_SCREENS = new Set<PlayerScreen>([
   'waiting', 'round-start', 'single-answer', 'image-question', 'multiple-choice',
   'multi-answer', 'multi-part', 'ranking', 'submitted', 'no-answer', 'correct',
   'bonus-answer', 'bonus-submitted',
-  'incorrect', 'partial-correct', 'content-screen', 'intermission', 'round-results',
+  'incorrect', 'partial-correct', 'content-screen', 'intermission', 'question-results', 'round-results',
   'round-results-hidden', 'delayed-reveal', 'winner', 'final-result', 'reconnecting', 'game-ended',
   'tiebreaker-pending', 'tiebreaker', 'tiebreaker-result',
 ])
@@ -888,7 +888,7 @@ function useLiveLeaderboard(enabled = true) {
     void load()
     const channel = supabase
       .channel(`player-leaderboard-${gameId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'teams', filter: `game_id=eq.${gameId}` }, () => { void load() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .subscribe()
     return () => { active = false; void supabase.removeChannel(channel) }
   }, [enabled])
@@ -900,44 +900,6 @@ function useLiveLeaderboard(enabled = true) {
     }),
     teamId,
   }
-}
-
-function AlwaysVisibleLeaderboard({ enabled }: { enabled: boolean }) {
-  const scoresVisible = useContext(PlayerScoreVisibilityContext)
-  const { teams, teamId } = useLiveLeaderboard(enabled)
-
-  if (!enabled) return null
-
-  const myIndex = teams.findIndex(team => team.id === teamId)
-
-  return (
-    <section aria-label="Live leaderboard" style={{ background: C.violetMist, borderBottom: `1px solid ${C.line}` }} className="shrink-0 px-4 py-3">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <p style={{ color: C.violet }} className="text-[11px] font-black uppercase tracking-[0.12em]">Live leaderboard</p>
-        <p style={{ color: C.sub }} className="text-xs font-bold">
-          {myIndex >= 0 ? `You’re #${myIndex + 1}` : 'Updating…'}
-        </p>
-      </div>
-      <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
-        {teams.length === 0 ? (
-          <p style={{ color: C.sub }} className="rounded-lg bg-white/70 px-3 py-2 text-center text-xs">Waiting for standings…</p>
-        ) : teams.map((team, index) => (
-          <div
-            key={team.id}
-            style={{
-              background: team.id === teamId ? C.violetPale : 'rgba(255,255,255,0.75)',
-              border: `1px solid ${team.id === teamId ? C.violet : C.line}`,
-            }}
-            className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs"
-          >
-            <span style={{ color: C.sub }} className="w-5 shrink-0 font-black">{index + 1}</span>
-            <span style={{ color: C.ink }} className="min-w-0 flex-1 truncate font-bold">{team.name}</span>
-            {scoresVisible && <span style={{ color: C.violet }} className="shrink-0 font-black tabular-nums">{team.score}</span>}
-          </div>
-        ))}
-      </div>
-    </section>
-  )
 }
 
 // ─── PALETTE ──────────────────────────────────────────────────────────────────
@@ -983,6 +945,7 @@ const SCREENS: { id: PlayerScreen; label: string }[] = [
   { id: 'partial-correct',       label: '13b · Partial Credit' },
   { id: 'content-screen',        label: '15 · Content Screen' },
   { id: 'intermission',          label: '16 · Intermission' },
+  { id: 'question-results',      label: '16b · Question Results' },
   { id: 'round-results',         label: '17 · Round Results' },
   { id: 'round-results-hidden',  label: '17b · Results (Hidden LB)' },
   { id: 'delayed-reveal', label: '18 · Delayed Reveal' },
@@ -1155,7 +1118,7 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
       .from('games')
       .select('id, code, title, status')
       .eq('code', selectedCode)
-      .eq('status', 'lobby')
+      .in('status', [...JOINABLE_GAME_STATUSES])
       .maybeSingle()
 
     if (error) {
@@ -2274,16 +2237,19 @@ function Intermission({ go }: { go: (s: PlayerScreen) => void }) {
 }
 
 // ─── SCREEN 17 — ROUND RESULTS ────────────────────────────────────────────────
-function RoundResults({ go }: { go: (s: PlayerScreen) => void }) {
+function LeaderboardResults({ scope }: { scope: 'question' | 'round' }) {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   const { teams, teamId } = useLiveLeaderboard()
   const myIndex = teams.findIndex(team => team.id === teamId)
+  const afterQuestion = scope === 'question'
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <p style={{ color: C.sub, fontSize: 14, textAlign: 'center', marginBottom: 8 }}>{snapshot.roundLabel} Complete</p>
+        <p style={{ color: C.sub, fontSize: 14, textAlign: 'center', marginBottom: 8 }}>
+          {afterQuestion ? `${snapshot.questionLabel} complete` : `${snapshot.roundLabel} complete`}
+        </p>
         <div style={{ background: C.violetPale, borderRadius: 18, padding: '18px 20px', textAlign: 'center', marginBottom: 22 }}>
           <p style={{ color: C.violet, fontSize: 18, fontWeight: 800 }}>{snapshot.teamName}</p>
           {scoresVisible && <p style={{ color: C.ink, fontSize: 36, fontWeight: 900 }}>{snapshot.score}</p>}
@@ -2295,10 +2261,18 @@ function RoundResults({ go }: { go: (s: PlayerScreen) => void }) {
             <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.ink, fontWeight: 800 }}>{team.score}</span>}
           </div>)}
         </div>
-        <div style={{ marginTop: 24 }}><WaitMsg msg="Waiting for the next round…" /></div>
+        <div style={{ marginTop: 24 }}><WaitMsg msg={afterQuestion ? 'Waiting for the next question…' : 'Waiting for the next round…'} /></div>
       </div>
     </div>
   )
+}
+
+function QuestionResults() {
+  return <LeaderboardResults scope="question" />
+}
+
+function RoundResults() {
+  return <LeaderboardResults scope="round" />
 }
 
 // ─── SCREEN 18 — DELAYED REVEAL ───────────────────────────────────────────────
@@ -2708,7 +2682,8 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
     case 'partial-correct':      return <PartialCorrect go={go} />
     case 'content-screen':       return <ContentScreen />
     case 'intermission':   return <Intermission go={go} />
-    case 'round-results':         return <RoundResults go={go} />
+    case 'question-results':      return <QuestionResults />
+    case 'round-results':         return <RoundResults />
     case 'round-results-hidden':  return <RoundResultsHidden go={go} />
     case 'delayed-reveal': return <DelayedReveal go={go} />
     case 'winner':         return <Winner go={go} />
@@ -2727,7 +2702,6 @@ export function PlayerFlow() {
   const [restoringSession, setRestoringSession] = useState(true)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [scoresVisible, setScoresVisible] = useState(true)
-  const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility | null>(null)
   useLivePlayerSync(screen, setScreen, !restoringSession)
 
   useEffect(() => {
@@ -2737,18 +2711,17 @@ export function PlayerFlow() {
     const activeGameId = gameId
     let active = true
 
-    async function loadPlayerSettings() {
+    async function loadScoreVisibility() {
       const { data, error } = await supabase.from('games').select('settings').eq('id', activeGameId).maybeSingle()
       if (!active) return
       if (error) {
-        console.error('Could not load player visibility settings:', error)
+        console.error('Could not load player score visibility:', error)
         return
       }
       setScoresVisible(playersSeeScoresFromSettings(data?.settings))
-      setLeaderboardVisibility(leaderboardVisibilityFromSettings(data?.settings))
     }
 
-    void loadPlayerSettings()
+    void loadScoreVisibility()
     return () => { active = false }
   }, [screen])
 
@@ -2826,7 +2799,7 @@ export function PlayerFlow() {
       if (!team || team.game_id !== gameId) {
         localStorage.removeItem('simple-trivia-team-id')
         localStorage.removeItem('simple-trivia-team-name')
-        setScreen(game.status === 'lobby' ? 'team-setup' : 'game-ended')
+        setScreen(gameAcceptsNewTeams(game.status) ? 'team-setup' : 'game-ended')
         setRestoringSession(false)
         return
       }
@@ -2869,12 +2842,6 @@ export function PlayerFlow() {
   }
 
   const canLeaveGame = screen !== 'join' && screen !== 'team-setup' && screen !== 'game-ended'
-  const dedicatedLeaderboardScreen = screen === 'round-results' || screen === 'final-result' || screen === 'winner'
-  const showLiveLeaderboard = canLeaveGame
-    && !dedicatedLeaderboardScreen
-    && screen !== 'reconnecting'
-    && leaderboardVisibility !== null
-    && playersSeeLiveLeaderboard(leaderboardVisibility)
 
   return (
     <main
@@ -2906,7 +2873,6 @@ export function PlayerFlow() {
               </button>
             </div>
           )}
-          <AlwaysVisibleLeaderboard enabled={showLiveLeaderboard} />
           {renderScreen(screen, go)}
         </PlayerScoreVisibilityContext.Provider>
       </div>

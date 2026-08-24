@@ -39,6 +39,7 @@ import {
   leaderboardVisibilityFromSettings,
   playersSeeFinalLeaderboard,
   roundResultsScreen,
+  showsLeaderboardAfterQuestion,
   type LeaderboardVisibility,
 } from "@/lib/trivia/leaderboard-visibility";
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
@@ -50,7 +51,7 @@ import {
   isValidTiebreakerNumericValue,
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
-import { checkQuizReadiness } from "@/lib/trivia/quiz-readiness";
+import { checkQuizReadiness, quizBuilderPrimaryAction, quizStatusFromReadiness } from "@/lib/trivia/quiz-readiness";
 import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
 import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
@@ -1247,7 +1248,6 @@ function QuizBuilder({ go }: { go: Go }) {
   const [draggedRoundId, setDraggedRoundId] = useState<number | null>(null)
   const [roundDropTarget, setRoundDropTarget] = useState<{ id: number; placement: DropPlacement } | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
-  const [readinessOpen, setReadinessOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const questionCount = rounds.reduce((total, round) => total + round.questions.length, 0)
   const bonusCount = rounds.reduce((total, round) => total + round.questions.filter(question => question.bonus !== null).length, 0)
@@ -1263,6 +1263,7 @@ function QuizBuilder({ go }: { go: Go }) {
       correctValue: tiebreaker.correctValue,
     })),
   }), [rounds, tiebreakers, title])
+  const primaryAction = quizBuilderPrimaryAction({ persisted, dirty, ready: readiness.ready, status: quizStatus })
 
   useEffect(() => {
     let active = true
@@ -1538,28 +1539,24 @@ function QuizBuilder({ go }: { go: Go }) {
     window.addEventListener('pointercancel', finish)
   }
 
-  async function saveQuiz(requestedStatus?: 'draft' | 'ready') {
-    if (saving || loading) return false
-    const statusToSave = requestedStatus ?? (quizStatus === 'ready' && !readiness.ready ? 'draft' : quizStatus)
+  async function saveQuiz() {
+    if (saving || loading) return null
+    const statusToSave = quizStatusFromReadiness(readiness)
     if (!title.trim()) {
       setSaveError('Add a quiz title before saving.')
-      return false
-    }
-    if (statusToSave === 'ready' && !readiness.ready) {
-      setSaveError(readiness.blockers[0] ?? 'Finish the readiness checks before hosting this quiz.')
-      return false
+      return null
     }
     if (rounds.some(round => round.contentScreens.some(screen => !screen.title.trim()))) {
       setSaveError('Give every content screen a title before saving.')
-      return false
+      return null
     }
     if (tiebreakers.some(tiebreaker => !tiebreaker.prompt.trim())) {
       setSaveError('Give every tiebreaker a question before saving, or remove the unfinished tiebreaker.')
-      return false
+      return null
     }
     if (tiebreakers.some(tiebreaker => !isValidTiebreakerNumericValue(tiebreaker.correctValue))) {
       setSaveError('Give every tiebreaker a numeric correct answer, without words or units.')
-      return false
+      return null
     }
 
     setSaving(true)
@@ -1645,32 +1642,37 @@ function QuizBuilder({ go }: { go: Go }) {
     if (error || !data) {
       console.error('Could not save quiz:', error)
       setSaveError('Could not save this quiz. Nothing was partially saved; try again.')
-      return false
+      return null
     }
 
     setQuizId(data)
     setPersisted(true)
     setQuizStatus(statusToSave)
     setDirty(false)
-    if (quizStatus === 'ready' && statusToSave === 'draft') {
-      setSaveNotice(`Saved as Draft because it is no longer ready to host: ${readiness.blockers[0] ?? 'finish the required quiz content.'}`)
-    }
+    setSaveNotice(statusToSave === 'ready'
+      ? 'Saved — this quiz is ready to host.'
+      : `Saved as a draft. ${readiness.blockers[0] ?? 'Finish the required quiz content before hosting.'}`)
     localStorage.setItem('simple-trivia-selected-quiz-id', data)
     localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
-    return true
+    return data
   }
 
-  async function markReadyToHost() {
-    if (!readiness.ready) return
-    const saved = await saveQuiz('ready')
-    if (saved) setReadinessOpen(false)
-  }
-
-  function hostQuiz() {
-    if (!quizId || !persisted || dirty || quizStatus !== 'ready') return
-    localStorage.setItem('simple-trivia-selected-quiz-id', quizId)
+  function hostQuiz(savedQuizId = quizId) {
+    if (!savedQuizId || !readiness.ready) return
+    localStorage.setItem('simple-trivia-selected-quiz-id', savedQuizId)
     localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
     go('host-setup')
+  }
+
+  async function handlePrimaryAction() {
+    if (primaryAction === 'host') {
+      hostQuiz()
+      return
+    }
+    if (primaryAction === 'save' || primaryAction === 'save-and-host') {
+      const savedQuizId = await saveQuiz()
+      if (savedQuizId && primaryAction === 'save-and-host') hostQuiz(savedQuizId)
+    }
   }
 
   return (
@@ -1700,91 +1702,38 @@ function QuizBuilder({ go }: { go: Go }) {
         <div className="flex items-center gap-3 shrink-0">
           <span style={{ color: dirty ? C.caution : C.go }} className="flex items-center gap-1.5 text-xs font-semibold">
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            {loading ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : persisted ? 'Saved to Supabase' : 'New quiz'}
-          </span>
-          <span
-            style={{
-              border: `1px solid ${quizStatus === 'ready' ? '#86EFAC' : '#FCD34D'}`,
-              background: quizStatus === 'ready' ? '#F0FDF4' : '#FFFBEB',
-              color: quizStatus === 'ready' ? '#166534' : '#92400E',
-            }}
-            className="rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-violet/30"
-          >
-            {quizStatus === 'ready' ? 'Ready to host' : 'Draft'}
+            {loading ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : persisted ? 'Saved' : 'New quiz'}
           </span>
           <Btn v="secondary" sz="sm" onClick={() => setPreviewOpen(true)}>Preview</Btn>
           <Btn
             sz="sm"
-            disabled={loading || saving}
-            onClick={() => {
-              if (dirty || !persisted) void saveQuiz()
-              else if (quizStatus === 'draft') setReadinessOpen(true)
-              else hostQuiz()
-            }}
+            disabled={loading || saving || primaryAction === 'blocked'}
+            onClick={() => { void handlePrimaryAction() }}
           >
             {saving
               ? 'Saving…'
-              : dirty || !persisted
+              : primaryAction === 'save'
                 ? persisted ? 'Save Changes' : 'Save Quiz'
-                : quizStatus === 'draft'
-                  ? 'Review & Make Ready'
-                  : 'Host This Quiz'}
+                : primaryAction === 'save-and-host'
+                  ? 'Save & Host'
+                  : primaryAction === 'host'
+                    ? 'Host This Quiz'
+                    : 'Add Required Content'}
           </Btn>
         </div>
       </header>
 
       <div className="flex" style={{ maxWidth: 1280, margin: '0 auto' }}>
         <main className="flex-1 px-6 py-7 space-y-3.5 min-w-0">
-          {!loading && !loadError && (() => {
-            const savedAndCurrent = persisted && !dirty
-            const readyAndSaved = quizStatus === 'ready' && savedAndCurrent
-
-            return (
-              <div
-                style={{
-                  background: readyAndSaved ? '#F0FDF4' : '#FFFBEB',
-                  border: `1px solid ${readyAndSaved ? '#BBF7D0' : '#FDE68A'}`,
-                }}
-                className="rounded-2xl px-5 py-4"
-              >
-                <div className="grid grid-cols-3 gap-2" aria-label="Quiz preparation progress">
-                  {[
-                    { label: '1. Build', complete: questionCount > 0 },
-                    { label: '2. Save', complete: savedAndCurrent },
-                    { label: '3. Ready', complete: readyAndSaved },
-                  ].map(step => (
-                    <div key={step.label} className="flex items-center gap-2 rounded-xl bg-white/70 px-3 py-2">
-                      <span
-                        style={{ background: step.complete ? C.go : C.line, color: step.complete ? 'white' : C.sub }}
-                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
-                      >
-                        {step.complete ? '✓' : '·'}
-                      </span>
-                      <span style={{ color: step.complete ? C.ink : C.sub }} className="text-xs font-bold">{step.label}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-3">
-                  <p style={{ color: readyAndSaved ? '#166534' : '#92400E' }} className="text-sm font-bold">
-                    {readyAndSaved
-                      ? 'Ready to host — launch it from this screen'
-                      : dirty
-                        ? 'Save your quiz to continue'
-                        : 'Quiz saved — next, check that it is ready to host'}
-                  </p>
-                  <p style={{ color: readyAndSaved ? '#15803D' : '#A16207' }} className="mt-0.5 text-xs leading-5">
-                    {readyAndSaved
-                      ? 'Use Host This Quiz above to choose your game settings and open a fresh lobby.'
-                      : dirty
-                        ? quizStatus === 'ready'
-                          ? 'Save your latest changes before hosting so there is no ambiguity about which version will be played.'
-                          : 'Saving keeps this as a draft. After it is saved, the readiness check becomes the next step.'
-                        : 'Use Review & Make Ready above. We will flag anything that must be fixed before hosting.'}
-                  </p>
-                </div>
-              </div>
-            )
-          })()}
+          {!loading && !loadError && !readiness.ready && (
+            <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }} className="rounded-2xl px-5 py-4">
+              <p style={{ color: '#92400E' }} className="text-sm font-bold">Before you can host</p>
+              <p style={{ color: '#A16207' }} className="mt-0.5 text-xs leading-5">
+                {readiness.blockers[0]}
+                {readiness.blockers.length > 1 ? ` ${readiness.blockers.length - 1} more item${readiness.blockers.length === 2 ? '' : 's'} also need attention.` : ''}
+              </p>
+            </div>
+          )}
           {loadError && (
             <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="rounded-xl px-4 py-3 text-sm font-semibold">
               {loadError}
@@ -1795,8 +1744,13 @@ function QuizBuilder({ go }: { go: Go }) {
               {saveError}
             </div>
           )}
-          {saveNotice && (
-            <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', color: '#92400E' }} className="rounded-xl px-4 py-3 text-sm font-semibold">
+          {saveNotice && !dirty && (
+            <div
+              style={quizStatus === 'ready'
+                ? { background: '#F0FDF4', border: '1px solid #BBF7D0', color: '#166534' }
+                : { background: '#FFFBEB', border: '1px solid #FDE68A', color: '#92400E' }}
+              className="rounded-xl px-4 py-3 text-sm font-semibold"
+            >
               {saveNotice}
             </div>
           )}
@@ -2103,54 +2057,6 @@ function QuizBuilder({ go }: { go: Go }) {
             setNewQuestionRoundId(null)
           }}
         />
-      )}
-
-      {readinessOpen && (
-        <div data-host-shortcuts="blocked" className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/50 px-4 backdrop-blur-sm">
-          <section className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-violet-600">Final check</p>
-                <h2 className="mt-1 text-2xl font-extrabold text-zinc-900">Ready to host?</h2>
-                <p className="mt-2 text-sm leading-6 text-zinc-500">
-                  We will save the Ready status now. You can still edit this quiz later.
-                </p>
-              </div>
-              <button type="button" onClick={() => setReadinessOpen(false)} className="rounded-lg px-3 py-2 text-sm font-semibold text-zinc-500 hover:bg-zinc-100">Close</button>
-            </div>
-
-            <div className="mt-5 space-y-2">
-              {readiness.ready ? (
-                <div className="flex items-start gap-3 rounded-2xl bg-green-50 px-4 py-3 text-green-800">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-600 text-xs font-bold text-white">✓</span>
-                  <div>
-                    <p className="text-sm font-bold">Required quiz content is complete</p>
-                    <p className="mt-0.5 text-xs leading-5 text-green-700">The quiz has a title, scored questions, and valid prepared content.</p>
-                  </div>
-                </div>
-              ) : readiness.blockers.map(blocker => (
-                <div key={blocker} className="flex items-start gap-3 rounded-2xl bg-red-50 px-4 py-3 text-red-800">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-xs font-bold text-white">!</span>
-                  <p className="text-sm font-semibold leading-5">{blocker}</p>
-                </div>
-              ))}
-
-              {readiness.warnings.map(warning => (
-                <div key={warning} className="flex items-start gap-3 rounded-2xl bg-amber-50 px-4 py-3 text-amber-800">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">i</span>
-                  <p className="text-sm font-semibold leading-5">{warning}</p>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-6 flex justify-end gap-3">
-              <Btn v="secondary" onClick={() => setReadinessOpen(false)}>{readiness.ready ? 'Not Yet' : 'Back to Quiz'}</Btn>
-              <Btn disabled={!readiness.ready || saving} onClick={() => void markReadyToHost()}>
-                {saving ? 'Saving…' : readiness.warnings.length > 0 ? 'Continue & Mark Ready' : 'Mark Ready to Host'}
-              </Btn>
-            </div>
-          </section>
-        </div>
       )}
 
       {previewOpen && <QuizPreview title={title} rounds={rounds} onClose={() => setPreviewOpen(false)} />}
@@ -3985,7 +3891,7 @@ function ReviewQuestion({ item, idx, onEdit }: {
 
 function HostSetup({ go }: { go: Go }) {
   const [reveal, setReveal] = useState<'each' | 'round'>('each')
-  const [lb, setLb] = useState<'always' | 'round' | 'final' | 'host'>('round')
+  const [lb, setLb] = useState<LeaderboardVisibility>('round')
   const [scoresVisible, setScoresVisible] = useState(true)
   type PrizePlace = { enabled: boolean; msg: string }
   const topPlaces = ['1st', '2nd', '3rd']
@@ -4122,7 +4028,7 @@ function HostSetup({ go }: { go: Go }) {
           <SCard title="Leaderboard Visibility to Players">
             <div className="grid grid-cols-2 gap-2">
               {[
-                { v: 'always' as const, l: 'Always show' },
+                { v: 'question' as const, l: 'Show after every question' },
                 { v: 'round' as const, l: 'End of each round' },
                 { v: 'final' as const, l: 'Final results only' },
                 { v: 'host' as const, l: 'Never show' },
@@ -4807,7 +4713,7 @@ function LiveQuestion({ go }: { go: Go }) {
           )
           .on(
             'postgres_changes',
-            { event: 'UPDATE', schema: 'public', table: 'teams', filter: `game_id=eq.${game.id}` },
+            { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${game.id}` },
             () => { void loadLiveData() },
           )
           .on(
@@ -5066,6 +4972,18 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         return
       }
 
+      if (showsLeaderboardAfterQuestion(leaderboardVisibility)) {
+        await updateLiveGame({
+          current_screen: 'question-results',
+          answer_phase: 'closed',
+          current_question_key: question.question_key,
+          current_content_screen_key: null,
+        })
+        setGameScreen('question-results')
+        setPhase('closed')
+        return
+      }
+
       if (nextItem.kind === 'content') {
         await updateLiveGame({
           current_screen: 'content-screen',
@@ -5123,6 +5041,17 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           current_content_screen_key: null,
         })
         go('end-of-round')
+        return
+      }
+
+      if (showsLeaderboardAfterQuestion(leaderboardVisibility) && gameScreen !== 'question-results') {
+        await updateLiveGame({
+          current_screen: 'question-results',
+          answer_phase: 'revealed',
+          current_question_key: question.question_key,
+          current_content_screen_key: null,
+        })
+        setGameScreen('question-results')
         return
       }
 
@@ -5655,12 +5584,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           )}
 
           <div style={{
-            background: gameScreen === 'round-start' ? `${C.caution}20` : phase === 'open' ? `${C.violet}20` : phase === 'closed' ? `${C.caution}20` : `${C.go}20`,
-            border: `1px solid ${gameScreen === 'round-start' ? `${C.caution}40` : phase === 'open' ? `${C.violet}40` : phase === 'closed' ? `${C.caution}40` : `${C.go}40`}`,
-            color: gameScreen === 'round-start' ? C.caution : phase === 'open' ? C.violet : phase === 'closed' ? C.caution : C.go,
+            background: gameScreen === 'question-results' ? `${C.violet}20` : gameScreen === 'round-start' ? `${C.caution}20` : phase === 'open' ? `${C.violet}20` : phase === 'closed' ? `${C.caution}20` : `${C.go}20`,
+            border: `1px solid ${gameScreen === 'question-results' ? `${C.violet}40` : gameScreen === 'round-start' ? `${C.caution}40` : phase === 'open' ? `${C.violet}40` : phase === 'closed' ? `${C.caution}40` : `${C.go}40`}`,
+            color: gameScreen === 'question-results' ? C.violet : gameScreen === 'round-start' ? C.caution : phase === 'open' ? C.violet : phase === 'closed' ? C.caution : C.go,
           }} className="flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-extrabold uppercase tracking-widest shrink-0">
             <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'currentColor' }} />
-            {gameScreen === 'round-start'
+            {gameScreen === 'question-results'
+              ? 'Players see the leaderboard · Waiting for you to continue'
+              : gameScreen === 'round-start'
               ? 'Players see the round intro · Waiting for the first question'
               : phase === 'open'
                 ? questionStage === 'bonus'
@@ -6051,6 +5982,17 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   {actionBusy ? 'Opening…' : firstRoundItem?.kind === 'content' ? 'Show First Content Screen' : 'Open First Question'}
                 </button>
               </div>
+            ) : gameScreen === 'question-results' ? (
+              <div className="space-y-3">
+                <p style={{ color: '#C4B5FD' }} className="text-[11px] text-center font-extrabold uppercase tracking-widest">
+                  Leaderboard is on player phones
+                </p>
+                <button data-host-navigation="forward" onClick={handleAdvance} disabled={actionBusy}
+                  style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
+                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
+                  {actionBusy ? 'Advancing…' : nextLiveItem?.kind === 'content' ? 'Show Content Screen →' : 'Next Question →'}
+                </button>
+              </div>
             ) : phase === 'open' ? (
               <div className="space-y-3">
                 <p style={{ color: C.caution }} className="text-[11px] text-center font-extrabold uppercase tracking-widest">
@@ -6175,6 +6117,7 @@ function EndOfRound({ go }: { go: Go }) {
 
   useEffect(() => {
     let active = true
+    let channel: ReturnType<typeof supabase.channel> | null = null
 
     async function loadRoundSummary() {
       const { data: game, error: gameError } = await supabase
@@ -6220,10 +6163,24 @@ function EndOfRound({ go }: { go: Go }) {
       setTotalRounds(Math.max(1, ...questions.map(item => item.round_number)))
       setTeams((teamRows ?? []) as LiveTeam[])
       setError(null)
+
+      if (!channel) {
+        channel = supabase
+          .channel(`host-round-summary-${game.id}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${game.id}` },
+            () => { void loadRoundSummary() },
+          )
+          .subscribe()
+      }
     }
 
     void loadRoundSummary()
-    return () => { active = false }
+    return () => {
+      active = false
+      if (channel) void supabase.removeChannel(channel)
+    }
   }, [])
 
   useEffect(() => {

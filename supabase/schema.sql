@@ -415,8 +415,7 @@ begin
     select 1
     from public.games
     where games.id = p_game_id
-      and games.status = 'lobby'
-      and games.current_screen = 'lobby'
+      and games.status in ('lobby', 'live')
   ) then
     raise exception 'Game is not accepting new teams';
   end if;
@@ -551,6 +550,9 @@ revoke all on function public.get_player_game_question(uuid, text) from public;
 grant execute on function public.join_live_game(uuid, text) to anon, authenticated;
 grant execute on function public.submit_player_answer(uuid, uuid, text) to anon, authenticated;
 grant execute on function public.get_player_game_question(uuid, text) to anon, authenticated;
+
+comment on function public.join_live_game(uuid, text) is
+  'Creates a zero-score team while its game is in the lobby or actively running.';
 
 revoke insert on table public.teams from anon;
 revoke insert, update on table public.submissions from anon;

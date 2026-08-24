@@ -18,6 +18,8 @@ export type QuizReadiness = {
   ready: boolean
 }
 
+export type QuizBuilderPrimaryAction = 'save' | 'save-and-host' | 'host' | 'blocked'
+
 export function checkQuizReadiness(input: QuizReadinessInput): QuizReadiness {
   const blockers: string[] = []
   const questionCount = input.rounds.reduce((total, round) => total + round.questionCount, 0)
@@ -42,4 +44,19 @@ export function checkQuizReadiness(input: QuizReadinessInput): QuizReadiness {
     : []
 
   return { blockers, warnings, ready: blockers.length === 0 }
+}
+
+export function quizStatusFromReadiness(readiness: Pick<QuizReadiness, 'ready'>) {
+  return readiness.ready ? 'ready' as const : 'draft' as const
+}
+
+export function quizBuilderPrimaryAction(input: {
+  persisted: boolean
+  dirty: boolean
+  ready: boolean
+  status: 'draft' | 'ready'
+}): QuizBuilderPrimaryAction {
+  if (!input.persisted || input.dirty) return input.ready ? 'save-and-host' : 'save'
+  if (!input.ready) return 'blocked'
+  return input.status === 'ready' ? 'host' : 'save-and-host'
 }
