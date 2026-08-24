@@ -2281,42 +2281,49 @@ function QuizPreview({ title, rounds, onClose }: {
           <button onClick={onClose} className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold hover:bg-white/10">Close</button>
         </header>
 
-        <div className="flex min-h-[420px] flex-1 items-center justify-center overflow-y-auto p-8">
-          {!active ? (
-            <div className="text-center"><h3 className="text-2xl font-bold">Nothing to preview yet</h3><p className="mt-2 text-zinc-400">Add a question or content screen first.</p></div>
-          ) : active.kind === 'content' ? (
-            <div className="w-full max-w-2xl text-center">
-              <p className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-violet-300">Round {active.roundNumber} · {active.round.title || 'Untitled Round'} · Content Screen</p>
-              {active.screen.imageUrl && <div role="img" aria-label="Content screen image" className="mx-auto mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.screen.imageUrl})` }} />}
-              <h3 className="text-4xl font-black leading-tight">{active.screen.title || 'Untitled screen'}</h3>
-              {active.screen.body && <p className="mx-auto mt-5 max-w-xl text-lg leading-8 text-zinc-300">{active.screen.body}</p>}
-            </div>
-          ) : (
-            <div className="w-full max-w-2xl">
-              <div className="mb-4 text-center text-xs font-bold uppercase tracking-[0.2em] text-violet-300">
-                <p>Round {active.roundNumber} · {active.round.title || 'Untitled Round'}</p>
-                <p className="mt-1 text-violet-200">Question {active.questionNumber} of {active.roundQuestionCount} · {active.question.type}</p>
-              </div>
-              {active.question.imageUrl && <div role="img" aria-label="Question image" className="mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.question.imageUrl})` }} />}
-              <h3 className="text-center text-3xl font-black leading-tight">{active.question.text}</h3>
-              <div className="mx-auto mt-8 max-w-md rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-5 py-4 text-center">
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">Correct answer</p>
-                <p className="mt-2 text-lg font-bold text-white">{builderCorrectAnswerDisplay(active.question)}</p>
-                {acceptedAnswerGroups(active.question.acceptedAnswers).flat().filter(Boolean).length > 0 && (
-                  <p className="mt-2 text-sm text-zinc-300">
-                    Also accept: {acceptedAnswerGroups(active.question.acceptedAnswers).flat().filter(Boolean).join(' · ')}
-                  </p>
-                )}
-              </div>
-              {activeBonus?.enabled && (
-                <div className="mx-auto mt-4 max-w-md rounded-2xl border border-amber-300/30 bg-amber-300/10 px-5 py-4 text-center">
-                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-300">Bonus · {activeBonus.points} {activeBonus.points === 1 ? 'point' : 'points'}</p>
-                  <p className="mt-2 text-base font-bold text-white">{activeBonus.prompt}</p>
-                  <p className="mt-2 text-sm text-amber-100">Answer: {activeBonus.answer}</p>
-                </div>
-              )}
+        <div className="flex min-h-[420px] flex-1 flex-col overflow-y-auto">
+          {active && (
+            <div className="sticky top-0 z-10 min-h-16 shrink-0 bg-[#171526] px-8 pt-5 text-center text-xs font-bold uppercase tracking-[0.2em] text-violet-300">
+              <p>Round {active.roundNumber} · {active.round.title || 'Untitled Round'}</p>
+              <p className="mt-1 text-violet-200">
+                {active.kind === 'question'
+                  ? `Question ${active.questionNumber} of ${active.roundQuestionCount} · ${active.question.type}`
+                  : 'Content Screen'}
+              </p>
             </div>
           )}
+          <div className="flex min-h-[356px] flex-1 items-center justify-center px-8 pb-8 pt-5">
+            {!active ? (
+              <div className="text-center"><h3 className="text-2xl font-bold">Nothing to preview yet</h3><p className="mt-2 text-zinc-400">Add a question or content screen first.</p></div>
+            ) : active.kind === 'content' ? (
+              <div className="w-full max-w-2xl text-center">
+                {active.screen.imageUrl && <div role="img" aria-label="Content screen image" className="mx-auto mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.screen.imageUrl})` }} />}
+                <h3 className="text-4xl font-black leading-tight">{active.screen.title || 'Untitled screen'}</h3>
+                {active.screen.body && <p className="mx-auto mt-5 max-w-xl text-lg leading-8 text-zinc-300">{active.screen.body}</p>}
+              </div>
+            ) : (
+              <div className="w-full max-w-2xl">
+                {active.question.imageUrl && <div role="img" aria-label="Question image" className="mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.question.imageUrl})` }} />}
+                <h3 className="text-center text-3xl font-black leading-tight">{active.question.text}</h3>
+                <div className="mx-auto mt-8 max-w-md rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-5 py-4 text-center">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">Correct answer</p>
+                  <p className="mt-2 text-lg font-bold text-white">{builderCorrectAnswerDisplay(active.question)}</p>
+                  {acceptedAnswerGroups(active.question.acceptedAnswers).flat().filter(Boolean).length > 0 && (
+                    <p className="mt-2 text-sm text-zinc-300">
+                      Also accept: {acceptedAnswerGroups(active.question.acceptedAnswers).flat().filter(Boolean).join(' · ')}
+                    </p>
+                  )}
+                </div>
+                {activeBonus?.enabled && (
+                  <div className="mx-auto mt-4 max-w-md rounded-2xl border border-amber-300/30 bg-amber-300/10 px-5 py-4 text-center">
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-300">Bonus · {activeBonus.points} {activeBonus.points === 1 ? 'point' : 'points'}</p>
+                    <p className="mt-2 text-base font-bold text-white">{activeBonus.prompt}</p>
+                    <p className="mt-2 text-sm text-amber-100">Answer: {activeBonus.answer}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         <footer className="flex items-center justify-between border-t border-white/10 px-6 py-4">
