@@ -5901,14 +5901,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     {question?.question_type === 'multi-part' ? 'Question parts + answers · Host only' : 'Correct Answer · Host only'}
                   </p>
                   {question?.question_type === 'multi-part' ? (
-                    <div className="mt-2 space-y-2.5">
+                    <div className="mt-2 max-w-4xl space-y-2.5">
                       {questionDetails.map((detail, index) => {
                         const answer = asStringArray(question.correct_answer)[index] ?? ''
                         return (
                           <div
                             key={`${detail.label}-${detail.text}`}
                             className="grid items-start gap-3"
-                            style={{ gridTemplateColumns: '26px minmax(0, 1fr) auto' }}
+                            style={{ gridTemplateColumns: '26px minmax(0, 3fr) minmax(140px, 2fr)' }}
                           >
                             <span
                               style={{
@@ -5925,7 +5925,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                               {detail.text}
                             </span>
 
-                            <span style={{ color: C.liveViolet }} className="text-sm font-extrabold whitespace-nowrap pt-0.5">
+                            <span style={{ color: C.liveViolet }} className="text-left text-sm font-extrabold break-words pt-0.5">
                               → {answer}
                             </span>
                           </div>
@@ -5953,14 +5953,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     {question?.question_type === 'multi-part' ? 'Question parts + answers · Revealed to players' : 'Correct Answer · Revealed to players'}
                   </p>
                   {question?.question_type === 'multi-part' ? (
-                    <div className="mt-2 space-y-2.5">
+                    <div className="mt-2 max-w-4xl space-y-2.5">
                       {questionDetails.map((detail, index) => {
                         const answer = asStringArray(question.correct_answer)[index] ?? ''
                         return (
                           <div
                             key={`${detail.label}-${detail.text}`}
                             className="grid items-start gap-3"
-                            style={{ gridTemplateColumns: '26px minmax(0, 1fr) auto' }}
+                            style={{ gridTemplateColumns: '26px minmax(0, 3fr) minmax(140px, 2fr)' }}
                           >
                             <span
                               style={{
@@ -5977,7 +5977,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                               {detail.text}
                             </span>
 
-                            <span style={{ color: C.go }} className="text-sm font-extrabold whitespace-nowrap pt-0.5">
+                            <span style={{ color: C.go }} className="text-left text-sm font-extrabold break-words pt-0.5">
                               → {answer}
                             </span>
                           </div>
