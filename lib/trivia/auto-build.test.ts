@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildAutoQuizPlan, distributeQuestionCount, getAutoBuildAvailability } from './auto-build'
+import {
+  buildAutoQuizPlan,
+  distributeQuestionCount,
+  getAutoBuildAvailability,
+  getEligibleAutoBuildTiebreakers,
+  type AutoBuildContentSettings,
+} from './auto-build'
 
 const questions = [
   ...Array.from({ length: 8 }, (_, index) => ({ id: `music-${index}`, category: 'Music', difficulty: 'Easy' })),
@@ -8,6 +14,12 @@ const questions = [
 ]
 const tiebreakers = Array.from({ length: 5 }, (_, index) => ({ id: `tie-${index}` }))
 const noShuffle = () => 0.999999
+const familyAustraliaSettings: AutoBuildContentSettings = {
+  audienceFit: 'kids',
+  allowAdultContent: false,
+  scopeMode: 'include_locale',
+  locale: 'Australia',
+}
 const expandedQuestions = ['General Knowledge', 'Movies', 'Sport', 'Music'].flatMap(category => (
   ['Hard', 'Very Hard'].flatMap(difficulty => (
     Array.from({ length: 6 }, (_, index) => ({ id: `${category}-${difficulty}-${index}`, category, difficulty }))
@@ -67,6 +79,59 @@ describe('Auto-Build selection semantics', () => {
     })
 
     expect(plan.rounds[0].questions.every(question => question.difficulty === 'Medium')).toBe(true)
+  })
+
+  it('excludes adult content and country-specific content outside the requested locale', () => {
+    const filteredQuestions = [
+      { id: 'global-safe', category: 'Music', difficulty: 'Easy', audience_fit: 'broad' as const, adult_content: false, audience_scope: 'global' as const, audience_locale: null },
+      { id: 'australia-safe', category: 'Music', difficulty: 'Easy', audience_fit: 'kids' as const, adult_content: false, audience_scope: 'country_specific' as const, audience_locale: 'Australia' },
+      { id: 'uk-safe', category: 'Music', difficulty: 'Easy', audience_fit: 'kids' as const, adult_content: false, audience_scope: 'country_specific' as const, audience_locale: 'United Kingdom' },
+      { id: 'global-adult', category: 'Music', difficulty: 'Easy', audience_fit: 'broad' as const, adult_content: true, audience_scope: 'global' as const, audience_locale: null },
+    ]
+
+    const plan = buildAutoQuizPlan({
+      questions: filteredQuestions,
+      tiebreakers: [
+        { id: 'tie-1', adult_content: false, audience_scope: 'global' as const },
+        { id: 'tie-2', adult_content: false, audience_scope: 'global' as const },
+        { id: 'tie-3', adult_content: false, audience_scope: 'country_specific' as const, audience_locale: 'Australia' },
+      ],
+      questionCount: 2,
+      roundTopics: ['Music'],
+      difficulties: ['Easy'],
+      contentSettings: familyAustraliaSettings,
+      random: noShuffle,
+    })
+
+    expect(plan.rounds[0].questions.map(question => question.id).sort()).toEqual(['australia-safe', 'global-safe'])
+  })
+
+  it('treats audience fit as a preference rather than a hard requirement', () => {
+    const plan = buildAutoQuizPlan({
+      questions: [
+        { id: 'broad', category: 'Music', difficulty: 'Easy', audience_fit: 'broad' as const },
+        { id: 'kids', category: 'Music', difficulty: 'Easy', audience_fit: 'kids' as const },
+      ],
+      tiebreakers,
+      questionCount: 2,
+      roundTopics: ['Music'],
+      difficulties: ['Easy'],
+      contentSettings: familyAustraliaSettings,
+      random: noShuffle,
+    })
+
+    expect(plan.rounds[0].questions.map(question => question.id)).toEqual(['kids', 'broad'])
+  })
+
+  it('applies adult-content and locale rules to prepared tiebreakers', () => {
+    const eligible = getEligibleAutoBuildTiebreakers([
+      { id: 'global', adult_content: false, audience_scope: 'global' },
+      { id: 'australia', adult_content: false, audience_scope: 'country_specific', audience_locale: 'Australia' },
+      { id: 'uk', adult_content: false, audience_scope: 'country_specific', audience_locale: 'United Kingdom' },
+      { id: 'adult', adult_content: true, audience_scope: 'global' },
+    ], familyAustraliaSettings)
+
+    expect(eligible.map(tiebreaker => tiebreaker.id)).toEqual(['global', 'australia'])
   })
 
   it('supports the very easy and very hard endpoints', () => {

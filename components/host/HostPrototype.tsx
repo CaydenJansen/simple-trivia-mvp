@@ -54,7 +54,13 @@ import {
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
 import { checkQuizReadiness, quizCanHost, quizStatusFromReadiness } from "@/lib/trivia/quiz-readiness";
-import { buildAutoQuizPlan, getAutoBuildAvailability } from "@/lib/trivia/auto-build";
+import {
+  buildAutoQuizPlan,
+  getAutoBuildAvailability,
+  getEligibleAutoBuildTiebreakers,
+  type AutoBuildAudienceFit,
+  type AutoBuildScopeMode,
+} from "@/lib/trivia/auto-build";
 import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib/trivia/question-metadata";
@@ -3525,6 +3531,11 @@ function AutoBuild({ go }: { go: Go }) {
   const [questionCount, setQuestionCount] = useState(30)
   const [questionCountInput, setQuestionCountInput] = useState('30')
   const [roundCount, setRoundCount] = useState(4)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [audienceFit, setAudienceFit] = useState<AutoBuildAudienceFit>('broad')
+  const [allowAdultContent, setAllowAdultContent] = useState(false)
+  const [scopeMode, setScopeMode] = useState<AutoBuildScopeMode>('global_only')
+  const [audienceLocale, setAudienceLocale] = useState('')
 
   const startDifficultyDrag = (handle: 'minimum' | 'maximum', event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault()
@@ -3568,19 +3579,32 @@ function AutoBuild({ go }: { go: Go }) {
     () => mode === 'mixed' ? Array.from({ length: roundCount }, () => null) : topics,
     [mode, roundCount, topics],
   )
+  const contentSettings = useMemo(() => ({
+    audienceFit,
+    allowAdultContent,
+    scopeMode,
+    locale: audienceLocale.trim(),
+  }), [allowAdultContent, audienceFit, audienceLocale, scopeMode])
   const availability = useMemo(() => getAutoBuildAvailability({
     questions: sourceQuestions,
     questionCount,
     roundTopics: selectedRoundTopics,
     difficulties: selectedDifficulties,
-  }), [questionCount, selectedDifficulties, selectedRoundTopics, sourceQuestions])
+    contentSettings,
+  }), [contentSettings, questionCount, selectedDifficulties, selectedRoundTopics, sourceQuestions])
+  const eligibleTiebreakerCount = useMemo(
+    () => getEligibleAutoBuildTiebreakers(sourceTiebreakers, contentSettings).length,
+    [contentSettings, sourceTiebreakers],
+  )
   const firstShortage = availability.shortages[0]
   const countsAreValid = questionCount >= roundCount
+  const localeIsValid = scopeMode === 'global_only' || audienceLocale.trim().length > 0
   const canGenerate = countsAreValid
+    && localeIsValid
     && !sourcesLoading
     && !sourcesError
     && availability.canBuild
-    && sourceTiebreakers.length >= AUTO_BUILD_TIEBREAKER_COUNT
+    && eligibleTiebreakerCount >= AUTO_BUILD_TIEBREAKER_COUNT
 
   useEffect(() => {
     let cancelled = false
@@ -3625,6 +3649,17 @@ function AutoBuild({ go }: { go: Go }) {
     const [lo, hi] = diff
     return lo === hi ? `${diffLabels[lo]} only` : `${diffLabels[lo]} through ${diffLabels[hi]}`
   }
+  const audienceFitLabel: Record<AutoBuildAudienceFit, string> = {
+    broad: 'Broad audience',
+    kids: 'Kids',
+    young_adults: 'Young adults',
+    older_adults: 'Older adults',
+  }
+  const scopeSummary = scopeMode === 'global_only'
+    ? 'Global only'
+    : audienceLocale.trim()
+      ? `Global + ${audienceLocale.trim()}`
+      : 'Global + chosen locale'
 
   function updateRoundCount(nextCount: number) {
     const safeCount = Math.max(1, Math.min(10, nextCount))
@@ -3650,6 +3685,7 @@ function AutoBuild({ go }: { go: Go }) {
         questionCount,
         roundTopics: selectedRoundTopics,
         difficulties: selectedDifficulties,
+        contentSettings,
       })
       const questionSnapshots: Json[] = []
       let position = 0
@@ -3855,19 +3891,101 @@ function AutoBuild({ go }: { go: Go }) {
             <p style={{ color: C.sub }} className="text-sm">
               Sourcing: <span style={{ color: C.ink }} className="font-semibold">{diffText()}</span>
             </p>
-            <p aria-live="polite" style={{ color: sourcesError || firstShortage ? C.stop : C.sub }} className="mt-2 text-xs leading-5">
+            <p aria-live="polite" style={{ color: sourcesError || firstShortage || !localeIsValid || eligibleTiebreakerCount < AUTO_BUILD_TIEBREAKER_COUNT ? C.stop : C.sub }} className="mt-2 text-xs leading-5">
               {!countsAreValid
                 ? 'The question count must be at least the number of rounds.'
+                : !localeIsValid
+                  ? 'Enter a country or locale to include country-specific questions.'
                 : sourcesLoading
                 ? 'Checking Question Library availability…'
                 : sourcesError
                   ? sourcesError
                   : firstShortage
                     ? `Not enough ${firstShortage.topic ?? 'matching'} questions: ${firstShortage.available} available, ${firstShortage.required} needed.`
-                    : sourceTiebreakers.length < AUTO_BUILD_TIEBREAKER_COUNT
-                      ? 'Auto-Build is temporarily unavailable while the prepared content is updated.'
+                    : eligibleTiebreakerCount < AUTO_BUILD_TIEBREAKER_COUNT
+                      ? `Only ${eligibleTiebreakerCount} prepared tiebreaker${eligibleTiebreakerCount === 1 ? '' : 's'} match these settings; ${AUTO_BUILD_TIEBREAKER_COUNT} are needed.`
                       : `${availability.matchingQuestionCount} matching questions available for this setup.`}
             </p>
+          </div>
+
+          {/* Advanced content settings */}
+          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="overflow-hidden rounded-2xl">
+            <button
+              type="button"
+              aria-expanded={advancedOpen}
+              onClick={() => setAdvancedOpen(open => !open)}
+              className="flex w-full items-center gap-4 px-5 py-4 text-left transition-colors hover:bg-ground"
+            >
+              <div className="min-w-0 flex-1">
+                <p style={{ color: C.ink }} className="text-sm font-bold">Advanced Settings</p>
+                <p style={{ color: C.sub }} className="mt-1 truncate text-xs">
+                  {audienceFitLabel[audienceFit]} · {scopeSummary} · {allowAdultContent ? 'Adult content allowed' : 'Adult content excluded'}
+                </p>
+              </div>
+              <span style={{ color: C.sub }} className={`text-sm transition-transform ${advancedOpen ? 'rotate-180' : ''}`}>⌄</span>
+            </button>
+
+            {advancedOpen && (
+              <div style={{ borderTop: `1px solid ${C.line}` }} className="space-y-6 px-5 py-5">
+                <div>
+                  <label htmlFor="auto-build-audience-fit" style={{ color: C.ink }} className="block text-sm font-bold">Audience fit</label>
+                  <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">Preferred audience for the quiz. Broad questions can still be used when they are the best fit.</p>
+                  <select
+                    id="auto-build-audience-fit"
+                    value={audienceFit}
+                    onChange={event => setAudienceFit(event.target.value as AutoBuildAudienceFit)}
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                    className="mt-3 w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30"
+                  >
+                    <option value="broad">Broad audience</option>
+                    <option value="kids">Kids</option>
+                    <option value="young_adults">Young adults</option>
+                    <option value="older_adults">Older adults</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="auto-build-scope" style={{ color: C.ink }} className="block text-sm font-bold">Geographic scope</label>
+                  <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">Keep the quiz globally suitable, or also allow questions intended for one country or locale.</p>
+                  <select
+                    id="auto-build-scope"
+                    value={scopeMode}
+                    onChange={event => setScopeMode(event.target.value as AutoBuildScopeMode)}
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                    className="mt-3 w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30"
+                  >
+                    <option value="global_only">Global questions only</option>
+                    <option value="include_locale">Global + one country or locale</option>
+                  </select>
+                  {scopeMode === 'include_locale' && (
+                    <div className="mt-3">
+                      <label htmlFor="auto-build-locale" style={{ color: C.sub }} className="block text-xs font-bold">Country or locale</label>
+                      <input
+                        id="auto-build-locale"
+                        value={audienceLocale}
+                        onChange={event => setAudienceLocale(event.target.value)}
+                        placeholder="e.g. Australia"
+                        style={{ border: `1px solid ${localeIsValid ? C.line : C.stop}`, color: C.ink }}
+                        className="mt-2 w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={allowAdultContent}
+                    onChange={event => setAllowAdultContent(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-violet"
+                  />
+                  <span>
+                    <span style={{ color: C.ink }} className="block text-sm font-bold">Allow adult content</span>
+                    <span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">Off by default. Turn this on only when mature topics such as alcohol, gambling, drugs, explicit sexual content or graphic material are suitable.</span>
+                  </span>
+                </label>
+              </div>
+            )}
           </div>
 
           {generateError && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{generateError}</p>}

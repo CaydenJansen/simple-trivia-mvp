@@ -4,10 +4,28 @@ export type AutoBuildQuestion = {
   id: string
   category: string | null
   difficulty: string | null
+  audience_fit?: AutoBuildAudienceFit | null
+  adult_content?: boolean | null
+  audience_scope?: 'global' | 'country_specific' | null
+  audience_locale?: string | null
 }
 
 export type AutoBuildTiebreaker = {
   id: string
+  audience_fit?: AutoBuildAudienceFit | null
+  adult_content?: boolean | null
+  audience_scope?: 'global' | 'country_specific' | null
+  audience_locale?: string | null
+}
+
+export type AutoBuildAudienceFit = 'broad' | 'kids' | 'young_adults' | 'older_adults'
+export type AutoBuildScopeMode = 'global_only' | 'include_locale'
+
+export type AutoBuildContentSettings = {
+  audienceFit: AutoBuildAudienceFit
+  allowAdultContent: boolean
+  scopeMode: AutoBuildScopeMode
+  locale: string
 }
 
 export type AutoBuildRound<TQuestion extends AutoBuildQuestion> = {
@@ -59,16 +77,64 @@ function shuffled<T>(items: readonly T[], random: () => number) {
   return result
 }
 
+function normalizedLocale(value: string | null | undefined) {
+  return value?.trim().toLocaleLowerCase() ?? ''
+}
+
+function matchesContentSettings(
+  item: Pick<AutoBuildQuestion, 'adult_content' | 'audience_scope' | 'audience_locale'>,
+  settings?: AutoBuildContentSettings,
+) {
+  if (!settings) return true
+  if (!settings.allowAdultContent && item.adult_content === true) return false
+
+  const scope = item.audience_scope ?? 'global'
+  if (scope === 'global') return true
+  if (settings.scopeMode === 'global_only') return false
+
+  const requestedLocale = normalizedLocale(settings.locale)
+  return requestedLocale.length > 0 && normalizedLocale(item.audience_locale) === requestedLocale
+}
+
+function audiencePreferenceRank(
+  item: Pick<AutoBuildQuestion, 'audience_fit'>,
+  settings?: AutoBuildContentSettings,
+) {
+  if (!settings) return 0
+  const fit = item.audience_fit ?? 'broad'
+  if (fit === settings.audienceFit) return 0
+  if (fit === 'broad') return 1
+  return 2
+}
+
+function withAudiencePreference<T extends Pick<AutoBuildQuestion, 'audience_fit'>>(
+  items: T[],
+  settings?: AutoBuildContentSettings,
+) {
+  return settings
+    ? items.sort((a, b) => audiencePreferenceRank(a, settings) - audiencePreferenceRank(b, settings))
+    : items
+}
+
+export function getEligibleAutoBuildTiebreakers<TTiebreaker extends AutoBuildTiebreaker>(
+  tiebreakers: readonly TTiebreaker[],
+  contentSettings?: AutoBuildContentSettings,
+) {
+  return tiebreakers.filter(tiebreaker => matchesContentSettings(tiebreaker, contentSettings))
+}
+
 export function getAutoBuildAvailability({
   questions,
   questionCount,
   roundTopics,
   difficulties,
+  contentSettings,
 }: {
   questions: readonly AutoBuildQuestion[]
   questionCount: number
   roundTopics: readonly (string | null)[]
   difficulties: readonly string[]
+  contentSettings?: AutoBuildContentSettings
 }): AutoBuildAvailability {
   if (roundTopics.length === 0) throw new Error('Choose at least one round.')
   if (difficulties.length === 0) throw new Error('Choose at least one difficulty.')
@@ -76,7 +142,7 @@ export function getAutoBuildAvailability({
   const allowedDifficulties = new Set(difficulties.map(value => value.toLocaleLowerCase()))
   const eligibleQuestions = questions.filter(question => (
     question.difficulty && allowedDifficulties.has(question.difficulty.toLocaleLowerCase())
-  ))
+  )).filter(question => matchesContentSettings(question, contentSettings))
   const requirements = new Map<string, { topic: string | null; required: number }>()
 
   distributeQuestionCount(questionCount, roundTopics.length).forEach((needed, roundIndex) => {
@@ -114,6 +180,7 @@ export function buildAutoQuizPlan<
   questionCount,
   roundTopics,
   difficulties,
+  contentSettings,
   random = Math.random,
 }: {
   questions: readonly TQuestion[]
@@ -121,16 +188,20 @@ export function buildAutoQuizPlan<
   questionCount: number
   roundTopics: readonly (string | null)[]
   difficulties: readonly string[]
+  contentSettings?: AutoBuildContentSettings
   random?: () => number
 }): AutoBuildPlan<TQuestion, TTiebreaker> {
   if (roundTopics.length === 0) throw new Error('Choose at least one round.')
   if (difficulties.length === 0) throw new Error('Choose at least one difficulty.')
   if (questionCount < roundTopics.length) throw new Error('Add at least one question for every round.')
-  if (tiebreakers.length < AUTO_BUILD_TIEBREAKER_COUNT) {
-    throw new Error(`Auto-Build needs at least ${AUTO_BUILD_TIEBREAKER_COUNT} active prepared tiebreakers.`)
+  const eligibleTiebreakers = getEligibleAutoBuildTiebreakers(tiebreakers, contentSettings)
+  if (eligibleTiebreakers.length < AUTO_BUILD_TIEBREAKER_COUNT) {
+    throw new Error(contentSettings
+      ? `Question Library has ${eligibleTiebreakers.length} prepared tiebreakers matching these advanced settings, but Auto-Build needs ${AUTO_BUILD_TIEBREAKER_COUNT}.`
+      : `Auto-Build needs at least ${AUTO_BUILD_TIEBREAKER_COUNT} active prepared tiebreakers.`)
   }
 
-  const availability = getAutoBuildAvailability({ questions, questionCount, roundTopics, difficulties })
+  const availability = getAutoBuildAvailability({ questions, questionCount, roundTopics, difficulties, contentSettings })
   const firstShortage = availability.shortages[0]
   if (firstShortage) {
     const label = firstShortage.topic ?? 'the selected mix'
@@ -138,10 +209,12 @@ export function buildAutoQuizPlan<
   }
 
   const allowedDifficulties = new Set(difficulties.map(value => value.toLocaleLowerCase()))
-  const eligibleQuestions = shuffled(
-    questions.filter(question => question.difficulty && allowedDifficulties.has(question.difficulty.toLocaleLowerCase())),
+  const eligibleQuestions = withAudiencePreference(shuffled(
+    questions
+      .filter(question => question.difficulty && allowedDifficulties.has(question.difficulty.toLocaleLowerCase()))
+      .filter(question => matchesContentSettings(question, contentSettings)),
     random,
-  )
+  ), contentSettings)
   const counts = distributeQuestionCount(questionCount, roundTopics.length)
   const usedIds = new Set<string>()
 
@@ -171,6 +244,9 @@ export function buildAutoQuizPlan<
 
   return {
     rounds,
-    tiebreakers: shuffled(tiebreakers, random).slice(0, AUTO_BUILD_TIEBREAKER_COUNT),
+    tiebreakers: withAudiencePreference(
+      shuffled(eligibleTiebreakers, random),
+      contentSettings,
+    ).slice(0, AUTO_BUILD_TIEBREAKER_COUNT),
   }
 }
