@@ -32,9 +32,7 @@ export function playerQuestionStageScreen(input: {
   }
 
   if (answerPhase === 'closed') return coreSubmission || bonusSubmission ? 'submitted' : 'no-answer'
-  // Revealing a bonus adds it to the existing question form. The ordinary
-  // answer stays visible and editable until the host closes both together.
-  if (questionStage === 'bonus') return baseScreen
+  if (questionStage === 'bonus') return 'bonus-answer'
   return baseScreen
 }
 

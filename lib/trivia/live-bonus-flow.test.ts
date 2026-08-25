@@ -20,12 +20,12 @@ describe('live bonus stage flow', () => {
     expect(playerQuestionStageScreen({ ...base, coreSubmission: { points_awarded: 0 } })).toBe('single-answer')
   })
 
-  it('keeps the main form open when the host reveals the bonus', () => {
-    expect(playerQuestionStageScreen({ ...base, questionStage: 'bonus' })).toBe('single-answer')
+  it('moves every team to the separately opened bonus stage', () => {
+    expect(playerQuestionStageScreen({ ...base, questionStage: 'bonus' })).toBe('bonus-answer')
   })
 
-  it('keeps both forms editable after a bonus submission while answers are open', () => {
-    expect(playerQuestionStageScreen({ ...base, questionStage: 'bonus', bonusSubmission: { points_awarded: 0 } })).toBe('single-answer')
+  it('keeps the bonus form editable after submission while bonus answers are open', () => {
+    expect(playerQuestionStageScreen({ ...base, questionStage: 'bonus', bonusSubmission: { points_awarded: 0 } })).toBe('bonus-answer')
   })
 
   it('locks submitted answers when the host closes the question', () => {

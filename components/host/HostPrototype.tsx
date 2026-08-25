@@ -5234,13 +5234,13 @@ function LiveQuestion({ go }: { go: Go }) {
   }
 
   async function handleShowBonus() {
-    if (!liveGameId || !question || !runtimeBonusFromJson(question.bonus) || actionBusy || phase !== 'open') return
+    if (!liveGameId || !question || !runtimeBonusFromJson(question.bonus) || actionBusy || phase !== 'closed' || questionStage !== 'core') return
     setActionBusy(true)
     setLiveError(null)
 
     const { error } = await supabase
       .from('games')
-      .update({ question_stage: 'bonus' })
+      .update({ question_stage: 'bonus', answer_phase: 'open' })
       .eq('id', liveGameId)
 
     if (error) {
@@ -5248,6 +5248,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setLiveError('Could not show the bonus question. Please try again.')
     } else {
       setQuestionStage('bonus')
+      setPhase('open')
     }
 
     setActionBusy(false)
@@ -6460,46 +6461,60 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               ) : phase === 'open' ? (
                 <button
                   data-host-navigation="forward"
-                  onClick={activeBonus && questionStage === 'core' ? handleShowBonus : handleCloseAnswers}
+                  onClick={handleCloseAnswers}
                   disabled={actionBusy}
                   style={{
-                    background: activeBonus && questionStage === 'core' ? C.violet : '#F59E0B',
-                    color: activeBonus && questionStage === 'core' ? 'white' : '#17130A',
-                    border: activeBonus && questionStage === 'core' ? 'none' : '2px solid #FBBF24',
-                    boxShadow: activeBonus && questionStage === 'core' ? `0 8px 32px ${C.violet}60` : '0 10px 34px rgba(245,158,11,0.32)',
+                    background: '#F59E0B',
+                    color: '#17130A',
+                    border: '2px solid #FBBF24',
+                    boxShadow: '0 10px 34px rgba(245,158,11,0.32)',
                   }}
                   className="w-full rounded-2xl py-6 text-xl font-black transition-all hover:brightness-110 active:scale-[0.98] disabled:opacity-50"
                 >
                   {actionBusy
-                    ? activeBonus && questionStage === 'core' ? 'Showing…' : 'Closing…'
-                    : activeBonus && questionStage === 'core' ? 'Show Bonus →' : 'Close Answers →'}
+                    ? 'Closing…'
+                    : activeBonus && questionStage === 'core' ? 'Close Main Answers →' : activeBonus ? 'Close Bonus Answers →' : 'Close Answers →'}
                 </button>
               ) : phase === 'closed' ? (
                 <>
-                  <button
-                    data-host-navigation="forward"
-                    onClick={answerRevealMode === 'round' ? handleScoreAndContinue : handleRevealAnswer}
-                    disabled={actionBusy || !question || reviewCount > 0}
-                    style={{
-                      background: reviewCount > 0 ? C.livePanel : C.violet,
-                      color: reviewCount > 0 ? C.liveDim : 'white',
-                      boxShadow: reviewCount > 0 ? 'none' : `0 8px 32px ${C.violet}60`,
-                      border: reviewCount > 0 ? `1px solid ${C.liveLine}` : 'none',
-                    }}
-                    className="w-full rounded-2xl py-6 text-xl font-extrabold transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {actionBusy
-                      ? answerRevealMode === 'round' ? 'Scoring…' : 'Revealing…'
-                      : reviewCount > 0
-                        ? 'Resolve Reviews First'
-                        : answerRevealMode === 'round'
-                          ? 'Score & Continue →'
-                          : 'Reveal Answer →'}
-                  </button>
-                  {reviewCount > 0 && (
-                    <p style={{ color: C.caution }} className="text-center text-[11px] font-semibold">
-                      {reviewCount} answer{reviewCount === 1 ? '' : 's'} still need review
-                    </p>
+                  {activeBonus && questionStage === 'core' ? (
+                    <button
+                      data-host-navigation="forward"
+                      onClick={handleShowBonus}
+                      disabled={actionBusy}
+                      style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
+                      className="w-full rounded-2xl py-6 text-xl font-extrabold transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+                    >
+                      {actionBusy ? 'Opening…' : 'Open Bonus →'}
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        data-host-navigation="forward"
+                        onClick={answerRevealMode === 'round' ? handleScoreAndContinue : handleRevealAnswer}
+                        disabled={actionBusy || !question || reviewCount > 0}
+                        style={{
+                          background: reviewCount > 0 ? C.livePanel : C.violet,
+                          color: reviewCount > 0 ? C.liveDim : 'white',
+                          boxShadow: reviewCount > 0 ? 'none' : `0 8px 32px ${C.violet}60`,
+                          border: reviewCount > 0 ? `1px solid ${C.liveLine}` : 'none',
+                        }}
+                        className="w-full rounded-2xl py-6 text-xl font-extrabold transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {actionBusy
+                          ? answerRevealMode === 'round' ? 'Scoring…' : 'Revealing…'
+                          : reviewCount > 0
+                            ? 'Resolve Reviews First'
+                            : answerRevealMode === 'round'
+                              ? 'Score & Continue →'
+                              : 'Reveal Answer →'}
+                      </button>
+                      {reviewCount > 0 && (
+                        <p style={{ color: C.caution }} className="text-center text-[11px] font-semibold">
+                          {reviewCount} answer{reviewCount === 1 ? '' : 's'} still need review
+                        </p>
+                      )}
+                    </>
                   )}
                 </>
               ) : (
