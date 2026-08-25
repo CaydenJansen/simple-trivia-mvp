@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { supabase } from "@/lib/supabase/client";
 import {
   leaderboardVisibilityFromSettings,
@@ -20,6 +20,7 @@ import { playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
 import { playersSeeScoresFromSettings } from "@/lib/trivia/score-visibility";
 import { gameAcceptsNewTeams, JOINABLE_GAME_STATUSES } from "@/lib/trivia/game-joining";
 import { playerTiebreakerOutcome } from "@/lib/trivia/tiebreakers";
+import { shouldSubmitPlayerAnswerOnEnter } from "@/lib/trivia/player-keyboard-submit";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -33,6 +34,22 @@ type PlayerScreen =
   | 'delayed-reveal' | 'winner' | 'final-result'
   | 'tiebreaker-pending' | 'tiebreaker' | 'tiebreaker-result'
   | 'reconnecting' | 'game-ended'
+
+function submitPlayerAnswerOnEnter(
+  event: ReactKeyboardEvent<HTMLElement>,
+  enabled: boolean,
+  submit: () => void,
+) {
+  if (!shouldSubmitPlayerAnswerOnEnter({
+    key: event.key,
+    shiftKey: event.shiftKey,
+    isComposing: event.nativeEvent.isComposing,
+    enabled,
+  })) return
+
+  event.preventDefault()
+  submit()
+}
 
 const PlayerDevControlsContext = createContext(false)
 const PlayerScoreVisibilityContext = createContext(true)
@@ -1656,7 +1673,7 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         </div>
         <h2 style={{ color: C.ink, fontSize: 24, lineHeight: 1.25, fontWeight: 900, marginBottom: 28 }}>{question?.prompt ?? 'Loading question…'}</h2>
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
-        <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
@@ -1690,7 +1707,7 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
         </div>
         <h2 style={{ color: C.ink, fontSize: 24, lineHeight: 1.25, fontWeight: 900, marginBottom: 24 }}>{question?.prompt ?? 'Loading question…'}</h2>
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
-        <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
@@ -1725,7 +1742,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
           {choices.map((choice, i) => {
             const key = choice.key ?? String.fromCharCode(65 + i)
             const selectedNow = selected === key
-            return <button key={key} onClick={() => setSelected(key)}
+            return <button key={key} onClick={() => setSelected(key)} onKeyDown={event => submitPlayerAnswerOnEnter(event, selectedNow && !submitting, () => { void submit(key) })}
               style={{ background: selectedNow ? C.violetPale : C.panel, border: `2px solid ${selectedNow ? C.violet : C.line}`, borderRadius: 16, textAlign: 'left', padding: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, fontFamily: 'inherit' }}>
               <span style={{ background: selectedNow ? C.violet : C.ground, color: selectedNow ? '#fff' : C.sub, borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{key}</span>
               <span style={{ color: C.ink, fontWeight: 600, fontSize: 16 }}>{choice.label ?? ''}</span>
@@ -1767,7 +1784,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         <p style={{ color: C.sub, fontSize: 14, marginBottom: 24 }}>1 point per correct answer</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {answers.map((answer, i) => <div key={i}>
-            <input value={answer} onChange={e => setA(i, e.target.value)} placeholder="Type an answer…"
+            <input value={answer} onChange={e => setA(i, e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, anyFilled && !submitting, () => { void submit(answers) })} placeholder="Type an answer…"
               aria-label={`Answer ${i + 1}`}
               style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 17, outline: 'none', width: '100%', padding: '13px 16px', fontFamily: 'inherit' }} />
           </div>)}
@@ -1809,7 +1826,7 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
           {parts.map((part, i) => <div key={part.label ?? i}>
             <p style={{ color: C.violet, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', marginBottom: 8 }}>PART {part.label ?? String.fromCharCode(65 + i)}</p>
             <p style={{ color: C.ink, fontSize: 14, lineHeight: 1.45, marginBottom: 9 }}>{part.clue}</p>
-            <input value={answers[i] ?? ''} onChange={e => setAnswers(current => current.map((value, index) => index === i ? e.target.value : value))} placeholder="Answer…"
+            <input value={answers[i] ?? ''} onChange={e => setAnswers(current => current.map((value, index) => index === i ? e.target.value : value))} onKeyDown={event => submitPlayerAnswerOnEnter(event, anyFilled && !submitting, () => { void submit(answers) })} placeholder="Answer…"
               style={{ border: `2px solid ${answers[i] ? C.violet : C.line}`, borderRadius: 12, background: C.panel, color: C.ink, fontSize: 16, outline: 'none', width: '100%', padding: '12px 14px', fontFamily: 'inherit' }} />
           </div>)}
         </div>
@@ -1896,7 +1913,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
   })
 
   return (
-    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+    <div className="flex flex-col" style={{ minHeight: '100%' }} onKeyDown={event => submitPlayerAnswerOnEnter(event, items.length > 0 && !submitting, () => { void submit(items) })}>
       <TopBar
         team={snapshot.teamName || 'Your Team'}
         score={snapshot.score}
@@ -2045,7 +2062,7 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         )}
         <h2 style={{ color: C.ink, fontSize: 24, lineHeight: 1.25, fontWeight: 900, marginBottom: 28 }}>{bonus?.prompt ?? 'Loading bonus…'}</h2>
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your bonus answer</label>
-        <textarea rows={3} value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>

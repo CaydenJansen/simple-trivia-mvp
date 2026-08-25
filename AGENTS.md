@@ -24,6 +24,7 @@
 - Auto-Build draws from platform-owned `source_questions` and `source_tiebreakers`, then creates independent quiz snapshots through the same atomic save boundary as manual authoring.
 - Supabase is the source of truth for live game state. Do not replace working database or Realtime behaviour with fake local state.
 - Players follow host progression automatically; players do not advance questions themselves.
+- On player answer-entry screens, Return submits a valid current answer. Shift+Return remains available for a newline in multi-line text fields.
 - Correct answers must not be exposed to players before reveal.
 - Content authored by a host must remain distinct from live session data.
 - Host-owned reusable content requires an authenticated host identity so ownership can be enforced with RLS. Player teams remain account-free.
