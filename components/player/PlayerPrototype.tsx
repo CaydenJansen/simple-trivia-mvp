@@ -723,7 +723,7 @@ function PlayerBonusResult({ snapshot }: { snapshot: PlayerSnapshot }) {
   return (
     <div style={{ background: correct ? C.goMist : C.panel, border: `1px solid ${correct ? C.goBorder : C.line}`, borderRadius: 18, width: '100%', overflow: 'hidden' }}>
       <div style={{ padding: '12px 16px', borderBottom: `1px solid ${correct ? C.goBorder : C.line}` }}>
-        <p style={{ color: C.caution, fontSize: 11, fontWeight: 900, letterSpacing: '0.08em' }}>BONUS · {snapshot.bonusPointsMax} {snapshot.bonusPointsMax === 1 ? 'POINT' : 'POINTS'}</p>
+        <p style={{ color: C.violet, fontSize: 11, fontWeight: 900, letterSpacing: '0.08em' }}>BONUS · {snapshot.bonusPointsMax} {snapshot.bonusPointsMax === 1 ? 'POINT' : 'POINTS'}</p>
       </div>
       <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 30px', gap: 10, alignItems: 'center' }}>
         <div className="min-w-0 flex items-center gap-2">
@@ -737,6 +737,49 @@ function PlayerBonusResult({ snapshot }: { snapshot: PlayerSnapshot }) {
         </div>
       </div>
     </div>
+  )
+}
+
+function PlayerQuestionResultSummary({ snapshot }: { snapshot: PlayerSnapshot }) {
+  const hasBonus = snapshot.bonusPointsMax > 0
+  const totalAwarded = snapshot.pointsAwarded + snapshot.bonusPointsAwarded
+  const pointLabel = (points: number) => `${points} ${points === 1 ? 'point' : 'points'}`
+
+  return (
+    <>
+      <div className="w-full space-y-2">
+        {isCompoundResultType(snapshot.questionType) && snapshot.reviewItems.length > 0 ? (
+          <PlayerAnswerBreakdown snapshot={snapshot} />
+        ) : (
+          <PlayerSimpleAnswerResult snapshot={snapshot} />
+        )}
+        <PlayerBonusResult snapshot={snapshot} />
+      </div>
+
+      <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="w-full overflow-hidden rounded-2xl">
+        {hasBonus ? (
+          <>
+            <div className="grid grid-cols-2">
+              <div className="px-4 py-3 text-center" style={{ borderLeft: `1px solid ${C.line}` }}>
+                <p style={{ color: C.sub }} className="text-[10px] font-black uppercase tracking-[0.1em]">Main</p>
+                <p style={{ color: snapshot.pointsAwarded > 0 ? C.go : C.sub }} className="mt-1 text-lg font-black">+{pointLabel(snapshot.pointsAwarded)}</p>
+              </div>
+              <div className="px-4 py-3 text-center">
+                <p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-[0.1em]">Bonus</p>
+                <p style={{ color: snapshot.bonusPointsAwarded > 0 ? C.go : C.sub }} className="mt-1 text-lg font-black">+{pointLabel(snapshot.bonusPointsAwarded)}</p>
+              </div>
+            </div>
+            <div style={{ background: totalAwarded > 0 ? C.goMist : C.ground, borderTop: `1px solid ${totalAwarded > 0 ? C.goBorder : C.line}` }} className="px-4 py-3 text-center">
+              <p style={{ color: totalAwarded > 0 ? C.go : C.sub }} className="text-xl font-black">+{pointLabel(totalAwarded)} this question</p>
+            </div>
+          </>
+        ) : (
+          <div style={{ background: snapshot.pointsAwarded > 0 ? C.goMist : C.ground }} className="px-4 py-3 text-center">
+            <p style={{ color: snapshot.pointsAwarded > 0 ? C.go : C.sub }} className="text-xl font-black">+{pointLabel(snapshot.pointsAwarded)}</p>
+          </div>
+        )}
+      </section>
+    </>
   )
 }
 
@@ -1051,9 +1094,9 @@ function PlayerQuestionCard({
   return (
     <section
       style={{
-        background: bonus ? C.cautionMist : C.panel,
-        border: `1px solid ${bonus ? C.cautionBorder : C.line}`,
-        borderLeft: `4px solid ${bonus ? C.caution : C.violet}`,
+        background: bonus ? C.violetPale : C.panel,
+        border: `1px solid ${bonus ? '#C4B5FD' : C.line}`,
+        borderLeft: `4px solid ${C.violet}`,
         borderRadius: 18,
         boxShadow: '0 8px 24px rgba(44, 37, 80, 0.06)',
         padding: '17px 18px 18px',
@@ -1061,7 +1104,7 @@ function PlayerQuestionCard({
       className="mb-5 text-left"
     >
       {eyebrow && (
-        <p style={{ color: bonus ? C.caution : C.violet }} className="mb-2 text-[10px] font-black uppercase tracking-[0.13em]">
+        <p style={{ color: C.violet }} className="mb-2 text-[10px] font-black uppercase tracking-[0.13em]">
           {eyebrow}
         </p>
       )}
@@ -2159,13 +2202,13 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
             <p style={{ color: C.ink, fontSize: 18, fontWeight: 800 }}>{snapshot.answer || 'Submitted'}</p>
           </div>
           {question?.has_bonus && !question.bonus && (
-            <div style={{ background: C.cautionMist, border: `1px solid ${C.cautionBorder}`, borderRadius: 14, width: '100%', padding: '12px 16px', textAlign: 'center' }}>
-              <p style={{ color: C.caution, fontSize: 14, fontWeight: 800 }}>★ Bonus question coming next</p>
+            <div style={{ background: C.violetPale, border: `1px solid #C4B5FD`, borderRadius: 14, width: '100%', padding: '12px 16px', textAlign: 'center' }}>
+              <p style={{ color: C.violet, fontSize: 14, fontWeight: 800 }}>★ Bonus question coming next</p>
             </div>
           )}
           {snapshot.bonusAnswer && (
-            <div style={{ background: C.cautionMist, border: `1px solid ${C.cautionBorder}`, borderRadius: 14, width: '100%', padding: '12px 16px' }}>
-              <p style={{ color: C.caution, fontSize: 11, fontWeight: 900, letterSpacing: '0.08em' }}>BONUS ANSWER LOCKED</p>
+            <div style={{ background: C.violetPale, border: `1px solid #C4B5FD`, borderRadius: 14, width: '100%', padding: '12px 16px' }}>
+              <p style={{ color: C.violet, fontSize: 11, fontWeight: 900, letterSpacing: '0.08em' }}>BONUS ANSWER LOCKED</p>
               <p style={{ color: C.ink, fontSize: 16, fontWeight: 800, marginTop: 5 }}>{snapshot.bonusAnswer}</p>
             </div>
           )}
@@ -2203,26 +2246,11 @@ function Correct({ go }: { go: (s: PlayerScreen) => void }) {
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
       <div className="flex-1 overflow-y-auto px-5 py-5">
-        <p style={{ color: C.sub, fontSize: 14, lineHeight: 1.5, marginBottom: 20 }}>{snapshot.prompt}</p>
+        <PlayerQuestionCard prompt={snapshot.prompt || 'Question result'} />
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
           <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 26, color: C.go }}>✓</span></div>
           <h1 style={{ color: C.go, fontSize: 38 }} className="font-black">Correct!</h1>
-          {isCompoundResultType(snapshot.questionType) && snapshot.reviewItems.length > 0 ? (
-            <PlayerAnswerBreakdown snapshot={snapshot} />
-          ) : (
-            <PlayerSimpleAnswerResult snapshot={snapshot} />
-          )}
-          {!isCompoundResultType(snapshot.questionType) && (
-            <div style={{ background: C.goMist, border: `1px solid ${C.goBorder}`, borderRadius: 14, width: '100%', padding: '12px 20px', textAlign: 'center' }}>
-              <p style={{ color: C.go, fontSize: 22, fontWeight: 900 }}>+{snapshot.pointsAwarded} {snapshot.pointsAwarded === 1 ? 'point' : 'points'}</p>
-            </div>
-          )}
-          {isCompoundResultType(snapshot.questionType) && snapshot.reviewItems.length > 0 && (
-            <div style={{ background: C.goMist, border: `1px solid ${C.goBorder}`, borderRadius: 14, width: '100%', padding: '12px 20px', textAlign: 'center' }}>
-              <p style={{ color: C.go, fontSize: 22, fontWeight: 900 }}>+{snapshot.pointsAwarded} {snapshot.pointsAwarded === 1 ? 'point' : 'points'}</p>
-            </div>
-          )}
-          <PlayerBonusResult snapshot={snapshot} />
+          <PlayerQuestionResultSummary snapshot={snapshot} />
           {scoresVisible && <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>}
           <WaitMsg msg="Waiting for the next question…" />
         </div>
@@ -2239,16 +2267,11 @@ function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
       <div className="flex-1 overflow-y-auto px-5 py-5">
-        <p style={{ color: C.sub, fontSize: 14, lineHeight: 1.5, marginBottom: 20 }}>{snapshot.prompt}</p>
+        <PlayerQuestionCard prompt={snapshot.prompt || 'Question result'} />
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
           <div style={{ background: C.stopMist, borderRadius: 999, border: `2px solid ${C.stopBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 28, color: C.stop }}>×</span></div>
           <h1 style={{ color: C.ink, fontSize: 36 }} className="font-black">Not quite</h1>
-          {isCompoundResultType(snapshot.questionType) && snapshot.reviewItems.length > 0 ? (
-            <PlayerAnswerBreakdown snapshot={snapshot} />
-          ) : (
-            <PlayerSimpleAnswerResult snapshot={snapshot} />
-          )}
-          <PlayerBonusResult snapshot={snapshot} />
+          <PlayerQuestionResultSummary snapshot={snapshot} />
           {scoresVisible && <div style={{ background: C.ground, borderRadius: 14, border: `1px solid ${C.line}`, width: '100%', padding: '12px 20px', textAlign: 'center' }}><p style={{ color: C.ink, fontSize: 22, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Your score</p></div>}
           <WaitMsg msg="Waiting for the next question…" />
         </div>
@@ -2347,6 +2370,7 @@ function RoundResults() {
 // ─── SCREEN 18 — DELAYED REVEAL ───────────────────────────────────────────────
 function DelayedReveal({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
   const fullyCorrect = snapshot.pointsAwarded > 0 && snapshot.pointsAwarded >= snapshot.pointsMax
   const partiallyCorrect = snapshot.pointsAwarded > 0 && snapshot.pointsAwarded < snapshot.pointsMax
   const resultTitle = !snapshot.answer
@@ -2361,25 +2385,14 @@ function DelayedReveal({ go }: { go: (s: PlayerScreen) => void }) {
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={`${snapshot.roundLabel} — Answers`} question={snapshot.questionLabel} />
 
-      <div className="flex-1 px-5 py-6">
-        <h2 style={{ color: C.ink, fontSize: 20, lineHeight: 1.35, fontWeight: 900, marginBottom: 20 }}>
-          {snapshot.prompt || 'Loading answer…'}
-        </h2>
-
-        <div style={{ background: C.ground, border: `1px solid ${C.line}`, borderRadius: 14, padding: '14px 18px', marginBottom: 16 }}>
-          <p style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Your answer</p>
-          <p style={{ color: C.ink, fontSize: 20, fontWeight: 800 }}>{snapshot.answer || 'No answer'}</p>
+      <div className="flex-1 overflow-y-auto px-5 py-5">
+        <PlayerQuestionCard prompt={snapshot.prompt || 'Loading answer…'} />
+        <div className="flex flex-col items-center gap-4">
+          <h1 style={{ color: fullyCorrect || partiallyCorrect ? C.go : C.ink, fontSize: 30 }} className="font-black">{resultTitle}</h1>
+          <PlayerQuestionResultSummary snapshot={snapshot} />
+          {scoresVisible && <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>}
+          <WaitMsg msg="Waiting for the next answer…" />
         </div>
-
-        <div style={{ background: C.goMist, border: `1px solid ${C.goBorder}`, borderRadius: 14, padding: '14px 18px', marginBottom: 12 }}>
-          <p style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Correct answer</p>
-          <p style={{ color: C.go, fontSize: 20, fontWeight: 800 }}>{snapshot.correctAnswer}</p>
-        </div>
-        <div style={{ background: fullyCorrect || partiallyCorrect ? C.goMist : C.ground, border: `1px solid ${fullyCorrect || partiallyCorrect ? C.goBorder : C.line}`, borderRadius: 12, padding: '12px 18px', textAlign: 'center' }}>
-          <p style={{ color: fullyCorrect || partiallyCorrect ? C.go : C.ink, fontSize: 20, fontWeight: 900 }}>{resultTitle}</p>
-          <p style={{ color: C.sub, fontSize: 13, marginTop: 3 }}>+{snapshot.pointsAwarded} {snapshot.pointsAwarded === 1 ? 'point' : 'points'}</p>
-        </div>
-        <div style={{ marginTop: 20 }}><WaitMsg msg="Waiting for the next answer…" /></div>
       </div>
     </div>
   )
@@ -2706,17 +2719,11 @@ function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
       <div className="flex-1 overflow-y-auto px-5 py-5">
-        <p style={{ color: C.sub, fontSize: 14, lineHeight: 1.5, marginBottom: 18 }}>{snapshot.prompt}</p>
+        <PlayerQuestionCard prompt={snapshot.prompt || 'Question result'} />
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
           <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.go, fontWeight: 900 }}>½</div>
           <h1 style={{ color: C.ink, fontSize: 30 }} className="font-black">{totalAwarded} of {totalMax} points</h1>
-          <p style={{ color: C.go, fontSize: 18, fontWeight: 800 }}>+{totalAwarded} points</p>
-          {isCompoundResultType(snapshot.questionType) && snapshot.reviewItems.length > 0 ? (
-            <PlayerAnswerBreakdown snapshot={snapshot} />
-          ) : (
-            <PlayerSimpleAnswerResult snapshot={snapshot} />
-          )}
-          <PlayerBonusResult snapshot={snapshot} />
+          <PlayerQuestionResultSummary snapshot={snapshot} />
           {scoresVisible && <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>}
           <WaitMsg msg="Waiting for the next question…" />
         </div>

@@ -571,12 +571,12 @@ function QuestionCard({
             <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">{questionTypeLabel(question.mechanic)}</span>
             {question.category_names.length > 0 ? <span className="text-xs text-zinc-500">{question.category_names.length === 1 ? question.category_names[0] : "Mixed categories"}</span> : null}
             {difficultyLabel(question.editorial_difficulty) ? <span className="text-xs text-zinc-500">· {difficultyLabel(question.editorial_difficulty)}</span> : null}
-            {bonus.enabled ? <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">+ {bonus.points} pt bonus</span> : null}
+            {bonus.enabled ? <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">+ {bonus.points} pt bonus</span> : null}
             {editable ? <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${statusColors[question.status]}`}>{question.status.replace("_", " ")}</span> : null}
           </div>
           <h2 className="text-[15px] font-bold leading-6 text-zinc-900">{question.prompt}</h2>
           <p className="mt-2 truncate text-sm text-zinc-500"><span className="font-medium text-zinc-700">Answer:</span> {answerSummary(question)}</p>
-          {bonus.enabled ? <p className="mt-1 truncate text-sm text-amber-700"><span className="font-medium">Bonus:</span> {bonus.prompt}</p> : null}
+          {bonus.enabled ? <p className="mt-1 truncate text-sm text-violet-700"><span className="font-medium">Bonus:</span> {bonus.prompt}</p> : null}
           <QuestionUsageIndicator usages={usages} />
           {question.tag_names.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-1.5">
@@ -813,7 +813,7 @@ function QuestionEditor({
             )}
           </div>
 
-          <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
+          <div className="rounded-2xl border border-violet-200 bg-violet-50/60 p-5">
             <OptionalEditorField
               label="Bonus question (Optional)"
               shown={showBonus}
@@ -824,40 +824,40 @@ function QuestionEditor({
               }}
             >
               <div className="space-y-4">
-                <p className="text-xs leading-5 text-amber-800">Add one optional bonus worth its own points. It stays attached to this question but does not increase the normal question count.</p>
+                <p className="text-xs leading-5 text-violet-800">Add one optional bonus worth its own points. It stays attached to this question but does not increase the normal question count.</p>
                 <label className="block">
                   <span className="text-sm font-semibold text-zinc-700">Bonus question text</span>
-                  <textarea value={bonus.prompt} onChange={(event) => setBonus({ ...bonus, prompt: event.target.value })} rows={2} className="mt-2 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" placeholder="What extra question would you like to ask?" />
+                  <textarea value={bonus.prompt} onChange={(event) => setBonus({ ...bonus, prompt: event.target.value })} rows={2} className="mt-2 w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="What extra question would you like to ask?" />
                 </label>
                 <div className="grid gap-4 md:grid-cols-[1fr_8rem]">
                   <label className="block">
                     <span className="text-sm font-semibold text-zinc-700">Correct answer</span>
-                    <input value={bonus.answer} onChange={(event) => setBonus({ ...bonus, answer: event.target.value })} className="mt-2 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" />
+                    <input value={bonus.answer} onChange={(event) => setBonus({ ...bonus, answer: event.target.value })} className="mt-2 w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" />
                   </label>
                   <label className="block">
                     <span className="text-sm font-semibold text-zinc-700">Points</span>
-                    <input type="number" min={1} step={1} value={bonus.points} onChange={(event) => setBonus({ ...bonus, points: Number(event.target.value) })} className="mt-2 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" />
+                    <input type="number" min={1} step={1} value={bonus.points} onChange={(event) => setBonus({ ...bonus, points: Number(event.target.value) })} className="mt-2 w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" />
                   </label>
                 </div>
-                <input value={bonus.aliases} onChange={(event) => setBonus({ ...bonus, aliases: event.target.value })} className="w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" placeholder="Accepted alternatives, separated by commas" />
+                <input value={bonus.aliases} onChange={(event) => setBonus({ ...bonus, aliases: event.target.value })} className="w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="Accepted alternatives, separated by commas" />
                 <label className="block">
                   <span className="text-sm font-semibold text-zinc-700">Image (Optional)</span>
-                  <input type="url" value={bonus.imageUrl} onChange={(event) => setBonus({ ...bonus, imageUrl: event.target.value })} className="mt-2 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500" placeholder="https://…" />
+                  <input type="url" value={bonus.imageUrl} onChange={(event) => setBonus({ ...bonus, imageUrl: event.target.value })} className="mt-2 w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="https://…" />
                 </label>
 
-                <div className="rounded-xl border border-amber-200 bg-white p-4">
+                <div className="rounded-xl border border-violet-200 bg-white p-4">
                   <OptionalEditorField label="Bonus details (Optional)" shown={showBonusDetails} summary={bonusDetailsSummary} onToggle={() => setShowBonusDetails((value) => !value)}>
                     <div className="space-y-4">
                       <label className="block">
                         <span className="text-sm font-semibold text-zinc-700">Category</span>
-                        <select value={bonus.primaryCategoryId} onChange={(event) => setBonus({ ...bonus, primaryCategoryId: event.target.value, secondaryCategoryIds: bonus.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
+                        <select value={bonus.primaryCategoryId} onChange={(event) => setBonus({ ...bonus, primaryCategoryId: event.target.value, secondaryCategoryIds: bonus.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
                           <option value="">Inherit from main question</option>
                           {taxonomy.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                         </select>
                       </label>
                       <label className="block">
                         <span className="text-sm font-semibold text-zinc-700">Difficulty</span>
-                        <select value={bonus.editorialDifficulty} onChange={(event) => setBonus({ ...bonus, editorialDifficulty: event.target.value ? Number(event.target.value) : "" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-amber-500">
+                        <select value={bonus.editorialDifficulty} onChange={(event) => setBonus({ ...bonus, editorialDifficulty: event.target.value ? Number(event.target.value) : "" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
                           <option value="">Inherit from main question</option>{TRIVIA_DIFFICULTIES.map((option, index) => <option key={option} value={index + 1}>{index + 1} · {option}</option>)}
                         </select>
                       </label>

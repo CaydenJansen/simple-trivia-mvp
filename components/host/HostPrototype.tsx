@@ -1982,6 +1982,14 @@ function QuizBuilder({ go }: { go: Go }) {
               setDirty(true)
             }}
             onCycle={id => { void cycleLibraryTiebreaker(id) }}
+            onReorder={orderedIds => {
+              const byId = new Map(tiebreakers.map(tiebreaker => [tiebreaker.id, tiebreaker]))
+              setTiebreakers(orderedIds.flatMap(id => {
+                const tiebreaker = byId.get(id)
+                return tiebreaker ? [tiebreaker] : []
+              }))
+              setDirty(true)
+            }}
           />
         </main>
 
@@ -2184,7 +2192,7 @@ function QuizBuilder({ go }: { go: Go }) {
   )
 }
 
-function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, onEdit, onDelete, onCycle }: {
+function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, onEdit, onDelete, onCycle, onReorder }: {
   tiebreakers: BuilderTiebreakerData[]
   replacingId: string | null
   replacementError: string | null
@@ -2192,8 +2200,110 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
   onEdit: (id: string) => void
   onDelete: (id: string) => void
   onCycle: (id: string) => void
+  onReorder: (orderedIds: string[]) => void
 }) {
   const belowRecommendation = needsMoreManualTiebreakers(tiebreakers.length)
+  const [dragPreview, setDragPreview] = useState<{
+    id: string
+    offsetY: number
+    originalIndex: number
+    insertionIndex: number
+    itemHeight: number
+  } | null>(null)
+  const [settlingIds, setSettlingIds] = useState<string[]>([])
+  const suppressEditRef = useRef(false)
+  const tiebreakerIds = tiebreakers.map(tiebreaker => tiebreaker.id)
+
+  function dragTransform(id: string) {
+    if (!dragPreview) return undefined
+    if (id === dragPreview.id) return `translate3d(0, ${dragPreview.offsetY}px, 0)`
+    const itemIndex = tiebreakerIds.indexOf(id)
+    const distance = dragPreview.itemHeight + 10
+    if (dragPreview.insertionIndex > dragPreview.originalIndex && itemIndex > dragPreview.originalIndex && itemIndex <= dragPreview.insertionIndex) {
+      return `translate3d(0, -${distance}px, 0)`
+    }
+    if (dragPreview.insertionIndex < dragPreview.originalIndex && itemIndex >= dragPreview.insertionIndex && itemIndex < dragPreview.originalIndex) {
+      return `translate3d(0, ${distance}px, 0)`
+    }
+    return 'translate3d(0, 0, 0)'
+  }
+
+  function startTiebreakerDrag(id: string, event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    const pointerId = event.pointerId
+    const dragHandle = event.currentTarget
+    if (!dragHandle.hasPointerCapture(pointerId)) dragHandle.setPointerCapture(pointerId)
+    const originalIndex = tiebreakerIds.indexOf(id)
+    const itemList = dragHandle.closest<HTMLElement>('[data-tiebreaker-list]')
+    const itemBounds = itemList
+      ? [...itemList.querySelectorAll<HTMLElement>('[data-tiebreaker-id]')]
+        .map(element => ({ id: element.dataset.tiebreakerId ?? '', bounds: element.getBoundingClientRect() }))
+        .filter(item => item.id)
+      : []
+    const draggedBounds = itemBounds.find(item => item.id === id)?.bounds
+    if (originalIndex < 0 || !draggedBounds) return
+
+    const otherItemCentres = itemBounds
+      .filter(item => item.id !== id)
+      .map(item => item.bounds.top + item.bounds.height / 2)
+    const startX = event.clientX
+    const startY = event.clientY
+    let latestPointerY = startY
+    let latestInsertionIndex = originalIndex
+    let moved = false
+    let animationFrame: number | null = null
+    const insertionIndexForY = (pointerY: number) => {
+      const draggedCentreY = draggedItemCentreY(draggedBounds.top, draggedBounds.height, startY, pointerY)
+      return insertionIndexWithHysteresis(otherItemCentres, latestInsertionIndex, draggedCentreY)
+    }
+    const updatePreview = () => {
+      animationFrame = null
+      latestInsertionIndex = insertionIndexForY(latestPointerY)
+      setDragPreview({ id, offsetY: latestPointerY - startY, originalIndex, insertionIndex: latestInsertionIndex, itemHeight: draggedBounds.height })
+    }
+    const move = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return
+      latestPointerY = moveEvent.clientY
+      if (Math.hypot(moveEvent.clientX - startX, latestPointerY - startY) > 4) moved = true
+      if (animationFrame === null) animationFrame = window.requestAnimationFrame(updatePreview)
+    }
+    const finish = (finishEvent: PointerEvent) => {
+      if (finishEvent.pointerId !== pointerId) return
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame)
+      latestPointerY = finishEvent.clientY
+      if (Math.hypot(finishEvent.clientX - startX, latestPointerY - startY) > 4) moved = true
+      latestInsertionIndex = insertionIndexForY(latestPointerY)
+      if (moved) {
+        suppressEditRef.current = true
+        window.setTimeout(() => { suppressEditRef.current = false }, 100)
+      }
+      if (finishEvent.type === 'pointerup' && latestInsertionIndex !== originalIndex) {
+        const nextOrder = moveKeyToIndex(tiebreakerIds, id, latestInsertionIndex)
+        const affectedStart = Math.min(originalIndex, latestInsertionIndex)
+        const affectedEnd = Math.max(originalIndex, latestInsertionIndex)
+        const affectedIds = tiebreakerIds.slice(affectedStart, affectedEnd + 1)
+        flushSync(() => {
+          setSettlingIds(affectedIds)
+          onReorder(nextOrder)
+          setDragPreview(null)
+        })
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => setSettlingIds([])))
+      } else {
+        setDragPreview(null)
+      }
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      if (dragHandle.hasPointerCapture(pointerId)) dragHandle.releasePointerCapture(pointerId)
+    }
+
+    updatePreview()
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+  }
 
   return (
     <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-4">
@@ -2215,17 +2325,20 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
           No prepared tiebreakers. This will not prevent you from saving or hosting the quiz.
         </div>
       ) : (
-        <div className="mt-3 space-y-2.5">
+        <div data-tiebreaker-list className="mt-3 space-y-2.5">
           {tiebreakers.map((tiebreaker, index) => {
             const isLibraryTiebreaker = tiebreaker.sourceTiebreakerId !== null
             const replacing = replacingId === tiebreaker.id
             return (
             <div
               key={tiebreaker.id}
+              data-tiebreaker-id={tiebreaker.id}
               role="button"
               tabIndex={0}
               aria-label={`Edit tiebreaker ${index + 1}`}
-              onClick={() => onEdit(tiebreaker.id)}
+              onClick={() => {
+                if (!suppressEditRef.current) onEdit(tiebreaker.id)
+              }}
               onKeyDown={event => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
@@ -2237,7 +2350,17 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
               background: isLibraryTiebreaker ? '#F7F5FF' : 'white',
               boxShadow: isLibraryTiebreaker ? `inset 3px 0 0 ${C.violet}` : undefined,
               opacity: replacing ? 0.6 : 1,
-            }} className="group flex cursor-pointer items-start gap-3 rounded-xl px-3 py-3 transition-all hover:border-violet hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-violet/25">
+              transform: dragTransform(tiebreaker.id),
+            }} className={`group relative flex cursor-pointer items-start gap-3 rounded-xl px-3 py-3 will-change-transform hover:border-violet hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-violet/25 ${dragPreview?.id === tiebreaker.id ? 'z-20 cursor-grabbing opacity-90 shadow-xl ring-2 ring-violet/25 transition-[opacity,box-shadow] duration-150' : settlingIds.includes(tiebreaker.id) ? 'transition-none' : 'transition-all duration-150 ease-out'}`}>
+              <button
+                type="button"
+                aria-label={`Drag tiebreaker ${index + 1} to reorder`}
+                title="Drag to reorder"
+                onPointerDown={event => startTiebreakerDrag(tiebreaker.id, event)}
+                onClick={event => event.stopPropagation()}
+                style={{ color: C.sub }}
+                className="mt-0.5 shrink-0 touch-none select-none cursor-grab transition-colors hover:text-ink active:cursor-grabbing"
+              ><I.grip /></button>
               <div className="min-w-0 flex-1">
                 {isLibraryTiebreaker && (
                   <div className="mb-2 flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-violet-700">
@@ -2253,10 +2376,13 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Chip color="violet">Closest Answer</Chip>
+                  <span style={{ color: C.violet }} className="ml-1 flex items-center gap-1 text-[11px] font-semibold opacity-0 transition-opacity group-hover:opacity-100">
+                    <I.pencil /> Edit
+                  </span>
                 </div>
-                <div style={{ background: C.ground, border: `1px solid ${C.line}` }} className="mt-3 rounded-lg px-3 py-2 text-xs">
-                  <span style={{ color: C.sub }} className="font-bold uppercase tracking-wide">Answer</span>
-                  <span style={{ color: C.go }} className="ml-2 font-bold">{tiebreaker.correctValue || 'Not set'}{tiebreaker.answerUnit ? ` ${tiebreaker.answerUnit}` : ''}</span>
+                <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-3 rounded-lg px-3 py-2 text-xs">
+                  <span style={{ color: C.go }} className="font-bold">Answer:</span>
+                  <span style={{ color: C.ink }} className="ml-2 font-bold">{tiebreaker.correctValue || 'Not set'}{tiebreaker.answerUnit ? ` ${tiebreaker.answerUnit}` : ''}</span>
                   {tiebreaker.notes ? <span style={{ color: C.sub }}> · {tiebreaker.notes}</span> : null}
                 </div>
               </div>
@@ -2466,7 +2592,7 @@ function BuilderQuestionAnswerPreview({ question }: { question: BuilderQuestionD
 
   return (
     <div className="mt-3 space-y-2">
-      <div style={{ border: `1px solid ${C.go}30`, background: '#f0fdf9' }} className="rounded-lg px-3 py-2.5">
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel }} className="rounded-lg px-3 py-2.5">
         {question.questionType === 'multiple-choice' ? (
           <div className="grid gap-1.5 sm:grid-cols-2">
             {options.map((option, optionIndex) => {
@@ -2531,8 +2657,8 @@ function BuilderQuestionAnswerPreview({ question }: { question: BuilderQuestionD
       </div>
 
       {bonus.enabled && (
-        <div style={{ border: `1px solid ${C.caution}35`, background: '#fffbeb' }} className="rounded-lg px-3 py-2.5 text-xs">
-          <p style={{ color: C.caution }} className="font-bold">Bonus · {bonus.points} {bonus.points === 1 ? 'point' : 'points'}</p>
+        <div style={{ border: `1px solid ${C.violet}35`, background: C.violetMist }} className="rounded-lg px-3 py-2.5 text-xs">
+          <p style={{ color: C.violet }} className="font-bold">Bonus · {bonus.points} {bonus.points === 1 ? 'point' : 'points'}</p>
           <p style={{ color: C.ink }} className="mt-1 font-semibold">{bonus.prompt || '—'}</p>
           <p style={{ color: C.sub }} className="mt-0.5"><span className="font-bold">Answer:</span> {bonus.answer || '—'}</p>
         </div>
@@ -2621,10 +2747,10 @@ function QuizPreview({ title, rounds, onClose }: {
                   )}
                 </div>
                 {activeBonus?.enabled && (
-                  <div className="mx-auto mt-4 max-w-md rounded-2xl border border-amber-300/30 bg-amber-300/10 px-5 py-4 text-center">
-                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-300">Bonus · {activeBonus.points} {activeBonus.points === 1 ? 'point' : 'points'}</p>
+                  <div className="mx-auto mt-4 max-w-md rounded-2xl border border-violet-300/30 bg-violet-300/10 px-5 py-4 text-center">
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-violet-300">Bonus · {activeBonus.points} {activeBonus.points === 1 ? 'point' : 'points'}</p>
                     <p className="mt-2 text-base font-bold text-white">{activeBonus.prompt}</p>
-                    <p className="mt-2 text-sm text-amber-100">Answer: {activeBonus.answer}</p>
+                    <p className="mt-2 text-sm text-violet-100">Answer: {activeBonus.answer}</p>
                   </div>
                 )}
               </div>
