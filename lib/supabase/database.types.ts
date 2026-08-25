@@ -1130,6 +1130,7 @@ type SourceQuestionCatalogRow = {
   tag_ids: string[]
   tag_names: string[]
   bonus: Json | null
+  search_text: string
 }
 
 type ControlledLookupTable = {

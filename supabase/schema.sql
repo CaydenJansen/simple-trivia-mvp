@@ -875,7 +875,15 @@ select
   coalesce(category_metadata.category_names, '{}'::text[]) as category_names,
   coalesce(tag_metadata.tag_ids, '{}'::uuid[]) as tag_ids,
   coalesce(tag_metadata.tag_names, '{}'::text[]) as tag_names,
-  bonus_metadata.bonus
+  bonus_metadata.bonus,
+  concat_ws(
+    ' ',
+    source_questions.prompt,
+    source_questions.correct_answer::text,
+    source_questions.accepted_answers::text,
+    source_questions.options::text,
+    bonus_metadata.bonus::text
+  ) as search_text
 from public.source_questions
 left join lateral (
   select

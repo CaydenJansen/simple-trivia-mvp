@@ -1253,6 +1253,7 @@ function QuizBuilder({ go }: { go: Go }) {
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
+  const [editingTiebreakerId, setEditingTiebreakerId] = useState<string | null>(null)
   const [newQuestionRoundId, setNewQuestionRoundId] = useState<number | null>(null)
   const [addMenuRoundId, setAddMenuRoundId] = useState<number | null>(null)
   const [picker, setPicker] = useState<{ roundId: number; origin: 'user' | 'platform' } | null>(null)
@@ -1770,13 +1771,22 @@ function QuizBuilder({ go }: { go: Go }) {
           className="flex items-center gap-1.5 text-sm font-medium hover:text-violet transition-colors shrink-0">
           <I.back /> My Quizzes
         </button>
-        <div className="flex-1 flex justify-center">
-          <input
-            value={title}
-            onChange={e => { setTitle(e.target.value); setDirty(true) }}
-            style={{ color: C.ink, borderBottom: `2px solid transparent` }}
-            className="text-[15px] font-bold text-center bg-transparent px-2 py-0.5 transition-colors hover:border-b-line focus:border-b-violet focus:outline-none min-w-[200px]"
-          />
+        <div className="flex flex-1 justify-center">
+          <div
+            title="Click to rename this quiz"
+            style={{ border: `1px solid ${C.line}`, background: C.ground }}
+            className="group flex min-w-[250px] items-center gap-2 rounded-xl px-3 py-1.5 transition-colors hover:border-violet/40 hover:bg-violet-mist"
+          >
+            <span style={{ color: C.sub }} className="text-[10px] font-extrabold uppercase tracking-wider">Quiz name</span>
+            <input
+              aria-label="Quiz name"
+              value={title}
+              onChange={e => { setTitle(e.target.value); setDirty(true) }}
+              style={{ color: C.ink }}
+              className="min-w-0 flex-1 bg-transparent text-center text-[15px] font-bold focus:outline-none"
+            />
+            <span style={{ color: C.sub }} className="transition-colors group-hover:text-violet"><I.pencil /></span>
+          </div>
         </div>
         <div style={{ color: C.sub }} className="text-xs flex items-center gap-2 shrink-0">
           <span className="font-mono">{questionCount}q</span>
@@ -1952,15 +1962,12 @@ function QuizBuilder({ go }: { go: Go }) {
             replacingId={replacingLibraryTiebreakerId}
             replacementError={tiebreakerReplacementError}
             onAdd={() => {
-              setTiebreakers(current => [...current, blankBuilderTiebreaker()])
+              const tiebreaker = blankBuilderTiebreaker()
+              setTiebreakers(current => [...current, tiebreaker])
+              setEditingTiebreakerId(tiebreaker.id)
               setDirty(true)
             }}
-            onUpdate={(id, updates) => {
-              setTiebreakers(current => current.map(tiebreaker => tiebreaker.id === id
-                ? { ...tiebreaker, ...updates }
-                : tiebreaker))
-              setDirty(true)
-            }}
+            onEdit={setEditingTiebreakerId}
             onDelete={id => {
               setTiebreakers(current => current.filter(tiebreaker => tiebreaker.id !== id))
               setDirty(true)
@@ -2020,6 +2027,21 @@ function QuizBuilder({ go }: { go: Go }) {
               })))
               setDirty(true)
               setEditingQuestionId(null)
+            }}
+          />
+        ) : null
+      })()}
+
+      {editingTiebreakerId && (() => {
+        const tiebreaker = tiebreakers.find(item => item.id === editingTiebreakerId)
+        return tiebreaker ? (
+          <TiebreakerEditor
+            tiebreaker={tiebreaker}
+            onClose={() => setEditingTiebreakerId(null)}
+            onSave={updated => {
+              setTiebreakers(current => current.map(item => item.id === updated.id ? updated : item))
+              setDirty(true)
+              setEditingTiebreakerId(null)
             }}
           />
         ) : null
@@ -2153,12 +2175,12 @@ function QuizBuilder({ go }: { go: Go }) {
   )
 }
 
-function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, onUpdate, onDelete, onCycle }: {
+function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, onEdit, onDelete, onCycle }: {
   tiebreakers: BuilderTiebreakerData[]
   replacingId: string | null
   replacementError: string | null
   onAdd: () => void
-  onUpdate: (id: string, updates: Partial<BuilderTiebreakerData>) => void
+  onEdit: (id: string) => void
   onDelete: (id: string) => void
   onCycle: (id: string) => void
 }) {
@@ -2189,21 +2211,47 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
             const isLibraryTiebreaker = tiebreaker.sourceTiebreakerId !== null
             const replacing = replacingId === tiebreaker.id
             return (
-            <div key={tiebreaker.id} style={{
+            <div
+              key={tiebreaker.id}
+              role="button"
+              tabIndex={0}
+              aria-label={`Edit tiebreaker ${index + 1}`}
+              onClick={() => onEdit(tiebreaker.id)}
+              onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  onEdit(tiebreaker.id)
+                }
+              }}
+              style={{
               border: `1px solid ${isLibraryTiebreaker ? '#C4B5FD' : C.line}`,
               background: isLibraryTiebreaker ? '#F7F5FF' : 'white',
               boxShadow: isLibraryTiebreaker ? `inset 3px 0 0 ${C.violet}` : undefined,
               opacity: replacing ? 0.6 : 1,
-            }} className="rounded-xl px-3 py-3 transition-all">
-              <div className="mb-2.5 flex flex-wrap items-center gap-2">
-                <p style={{ color: C.ink }} className="text-sm font-bold">Tiebreaker {index + 1}</p>
+            }} className="group cursor-pointer rounded-xl px-3 py-3 transition-all hover:border-violet/50 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-violet/25">
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p style={{ color: C.ink }} className="text-sm font-bold">Tiebreaker {index + 1}</p>
                 {isLibraryTiebreaker && (
                   <span className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-violet-700">
                     <span className="flex h-5 w-5 items-center justify-center rounded-md bg-violet-100">★</span>
                     Question Library
                   </span>
                 )}
-                <div className="ml-auto flex items-center gap-2">
+                    <span style={{ color: C.violet }} className="flex items-center gap-1 text-[11px] font-bold">
+                      <I.pencil /> Edit
+                    </span>
+                  </div>
+                  <p style={{ color: C.ink }} className="mt-2 text-sm font-semibold leading-5">
+                    {tiebreaker.prompt || 'Untitled closest-answer question'}
+                  </p>
+                  <p style={{ color: C.sub }} className="mt-1 text-xs">
+                    Answer: <span style={{ color: C.go }} className="font-bold">{tiebreaker.correctValue || 'Not set'}{tiebreaker.answerUnit ? ` ${tiebreaker.answerUnit}` : ''}</span>
+                    {tiebreaker.notes ? <span> · {tiebreaker.notes}</span> : null}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
                   {isLibraryTiebreaker && (
                     <button
                       type="button"
@@ -2218,51 +2266,6 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
                   <button type="button" onClick={() => onDelete(tiebreaker.id)} style={{ color: C.stop }} className="px-1 text-xs font-bold hover:underline">Remove</button>
                 </div>
               </div>
-              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_9rem_8rem_12rem]">
-                <label className="text-xs font-semibold" style={{ color: C.sub }}>
-                  Closest-answer question
-                  <textarea
-                    rows={2}
-                    value={tiebreaker.prompt}
-                    onChange={event => onUpdate(tiebreaker.id, { prompt: event.target.value })}
-                    placeholder="Approximately how many kilometres long is the Great Wall of China?"
-                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
-                    className="mt-1 min-h-14 w-full resize-none rounded-lg bg-white px-2.5 py-2 text-sm font-normal leading-5 focus:outline-none focus:ring-2 focus:ring-violet/30"
-                  />
-                </label>
-                <label className="text-xs font-semibold" style={{ color: C.sub }}>
-                  Correct answer
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={tiebreaker.correctValue}
-                    onChange={event => onUpdate(tiebreaker.id, { correctValue: event.target.value })}
-                    placeholder="21196"
-                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
-                    className="mt-1 w-full rounded-lg bg-white px-2.5 py-2 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
-                  />
-                </label>
-                <label className="text-xs font-semibold" style={{ color: C.sub }}>
-                  Unit
-                  <input
-                    value={tiebreaker.answerUnit}
-                    onChange={event => onUpdate(tiebreaker.id, { answerUnit: event.target.value })}
-                    placeholder="kilometres"
-                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
-                    className="mt-1 w-full rounded-lg bg-white px-2.5 py-2 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
-                  />
-                </label>
-                <label className="text-xs font-semibold" style={{ color: C.sub }}>
-                  Host notes
-                  <input
-                    value={tiebreaker.notes}
-                    onChange={event => onUpdate(tiebreaker.id, { notes: event.target.value })}
-                    placeholder="Source or context"
-                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
-                    className="mt-1 w-full rounded-lg bg-white px-2.5 py-2 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet/30"
-                  />
-                </label>
-              </div>
             </div>
           )})}
         </div>
@@ -2276,6 +2279,101 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
         </p>
       )}
     </section>
+  )
+}
+
+function TiebreakerEditor({ tiebreaker, onClose, onSave }: {
+  tiebreaker: BuilderTiebreakerData
+  onClose: () => void
+  onSave: (tiebreaker: BuilderTiebreakerData) => void
+}) {
+  const [prompt, setPrompt] = useState(tiebreaker.prompt)
+  const [correctValue, setCorrectValue] = useState(tiebreaker.correctValue)
+  const [answerUnit, setAnswerUnit] = useState(tiebreaker.answerUnit)
+  const [notes, setNotes] = useState(tiebreaker.notes)
+  const [error, setError] = useState<string | null>(null)
+
+  function save() {
+    if (!prompt.trim()) {
+      setError('Add the closest-answer question before saving.')
+      return
+    }
+    if (!isValidTiebreakerNumericValue(correctValue)) {
+      setError('The correct answer must be a number. Put words such as kilometres in the Unit field.')
+      return
+    }
+    onSave({
+      ...tiebreaker,
+      prompt: prompt.trim(),
+      correctValue: correctValue.trim(),
+      answerUnit: answerUnit.trim(),
+      notes: notes.trim(),
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-stretch justify-end">
+      <div style={{ background: 'rgba(12,11,24,0.4)' }} className="absolute inset-0 backdrop-blur-[2px]" onClick={onClose} />
+      <aside style={{ background: C.panel, borderLeft: `1px solid ${C.line}` }} className="relative flex w-[500px] flex-col shadow-2xl">
+        <header style={{ borderBottom: `1px solid ${C.line}` }} className="flex shrink-0 items-center px-6 py-4">
+          <div className="min-w-0 flex-1">
+            <h2 style={{ color: C.ink }} className="font-extrabold">Edit Tiebreaker</h2>
+            <p style={{ color: C.sub }} className="mt-0.5 text-xs">Closest numeric answer wins; this does not change trivia scores.</p>
+          </div>
+          <button type="button" aria-label="Close tiebreaker editor" onClick={onClose} style={{ color: C.sub }} className="p-1 transition-colors hover:text-ink">{I.x()}</button>
+        </header>
+
+        <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
+          {error && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
+          <Field label="Closest-answer question">
+            <textarea
+              autoFocus
+              rows={4}
+              value={prompt}
+              onChange={event => setPrompt(event.target.value)}
+              placeholder="Approximately how many kilometres long is the Great Wall of China?"
+              style={{ border: `1px solid ${C.line}`, color: C.ink }}
+              className="w-full resize-none rounded-xl bg-white px-3 py-2.5 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-violet/30"
+            />
+          </Field>
+          <Field label="Correct numeric answer">
+            <input
+              type="text"
+              inputMode="decimal"
+              value={correctValue}
+              onChange={event => setCorrectValue(event.target.value)}
+              placeholder="21196"
+              style={{ border: `1px solid ${C.line}`, color: C.ink }}
+              className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30"
+            />
+          </Field>
+          <Field label="Unit (optional)">
+            <input
+              value={answerUnit}
+              onChange={event => setAnswerUnit(event.target.value)}
+              placeholder="kilometres"
+              style={{ border: `1px solid ${C.line}`, color: C.ink }}
+              className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30"
+            />
+          </Field>
+          <Field label="Host notes (optional)">
+            <textarea
+              rows={3}
+              value={notes}
+              onChange={event => setNotes(event.target.value)}
+              placeholder="Source or context shown only to the host"
+              style={{ border: `1px solid ${C.line}`, color: C.ink }}
+              className="w-full resize-none rounded-xl bg-white px-3 py-2.5 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-violet/30"
+            />
+          </Field>
+        </div>
+
+        <footer style={{ borderTop: `1px solid ${C.line}` }} className="flex shrink-0 items-center justify-end gap-2 px-6 py-4">
+          <Btn v="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={save}>Save Tiebreaker</Btn>
+        </footer>
+      </aside>
+    </div>
   )
 }
 
@@ -2692,12 +2790,20 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
           className="touch-none select-none cursor-grab hover:text-ink active:cursor-grabbing transition-colors"
         ><I.grip /></button>
         <span style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-widest shrink-0">Round {roundNumber}</span>
-        <input
-          value={round.title}
-          onChange={e => onTitleChange(e.target.value)}
-          style={{ color: C.ink, borderBottom: `2px solid transparent` }}
-          className="font-bold flex-1 min-w-0 bg-transparent text-sm px-1 py-0.5 focus:outline-none focus:border-b-violet hover:border-b-line transition-colors"
-        />
+        <div
+          title="Click to rename this round"
+          style={{ border: `1px solid ${C.line}`, background: C.panel }}
+          className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:border-violet/40 hover:bg-violet-mist"
+        >
+          <input
+            aria-label={`Round ${roundNumber} name`}
+            value={round.title}
+            onChange={e => onTitleChange(e.target.value)}
+            style={{ color: C.ink }}
+            className="min-w-0 flex-1 bg-transparent text-sm font-bold focus:outline-none"
+          />
+          <span style={{ color: C.sub }} className="transition-colors group-hover:text-violet"><I.pencil /></span>
+        </div>
         <span style={{ color: C.sub }} className="text-xs font-mono">{round.questions.length}q</span>
         <button onClick={() => setOpen(o => !o)} style={{ color: C.sub }} className="hover:text-ink transition-colors p-0.5">
           <I.down r={!open} />
@@ -3837,68 +3943,6 @@ function AutoBuild({ go }: { go: Go }) {
             )}
           </div>
 
-          {/* Difficulty range */}
-          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
-            <label style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider block mb-4">Difficulty Range</label>
-            {/* Dual-handle slider */}
-            <div className="relative mb-5" style={{ paddingBottom: 4 }}>
-              {/* Track */}
-              <div style={{ background: C.line, height: 6 }} className="w-full rounded-full relative">
-                {/* Filled range */}
-                <div style={{
-                  position: 'absolute',
-                  left: `${(diff[0] / (diffLabels.length - 1)) * 100}%`,
-                  right: `${(((diffLabels.length - 1) - diff[1]) / (diffLabels.length - 1)) * 100}%`,
-                  height: '100%',
-                  background: C.violet,
-                  borderRadius: 4,
-                }} />
-              </div>
-              {/* Two independently draggable slider handles */}
-              <button type="button" role="slider"
-                aria-label="Minimum difficulty"
-                aria-valuemin={0} aria-valuemax={diffLabels.length - 1} aria-valuenow={diff[0]} aria-valuetext={diffLabels[diff[0]]}
-                onPointerDown={e => startDifficultyDrag('minimum', e)}
-                onKeyDown={e => {
-                  if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
-                  e.preventDefault()
-                  const value = e.key === 'Home' ? 0 : e.key === 'End' ? diff[1] : diff[0] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
-                  setDiff(current => [Math.max(0, Math.min(value, current[1])), current[1]])
-                }}
-                className="dual-range-thumb absolute p-0"
-                style={{ left: `calc(${(diff[0] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: diff[0] === diff[1] ? 3 : 2 }} />
-              <button type="button" role="slider"
-                aria-label="Maximum difficulty"
-                aria-valuemin={0} aria-valuemax={diffLabels.length - 1} aria-valuenow={diff[1]} aria-valuetext={diffLabels[diff[1]]}
-                onPointerDown={e => startDifficultyDrag('maximum', e)}
-                onKeyDown={e => {
-                  if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
-                  e.preventDefault()
-                  const value = e.key === 'Home' ? diff[0] : e.key === 'End' ? diffLabels.length - 1 : diff[1] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
-                  setDiff(current => [current[0], Math.min(diffLabels.length - 1, Math.max(value, current[0]))])
-                }}
-                className="dual-range-thumb absolute p-0"
-                style={{ left: `calc(${(diff[1] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: 2 }} />
-            </div>
-            {/* Labels */}
-            <div className="flex justify-between mb-3">
-              {diffLabels.map((l, i) => {
-                const toneStyle = difficultyToneStyle(l)
-                const isInRange = i >= diff[0] && i <= diff[1]
-                return (
-                  <span key={l} style={{
-                    color: toneStyle.text,
-                    fontWeight: (i === diff[0] || i === diff[1]) ? 700 : 500,
-                    opacity: isInRange ? 1 : 0.38,
-                  }} className="flex-1 text-center text-[11px]">{l}</span>
-                )
-              })}
-            </div>
-            <p style={{ color: C.sub }} className="text-sm">
-              Sourcing: <span style={{ color: C.ink }} className="font-semibold">{diffText()}</span>
-            </p>
-          </div>
-
           {/* Advanced content settings */}
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="overflow-hidden rounded-2xl">
             <button
@@ -3913,6 +3957,63 @@ function AutoBuild({ go }: { go: Go }) {
 
             {advancedOpen && (
               <div style={{ borderTop: `1px solid ${C.line}` }} className="space-y-6 px-5 py-5">
+                <div>
+                  <label style={{ color: C.ink }} className="block text-sm font-bold">Difficulty range</label>
+                  <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">Choose the easiest and hardest questions Auto-Build may use.</p>
+                  <div className="relative mb-5 mt-5" style={{ paddingBottom: 4 }}>
+                    <div style={{ background: C.line, height: 6 }} className="relative w-full rounded-full">
+                      <div style={{
+                        position: 'absolute',
+                        left: `${(diff[0] / (diffLabels.length - 1)) * 100}%`,
+                        right: `${(((diffLabels.length - 1) - diff[1]) / (diffLabels.length - 1)) * 100}%`,
+                        height: '100%',
+                        background: C.violet,
+                        borderRadius: 4,
+                      }} />
+                    </div>
+                    <button type="button" role="slider"
+                      aria-label="Minimum difficulty"
+                      aria-valuemin={0} aria-valuemax={diffLabels.length - 1} aria-valuenow={diff[0]} aria-valuetext={diffLabels[diff[0]]}
+                      onPointerDown={e => startDifficultyDrag('minimum', e)}
+                      onKeyDown={e => {
+                        if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+                        e.preventDefault()
+                        const value = e.key === 'Home' ? 0 : e.key === 'End' ? diff[1] : diff[0] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
+                        setDiff(current => [Math.max(0, Math.min(value, current[1])), current[1]])
+                      }}
+                      className="dual-range-thumb absolute p-0"
+                      style={{ left: `calc(${(diff[0] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: diff[0] === diff[1] ? 3 : 2 }} />
+                    <button type="button" role="slider"
+                      aria-label="Maximum difficulty"
+                      aria-valuemin={0} aria-valuemax={diffLabels.length - 1} aria-valuenow={diff[1]} aria-valuetext={diffLabels[diff[1]]}
+                      onPointerDown={e => startDifficultyDrag('maximum', e)}
+                      onKeyDown={e => {
+                        if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+                        e.preventDefault()
+                        const value = e.key === 'Home' ? diff[0] : e.key === 'End' ? diffLabels.length - 1 : diff[1] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
+                        setDiff(current => [current[0], Math.min(diffLabels.length - 1, Math.max(value, current[0]))])
+                      }}
+                      className="dual-range-thumb absolute p-0"
+                      style={{ left: `calc(${(diff[1] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: 2 }} />
+                  </div>
+                  <div className="mb-3 flex justify-between">
+                    {diffLabels.map((label, index) => {
+                      const toneStyle = difficultyToneStyle(label)
+                      const isInRange = index >= diff[0] && index <= diff[1]
+                      return (
+                        <span key={label} style={{
+                          color: toneStyle.text,
+                          fontWeight: (index === diff[0] || index === diff[1]) ? 700 : 500,
+                          opacity: isInRange ? 1 : 0.38,
+                        }} className="flex-1 text-center text-[11px]">{label}</span>
+                      )
+                    })}
+                  </div>
+                  <p style={{ color: C.sub }} className="text-sm">
+                    Sourcing: <span style={{ color: C.ink }} className="font-semibold">{diffText()}</span>
+                  </p>
+                </div>
+
                 <div>
                   <label htmlFor="auto-build-audience-fit" style={{ color: C.ink }} className="block text-sm font-bold">Audience fit</label>
                   <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">Preferred audience for the quiz. Broad questions can still be used when they are the best fit.</p>

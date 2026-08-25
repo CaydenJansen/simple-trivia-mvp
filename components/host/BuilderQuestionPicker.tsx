@@ -137,7 +137,7 @@ export default function BuilderQuestionPicker({
         </header>
 
         <div className="grid gap-3 border-b border-zinc-200 p-4 md:grid-cols-2 lg:grid-cols-6">
-          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search question, category, or topic…" className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100 lg:col-span-2" />
+          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search question, answer, category, or topic…" className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100 lg:col-span-2" />
           <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)} className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-600 outline-none focus:border-violet-500">
             <option value="">All categories</option>
             {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}

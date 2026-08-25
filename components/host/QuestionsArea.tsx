@@ -425,7 +425,7 @@ export default function QuestionsArea() {
           type="search"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search question, category, or topic…"
+          placeholder="Search question, answer, category, or topic…"
           className="rounded-xl border border-zinc-200 px-3.5 py-2.5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100 lg:col-span-2"
         />
         <select

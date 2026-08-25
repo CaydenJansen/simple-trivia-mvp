@@ -74,7 +74,7 @@ export function sourceQuestionSearchOrFilter(
   ])
 
   return [
-    ...variants.map(variant => `prompt.wfts(english).${variant}`),
+    ...variants.map(variant => `search_text.wfts(english).${variant}`),
     matchingCategoryIds.length > 0 ? `category_ids.ov.{${matchingCategoryIds.join(',')}}` : null,
     matchingTagIds.size > 0 ? `tag_ids.ov.{${[...matchingTagIds].join(',')}}` : null,
   ].filter(Boolean).join(',')
