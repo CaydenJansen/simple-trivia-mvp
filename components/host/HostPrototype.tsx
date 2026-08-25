@@ -1240,6 +1240,7 @@ function nextRoundItemPosition(round: BuilderRoundData) {
 }
 
 function QuizBuilder({ go }: { go: Go }) {
+  const quizTitleInputRef = useRef<HTMLInputElement>(null)
   const [quizId, setQuizId] = useState<string | null>(null)
   const [title, setTitle] = useState('Untitled Quiz')
   const [quizStatus, setQuizStatus] = useState<'draft' | 'ready'>('draft')
@@ -1779,13 +1780,21 @@ function QuizBuilder({ go }: { go: Go }) {
           >
             <span style={{ color: C.sub }} className="text-[10px] font-extrabold uppercase tracking-wider">Quiz name</span>
             <input
+              ref={quizTitleInputRef}
               aria-label="Quiz name"
               value={title}
               onChange={e => { setTitle(e.target.value); setDirty(true) }}
               style={{ color: C.ink }}
               className="min-w-0 flex-1 bg-transparent text-center text-[15px] font-bold focus:outline-none"
             />
-            <span style={{ color: C.sub }} className="transition-colors group-hover:text-violet"><I.pencil /></span>
+            <button
+              type="button"
+              aria-label="Rename quiz"
+              title="Rename quiz"
+              onClick={() => { quizTitleInputRef.current?.focus(); quizTitleInputRef.current?.select() }}
+              style={{ color: C.sub }}
+              className="rounded-md p-1 transition-colors hover:bg-violet-mist hover:text-violet group-hover:text-violet"
+            ><I.pencil /></button>
           </div>
         </div>
         <div style={{ color: C.sub }} className="text-xs flex items-center gap-2 shrink-0">
@@ -2228,43 +2237,42 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
               background: isLibraryTiebreaker ? '#F7F5FF' : 'white',
               boxShadow: isLibraryTiebreaker ? `inset 3px 0 0 ${C.violet}` : undefined,
               opacity: replacing ? 0.6 : 1,
-            }} className="group cursor-pointer rounded-xl px-3 py-3 transition-all hover:border-violet/50 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-violet/25">
-              <div className="flex items-start gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p style={{ color: C.ink }} className="text-sm font-bold">Tiebreaker {index + 1}</p>
+            }} className="group flex cursor-pointer items-start gap-3 rounded-xl px-3 py-3 transition-all hover:border-violet hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-violet/25">
+              <div className="min-w-0 flex-1">
                 {isLibraryTiebreaker && (
-                  <span className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-violet-700">
+                  <div className="mb-2 flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-violet-700">
                     <span className="flex h-5 w-5 items-center justify-center rounded-md bg-violet-100">★</span>
                     Question Library
-                  </span>
-                )}
-                    <span style={{ color: C.violet }} className="flex items-center gap-1 text-[11px] font-bold">
-                      <I.pencil /> Edit
-                    </span>
                   </div>
-                  <p style={{ color: C.ink }} className="mt-2 text-sm font-semibold leading-5">
+                )}
+                <div className="mb-2 flex items-start gap-2">
+                  <span style={{ color: C.sub }} className="mt-0.5 shrink-0 font-mono text-[11px]">TB{index + 1}</span>
+                  <p style={{ color: C.ink }} className="text-sm leading-snug transition-colors group-hover:text-violet">
                     {tiebreaker.prompt || 'Untitled closest-answer question'}
                   </p>
-                  <p style={{ color: C.sub }} className="mt-1 text-xs">
-                    Answer: <span style={{ color: C.go }} className="font-bold">{tiebreaker.correctValue || 'Not set'}{tiebreaker.answerUnit ? ` ${tiebreaker.answerUnit}` : ''}</span>
-                    {tiebreaker.notes ? <span> · {tiebreaker.notes}</span> : null}
-                  </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Chip color="violet">Closest Answer</Chip>
+                </div>
+                <div style={{ background: C.ground, border: `1px solid ${C.line}` }} className="mt-3 rounded-lg px-3 py-2 text-xs">
+                  <span style={{ color: C.sub }} className="font-bold uppercase tracking-wide">Answer</span>
+                  <span style={{ color: C.go }} className="ml-2 font-bold">{tiebreaker.correctValue || 'Not set'}{tiebreaker.answerUnit ? ` ${tiebreaker.answerUnit}` : ''}</span>
+                  {tiebreaker.notes ? <span style={{ color: C.sub }}> · {tiebreaker.notes}</span> : null}
+                </div>
+              </div>
+              <div className="mt-0.5 flex shrink-0 items-center gap-1" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
                   {isLibraryTiebreaker && (
                     <button
                       type="button"
                       disabled={replacingId !== null}
                       onClick={() => onCycle(tiebreaker.id)}
                       title="Automatically find another unused prepared tiebreaker"
-                      className="flex items-center gap-1.5 rounded-xl border border-violet-200 bg-white px-3 py-1.5 text-xs font-bold text-violet-700 shadow-sm transition hover:border-violet-400 hover:bg-violet-50 disabled:cursor-wait disabled:opacity-60"
+                      className="flex items-center gap-1.5 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700 shadow-sm transition hover:border-violet-400 hover:bg-violet-50 disabled:cursor-wait disabled:opacity-60"
                     >
                       <I.refresh /> {replacing ? 'Finding…' : 'Try another'}
                     </button>
                   )}
-                  <button type="button" onClick={() => onDelete(tiebreaker.id)} style={{ color: C.stop }} className="px-1 text-xs font-bold hover:underline">Remove</button>
-                </div>
+                  <IBtn icon={<I.trash />} title="Delete" onClick={() => onDelete(tiebreaker.id)} danger />
               </div>
             </div>
           )})}
@@ -2651,6 +2659,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
   onReorderItems: (orderedKeys: string[]) => void
 }) {
   const [open, setOpen] = useState(true)
+  const roundTitleInputRef = useRef<HTMLInputElement>(null)
   const [itemDragPreview, setItemDragPreview] = useState<{
     key: string
     offsetY: number
@@ -2796,13 +2805,21 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
           className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:border-violet/40 hover:bg-violet-mist"
         >
           <input
+            ref={roundTitleInputRef}
             aria-label={`Round ${roundNumber} name`}
             value={round.title}
             onChange={e => onTitleChange(e.target.value)}
             style={{ color: C.ink }}
             className="min-w-0 flex-1 bg-transparent text-sm font-bold focus:outline-none"
           />
-          <span style={{ color: C.sub }} className="transition-colors group-hover:text-violet"><I.pencil /></span>
+          <button
+            type="button"
+            aria-label={`Rename round ${roundNumber}`}
+            title={`Rename round ${roundNumber}`}
+            onClick={() => { roundTitleInputRef.current?.focus(); roundTitleInputRef.current?.select() }}
+            style={{ color: C.sub }}
+            className="rounded-md p-1 transition-colors hover:bg-violet-mist hover:text-violet group-hover:text-violet"
+          ><I.pencil /></button>
         </div>
         <span style={{ color: C.sub }} className="text-xs font-mono">{round.questions.length}q</span>
         <button onClick={() => setOpen(o => !o)} style={{ color: C.sub }} className="hover:text-ink transition-colors p-0.5">
@@ -4954,24 +4971,24 @@ function ReviewBadge({
 }) {
   if (status === 'review' && !disabled) {
     return (
-      <div className="flex items-center gap-1 shrink-0">
+      <div className="flex shrink-0 items-center gap-2">
         <button
           data-host-review-control
           onClick={event => { event.currentTarget.blur(); onCorrect() }}
           style={{ background: C.go, color: 'white' }}
-          className="px-2 py-1 rounded-md text-[10px] font-extrabold hover:opacity-90"
+          className="rounded-lg px-3 py-2 text-xs font-extrabold hover:opacity-90"
           title="Mark correct"
         >
-          ✓
+          ✓ Correct
         </button>
         <button
           data-host-review-control
           onClick={event => { event.currentTarget.blur(); onIncorrect() }}
           style={{ background: C.stop, color: 'white' }}
-          className="px-2 py-1 rounded-md text-[10px] font-extrabold hover:opacity-90"
+          className="rounded-lg px-3 py-2 text-xs font-extrabold hover:opacity-90"
           title="Mark incorrect"
         >
-          ✕
+          ✕ Incorrect
         </button>
       </div>
     )
@@ -4993,7 +5010,7 @@ function ReviewBadge({
         color: correct ? C.go : C.stop,
         border: `1px solid ${correct ? `${C.go}45` : `${C.stop}40`}`,
       }}
-      className="min-w-[78px] flex items-center justify-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-extrabold disabled:cursor-default hover:opacity-80 disabled:hover:opacity-100"
+      className="flex min-w-[104px] items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-extrabold disabled:cursor-default hover:opacity-80 disabled:hover:opacity-100"
       title={disabled ? undefined : correct ? 'Click to mark incorrect' : 'Click to mark correct'}
     >
       <span>{correct ? '✓' : '✕'}</span>
@@ -5758,7 +5775,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       </header>
 
       <div className="flex flex-1 items-start min-h-0">
-        <div className="flex-1 flex flex-col px-7 py-6 gap-5 min-w-0 pb-12">
+        <div className="mx-auto flex w-full max-w-[1500px] flex-1 flex-col gap-5 px-5 py-5 pb-12 min-w-0 lg:px-7 lg:py-6">
           {gameScreen === 'round-start' ? (
             <>
               <section
@@ -5818,7 +5835,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               </div>
             </section>
           ) : (
-          <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-6 shrink-0">
+          <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="shrink-0 rounded-2xl p-4 lg:p-5">
             <div className="mb-3 flex items-center justify-between gap-4">
               <p style={{ color: '#C4B5FD' }} className="text-[11px] font-extrabold uppercase tracking-[0.18em]">
                 On player screens
@@ -5834,7 +5851,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               </div>
             )}
 
-            <p style={{ color: C.liveText }} className="text-3xl font-extrabold leading-snug mb-5">
+            <p style={{ color: C.liveText }} className="mb-4 text-xl font-extrabold leading-snug xl:text-2xl">
               {question?.prompt ?? 'Loading question…'}
             </p>
 
@@ -6222,8 +6239,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                       className="grid items-center gap-2"
                       style={{
                         gridTemplateColumns: question?.question_type === 'multi-answer'
-                          ? 'minmax(0, 1fr) 84px'
-                          : '24px minmax(0, 1fr) 84px',
+                          ? 'minmax(0, 1fr) 120px'
+                          : '24px minmax(0, 1fr) 120px',
                       }}
                     >
                       {question?.question_type !== 'multi-answer' && (

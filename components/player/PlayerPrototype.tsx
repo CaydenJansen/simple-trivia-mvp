@@ -16,7 +16,7 @@ import { PLAYER_SESSION_KEYS, shouldResetPlayerSessionForJoinCode } from "@/lib/
 import { gameCodeFromSearch } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
 import type { Json } from "@/lib/supabase/database.types";
-import { playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
+import { multiAnswerInputCount, playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
 import { playersSeeScoresFromSettings } from "@/lib/trivia/score-visibility";
 import { gameAcceptsNewTeams, JOINABLE_GAME_STATUSES } from "@/lib/trivia/game-joining";
 import { playerTiebreakerOutcome } from "@/lib/trivia/tiebreakers";
@@ -409,7 +409,9 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
     }
 
     localStorage.setItem('simple-trivia-last-answer', answerText)
-    go('submitted')
+    // Keep the form open so teams can revise their main answer until the host
+    // closes the question (including after a bonus has been revealed).
+    setSubmitting(false)
   }
 
   return { submit, submitting, submitError }
@@ -420,10 +422,13 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void) {
   const [submitError, setSubmitError] = useState<string | null>(null)
 
   async function submit(value: string) {
-    if (submitting) return
+    if (submitting) return false
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
-    if (!gameId || !teamId) return go('join')
+    if (!gameId || !teamId) {
+      go('join')
+      return false
+    }
 
     setSubmitting(true)
     setSubmitError(null)
@@ -437,7 +442,7 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void) {
     if (gameError || !game || game.answer_phase !== 'open' || game.question_stage !== 'bonus') {
       setSubmitError('Bonus answers have closed.')
       setSubmitting(false)
-      return
+      return false
     }
 
     const answerText = value.trim()
@@ -451,13 +456,69 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void) {
       console.error('Could not submit bonus answer:', error)
       setSubmitError('Could not submit your bonus answer. Please try again.')
       setSubmitting(false)
-      return
+      return false
     }
 
-    go('bonus-submitted')
+    setSubmitting(false)
+    return true
   }
 
   return { submit, submitting, submitError }
+}
+
+function InlineBonusAnswer({ go, question, snapshot }: {
+  go: (s: PlayerScreen) => void
+  question: LiveQuestionDefinition | null
+  snapshot: PlayerSnapshot
+}) {
+  const [answer, setAnswer] = useState('')
+  const [saved, setSaved] = useState(false)
+  const bonus = playerBonusFromJson(question?.bonus)
+  const { submit, submitting, submitError } = useSubmitBonusAnswer(go)
+
+  useEffect(() => {
+    // Restore a saved bonus response when the host reopens the question.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAnswer(snapshot.bonusAnswer)
+    setSaved(snapshot.hasBonusSubmission)
+  }, [question?.question_key, snapshot.bonusAnswer, snapshot.hasBonusSubmission])
+
+  if (!bonus) return null
+
+  async function saveBonus() {
+    if (await submit(answer)) setSaved(true)
+  }
+
+  return (
+    <section style={{ background: C.cautionMist, border: `1px solid ${C.cautionBorder}`, borderRadius: 18, padding: 16, marginTop: 24 }}>
+      <div style={{ color: C.caution, fontSize: 11, fontWeight: 900, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 10 }}>
+        Bonus · {bonus.points} {bonus.points === 1 ? 'point' : 'points'}
+      </div>
+      {bonus.imageUrl && (
+        <div role="img" aria-label="Bonus image" style={{ height: 140, marginBottom: 14, borderRadius: 14, background: `${C.panel} center / contain no-repeat url(${bonus.imageUrl})` }} />
+      )}
+      <h3 style={{ color: C.ink, fontSize: 20, lineHeight: 1.3, fontWeight: 900, marginBottom: 14 }}>{bonus.prompt}</h3>
+      <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your bonus answer</label>
+      <textarea
+        rows={2}
+        value={answer}
+        onChange={event => { setAnswer(event.target.value); setSaved(false) }}
+        onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void saveBonus() })}
+        placeholder="Type your bonus answer…"
+        style={{ border: `2px solid ${answer ? C.caution : C.cautionBorder}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 17, outline: 'none', width: '100%', padding: '12px 14px', resize: 'none', fontFamily: 'inherit' }}
+      />
+      {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 8 }}>{submitError}</p>}
+      <button
+        type="button"
+        onClick={() => { void saveBonus() }}
+        disabled={!answer.trim() || submitting}
+        style={{ background: C.caution, color: '#fff', borderRadius: 12, padding: '11px 16px', width: '100%', marginTop: 12, fontWeight: 900, fontFamily: 'inherit', opacity: !answer.trim() || submitting ? 0.5 : 1 }}
+      >
+        {submitting ? 'Saving…' : saved ? 'Bonus Answer Saved · Update' : 'Save Bonus Answer'}
+      </button>
+      <p style={{ color: C.sub, fontSize: 12, lineHeight: 1.45, marginTop: 10 }}>You can still change both answers until the host closes them.</p>
+    </section>
+  )
 }
 
 type PlayerReviewStatus = 'correct' | 'incorrect' | 'review'
@@ -1675,6 +1736,7 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
         <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
+        <InlineBonusAnswer go={go} question={question} snapshot={snapshot} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
       <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></StickyBottom>
@@ -1709,6 +1771,7 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
         <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
+        <InlineBonusAnswer go={go} question={question} snapshot={snapshot} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
       <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></StickyBottom>
@@ -1749,6 +1812,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
             </button>
           })}
         </div>
+        <InlineBonusAnswer go={go} question={question} snapshot={snapshot} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
       <StickyBottom><Btn onClick={() => selected && void submit(selected)} disabled={!selected || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></StickyBottom>
@@ -1760,7 +1824,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
 function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
-  const count = Math.max(1, asStringArray(question?.correct_answer).length || 3)
+  const count = multiAnswerInputCount(question?.points_max, question?.correct_answer)
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-answer')
   const storedAnswersKey = JSON.stringify(asStringArray(snapshot.rawAnswer))
@@ -1789,6 +1853,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
               style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 17, outline: 'none', width: '100%', padding: '13px 16px', fontFamily: 'inherit' }} />
           </div>)}
         </div>
+        <InlineBonusAnswer go={go} question={question} snapshot={snapshot} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
       <StickyBottom><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></StickyBottom>
@@ -1830,6 +1895,7 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
               style={{ border: `2px solid ${answers[i] ? C.violet : C.line}`, borderRadius: 12, background: C.panel, color: C.ink, fontSize: 16, outline: 'none', width: '100%', padding: '12px 14px', fontFamily: 'inherit' }} />
           </div>)}
         </div>
+        <InlineBonusAnswer go={go} question={question} snapshot={snapshot} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
         <div style={{ height: 90 }} />
       </div>
@@ -2019,6 +2085,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
           })}
         </div>
 
+        <InlineBonusAnswer go={go} question={question} snapshot={snapshot} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
       </div>
 

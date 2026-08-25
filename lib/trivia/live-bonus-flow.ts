@@ -32,6 +32,14 @@ export function playerQuestionStageScreen(input: {
   }
 
   if (answerPhase === 'closed') return coreSubmission || bonusSubmission ? 'submitted' : 'no-answer'
-  if (questionStage === 'bonus') return 'bonus-answer'
+  // Revealing a bonus adds it to the existing question form. The ordinary
+  // answer stays visible and editable until the host closes both together.
+  if (questionStage === 'bonus') return baseScreen
   return baseScreen
+}
+
+export function multiAnswerInputCount(pointsMax: number | null | undefined, correctAnswer: unknown) {
+  const revealedAnswerCount = Array.isArray(correctAnswer) ? correctAnswer.length : 0
+  const safePointsMax = Number.isFinite(pointsMax) ? Math.floor(Number(pointsMax)) : 0
+  return Math.max(1, safePointsMax, revealedAnswerCount)
 }
