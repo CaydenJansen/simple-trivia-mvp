@@ -3649,17 +3649,23 @@ function AutoBuild({ go }: { go: Go }) {
     const [lo, hi] = diff
     return lo === hi ? `${diffLabels[lo]} only` : `${diffLabels[lo]} through ${diffLabels[hi]}`
   }
-  const audienceFitLabel: Record<AutoBuildAudienceFit, string> = {
-    broad: 'Broad audience',
-    kids: 'Kids',
-    young_adults: 'Young adults',
-    older_adults: 'Older adults',
-  }
-  const scopeSummary = scopeMode === 'global_only'
-    ? 'Global only'
-    : audienceLocale.trim()
-      ? `Global + ${audienceLocale.trim()}`
-      : 'Global + chosen locale'
+  const availabilityHasError = !countsAreValid
+    || !localeIsValid
+    || !!sourcesError
+    || (!sourcesLoading && (!!firstShortage || eligibleTiebreakerCount < AUTO_BUILD_TIEBREAKER_COUNT))
+  const availabilityMessage = !countsAreValid
+    ? 'The question count must be at least the number of rounds.'
+    : !localeIsValid
+      ? 'Enter a country or locale to include country-specific questions.'
+      : sourcesLoading
+        ? 'Checking Question Library availability…'
+        : sourcesError
+          ? sourcesError
+          : firstShortage
+            ? `Not enough ${firstShortage.topic ?? 'matching'} questions: ${firstShortage.available} available, ${firstShortage.required} needed.`
+            : eligibleTiebreakerCount < AUTO_BUILD_TIEBREAKER_COUNT
+              ? `Only ${eligibleTiebreakerCount} prepared tiebreaker${eligibleTiebreakerCount === 1 ? '' : 's'} match these settings; ${AUTO_BUILD_TIEBREAKER_COUNT} are needed.`
+              : `${availability.matchingQuestionCount} matching questions available for this setup.`
 
   function updateRoundCount(nextCount: number) {
     const safeCount = Math.max(1, Math.min(10, nextCount))
@@ -3891,21 +3897,6 @@ function AutoBuild({ go }: { go: Go }) {
             <p style={{ color: C.sub }} className="text-sm">
               Sourcing: <span style={{ color: C.ink }} className="font-semibold">{diffText()}</span>
             </p>
-            <p aria-live="polite" style={{ color: sourcesError || firstShortage || !localeIsValid || eligibleTiebreakerCount < AUTO_BUILD_TIEBREAKER_COUNT ? C.stop : C.sub }} className="mt-2 text-xs leading-5">
-              {!countsAreValid
-                ? 'The question count must be at least the number of rounds.'
-                : !localeIsValid
-                  ? 'Enter a country or locale to include country-specific questions.'
-                : sourcesLoading
-                ? 'Checking Question Library availability…'
-                : sourcesError
-                  ? sourcesError
-                  : firstShortage
-                    ? `Not enough ${firstShortage.topic ?? 'matching'} questions: ${firstShortage.available} available, ${firstShortage.required} needed.`
-                    : eligibleTiebreakerCount < AUTO_BUILD_TIEBREAKER_COUNT
-                      ? `Only ${eligibleTiebreakerCount} prepared tiebreaker${eligibleTiebreakerCount === 1 ? '' : 's'} match these settings; ${AUTO_BUILD_TIEBREAKER_COUNT} are needed.`
-                      : `${availability.matchingQuestionCount} matching questions available for this setup.`}
-            </p>
           </div>
 
           {/* Advanced content settings */}
@@ -3916,12 +3907,7 @@ function AutoBuild({ go }: { go: Go }) {
               onClick={() => setAdvancedOpen(open => !open)}
               className="flex w-full items-center gap-4 px-5 py-4 text-left transition-colors hover:bg-ground"
             >
-              <div className="min-w-0 flex-1">
-                <p style={{ color: C.ink }} className="text-sm font-bold">Advanced Settings</p>
-                <p style={{ color: C.sub }} className="mt-1 truncate text-xs">
-                  {audienceFitLabel[audienceFit]} · {scopeSummary} · {allowAdultContent ? 'Adult content allowed' : 'Adult content excluded'}
-                </p>
-              </div>
+              <p style={{ color: C.ink }} className="min-w-0 flex-1 text-sm font-bold">Advanced Settings</p>
               <span style={{ color: C.sub }} className={`text-sm transition-transform ${advancedOpen ? 'rotate-180' : ''}`}>⌄</span>
             </button>
 
@@ -3986,6 +3972,18 @@ function AutoBuild({ go }: { go: Go }) {
                 </label>
               </div>
             )}
+          </div>
+
+          <div
+            aria-live="polite"
+            style={{
+              background: availabilityHasError ? '#FEF2F2' : C.violetMist,
+              border: `1px solid ${availabilityHasError ? '#FECACA' : C.violetPale}`,
+              color: availabilityHasError ? C.stop : C.violet,
+            }}
+            className="rounded-xl px-4 py-3 text-xs font-semibold leading-5"
+          >
+            <span className="font-extrabold">Question Library availability:</span> {availabilityMessage}
           </div>
 
           {generateError && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{generateError}</p>}
