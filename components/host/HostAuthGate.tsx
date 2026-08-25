@@ -12,6 +12,7 @@ type AuthMode = "sign-in" | "sign-up";
 
 export default function HostAuthGate({ showDevNavigator = false }: { showDevNavigator?: boolean }) {
   const [session, setSession] = useState<Session | null>(null);
+  const [liveHostMode, setLiveHostMode] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [mode, setMode] = useState<AuthMode>("sign-in");
   const [email, setEmail] = useState("");
@@ -112,19 +113,21 @@ export default function HostAuthGate({ showDevNavigator = false }: { showDevNavi
   if (session) {
     return (
       <div className="relative">
-        <div className="fixed bottom-4 right-4 z-30 flex items-center gap-3 rounded-xl border border-zinc-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
-          <span className="hidden max-w-48 truncate text-xs text-zinc-500 sm:block">
-            {session.user.email}
-          </span>
-          <button
-            type="button"
-            onClick={() => void handleSignOut()}
-            className="text-xs font-semibold text-violet-700 transition hover:text-violet-900"
-          >
-            Sign out
-          </button>
-        </div>
-        <HostPrototype showDevNavigator={showDevNavigator} />
+        {!liveHostMode && (
+          <div className="fixed bottom-4 right-4 z-30 flex items-center gap-3 rounded-xl border border-zinc-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
+            <span className="hidden max-w-48 truncate text-xs text-zinc-500 sm:block">
+              {session.user.email}
+            </span>
+            <button
+              type="button"
+              onClick={() => void handleSignOut()}
+              className="text-xs font-semibold text-violet-700 transition hover:text-violet-900"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
+        <HostPrototype showDevNavigator={showDevNavigator} onLiveModeChange={setLiveHostMode} />
       </div>
     );
   }

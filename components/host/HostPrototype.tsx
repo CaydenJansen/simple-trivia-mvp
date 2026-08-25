@@ -7180,10 +7180,20 @@ function ScreenNav({ current, go }: { current: Screen; go: Go }) {
 
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
-export default function App({ showDevNavigator = false }: { showDevNavigator?: boolean }) {
+export default function App({
+  showDevNavigator = false,
+  onLiveModeChange,
+}: {
+  showDevNavigator?: boolean
+  onLiveModeChange?: (live: boolean) => void
+}) {
   const [screen, setScreen] = useState<Screen>('dashboard')
   const [restoringSession, setRestoringSession] = useState(true)
   const [connectionLost, setConnectionLost] = useState(false)
+
+  useEffect(() => {
+    onLiveModeChange?.(screen === 'lobby' || screen === 'live-question' || screen === 'end-of-round')
+  }, [onLiveModeChange, screen])
 
   useHostKeyboardShortcuts(
     !restoringSession && (screen === 'lobby' || screen === 'live-question' || screen === 'end-of-round'),
