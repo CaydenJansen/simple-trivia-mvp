@@ -7,6 +7,7 @@ import {
   hasRequiredAutoBuildTiebreakers,
   isValidTiebreakerNumericValue,
   needsMoreManualTiebreakers,
+  playerTiebreakerOutcome,
 } from './tiebreakers'
 
 describe('prepared tiebreaker authoring semantics', () => {
@@ -84,5 +85,12 @@ describe('prepared tiebreaker authoring semantics', () => {
       { teamId: 'team-a', distance: 10 },
       { teamId: 'team-b', distance: 10 },
     ])]).toEqual(['team-a', 'team-b'])
+  })
+
+  it('shows players only their revealed tiebreaker outcome', () => {
+    expect(playerTiebreakerOutcome('open', null)).toBeNull()
+    expect(playerTiebreakerOutcome('resolved', true)).toBe('won')
+    expect(playerTiebreakerOutcome('resolved', false)).toBe('lost')
+    expect(playerTiebreakerOutcome('tied', null)).toBe('tied')
   })
 })

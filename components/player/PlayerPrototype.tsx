@@ -19,6 +19,7 @@ import type { Json } from "@/lib/supabase/database.types";
 import { playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
 import { playersSeeScoresFromSettings } from "@/lib/trivia/score-visibility";
 import { gameAcceptsNewTeams, JOINABLE_GAME_STATUSES } from "@/lib/trivia/game-joining";
+import { playerTiebreakerOutcome } from "@/lib/trivia/tiebreakers";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -2427,6 +2428,7 @@ type PlayerTiebreakerState = {
   numeric_answer: number | null
   distance: number | null
   correct_value: number | null
+  is_winner: boolean | null
   submitted_count: number
   participant_count: number
 }
@@ -2513,6 +2515,35 @@ function LiveTiebreaker() {
 
   const revealed = state.attempt_status === 'resolved' || state.attempt_status === 'tied'
   const hasSubmitted = state.numeric_answer !== null
+  const outcome = playerTiebreakerOutcome(state.attempt_status, state.is_winner)
+  if (revealed && outcome) {
+    const won = outcome === 'won'
+    const tied = outcome === 'tied'
+    return (
+      <div className="flex flex-col items-center justify-center px-6 text-center" style={{ minHeight: '100%' }}>
+        <div
+          style={{
+            background: won ? '#DCFCE7' : tied ? C.cautionMist : C.violetMist,
+            color: won ? C.go : tied ? C.caution : C.violet,
+            width: 76,
+            height: 76,
+            borderRadius: 999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 34,
+            marginBottom: 22,
+          }}
+        >
+          {won ? '★' : tied ? '＝' : '◆'}
+        </div>
+        <h1 style={{ color: won ? C.go : tied ? C.caution : C.ink, fontSize: 38 }} className="font-black">
+          {won ? 'You Won!' : tied ? 'Still Tied!' : 'You Lost!'}
+        </h1>
+        {tied && <p style={{ color: C.sub, fontSize: 15, marginTop: 12 }}>The closest answers were equal.</p>}
+      </div>
+    )
+  }
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <div style={{ background: C.violet, color: 'white', padding: '24px 22px 28px', textAlign: 'center' }}>
@@ -2520,19 +2551,7 @@ function LiveTiebreaker() {
         <h1 style={{ fontSize: 25, fontWeight: 900, lineHeight: 1.3, marginTop: 12 }}>{state.prompt}</h1>
       </div>
       <div className="flex-1 px-5 py-6">
-        {revealed ? (
-          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 18, padding: '20px', textAlign: 'center' }}>
-            <p style={{ color: C.sub, fontSize: 12, fontWeight: 800 }}>CORRECT ANSWER</p>
-            <p style={{ color: C.go, fontSize: 34, fontWeight: 900, marginTop: 6 }}>{state.correct_value}{state.answer_unit ? ` ${state.answer_unit}` : ''}</p>
-            <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 18, paddingTop: 18 }}>
-              <p style={{ color: C.sub, fontSize: 13 }}>Your answer: <strong style={{ color: C.ink }}>{state.numeric_answer}</strong></p>
-              <p style={{ color: C.sub, fontSize: 13, marginTop: 4 }}>Distance from correct: <strong style={{ color: C.ink }}>{state.distance}</strong></p>
-            </div>
-            <p style={{ color: state.attempt_status === 'tied' ? C.caution : C.violet, fontSize: 14, fontWeight: 800, marginTop: 18 }}>
-              {state.attempt_status === 'tied' ? 'The closest answers are still tied.' : 'The host will publish the final standings next.'}
-            </p>
-          </div>
-        ) : state.attempt_status === 'closed' ? (
+        {state.attempt_status === 'closed' ? (
           <div style={{ background: C.ground, border: `1px solid ${C.line}`, borderRadius: 18, padding: '24px', textAlign: 'center' }}>
             <p style={{ color: C.ink, fontSize: 20, fontWeight: 900 }}>{state.numeric_answer}</p>
             <p style={{ color: C.sub, fontSize: 14, marginTop: 8 }}>Answers are closed. Waiting for the reveal…</p>

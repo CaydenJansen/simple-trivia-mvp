@@ -60,6 +60,17 @@ export function closestTiebreakerTeamIds(submissions: TiebreakerDistance[]) {
   )
 }
 
+export type PlayerTiebreakerOutcome = 'won' | 'lost' | 'tied'
+
+export function playerTiebreakerOutcome(
+  attemptStatus: 'open' | 'closed' | 'resolved' | 'tied',
+  isWinner: boolean | null,
+): PlayerTiebreakerOutcome | null {
+  if (attemptStatus === 'tied') return 'tied'
+  if (attemptStatus !== 'resolved') return null
+  return isWinner ? 'won' : 'lost'
+}
+
 export function evaluateClosestAnswers(correctValue: number, answers: NumericTiebreakerAnswer[]) {
   const ranked = answers
     .map(answer => ({ ...answer, distance: Math.abs(answer.value - correctValue) }))

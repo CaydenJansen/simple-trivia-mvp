@@ -897,6 +897,7 @@ export type Database = {
           numeric_answer: number | null
           distance: number | null
           correct_value: number | null
+          is_winner: boolean | null
           submitted_count: number
           participant_count: number
         }[]
