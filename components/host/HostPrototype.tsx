@@ -138,6 +138,7 @@ const C = {
   liveLine: '#2A2848',
   liveText: '#EEE9FF',
   liveDim: '#7E7AA0',
+  liveViolet: '#C4B5FD',
 }
 
 // ─── DATA ─────────────────────────────────────────────────────────────────────
@@ -5519,12 +5520,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             {emergency && (
               <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, right: 0, top: '100%', marginTop: 6, width: 240, zIndex: 50 }}
                 className="absolute rounded-xl shadow-2xl p-2 space-y-0.5">
-                <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest px-2 py-1">Game Controls</p>
-                <button onClick={() => setEmergency(false)} style={{ color: C.liveText }}
-                  className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold hover:bg-live-surface transition-colors text-left">
-                  Pause Game
-                </button>
-                <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="mt-1 pt-1">
+                <div className="pt-1">
                   <p style={{ color: C.liveDim }} className="px-2 pb-1 pt-1 text-[10px] font-bold uppercase tracking-widest">Leave this session</p>
                   <button
                     onClick={() => exitHostSession(go)}
@@ -5667,7 +5663,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               <div style={{ background: `${C.violet}12`, border: `1px dashed ${C.violet}50` }}
                 className="flex items-center gap-3 rounded-xl px-4 py-3 mb-3">
                 <div className="flex-1 min-w-0">
-                  <p style={{ color: `${C.violet}99` }} className="text-[10px] font-bold uppercase tracking-widest">
+                  <p style={{ color: C.liveViolet }} className="text-[10px] font-bold uppercase tracking-widest">
                     {question?.question_type === 'multi-part' ? 'Question parts + answers · Host only' : 'Correct Answer · Host only'}
                   </p>
                   {question?.question_type === 'multi-part' ? (
@@ -5695,7 +5691,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                               {detail.text}
                             </span>
 
-                            <span style={{ color: C.violet }} className="text-sm font-extrabold whitespace-nowrap pt-0.5">
+                            <span style={{ color: C.liveViolet }} className="text-sm font-extrabold whitespace-nowrap pt-0.5">
                               → {answer}
                             </span>
                           </div>
@@ -5705,13 +5701,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   ) : question?.question_type === 'multi-answer' ? (
                     <div className="mt-1 space-y-1">
                       {asStringArray(question.correct_answer).map((answer) => (
-                        <p key={answer} style={{ color: C.violet }} className="text-lg font-extrabold">
+                        <p key={answer} style={{ color: C.liveViolet }} className="text-lg font-extrabold">
                           {answer}
                         </p>
                       ))}
                     </div>
                   ) : (
-                    <p style={{ color: C.violet }} className="text-lg font-extrabold mt-0.5">{correctDisplay}</p>
+                    <p style={{ color: C.liveViolet }} className="text-lg font-extrabold mt-0.5">{correctDisplay}</p>
                   )}
                 </div>
               </div>
