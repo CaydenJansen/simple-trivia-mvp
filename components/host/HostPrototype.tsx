@@ -5656,6 +5656,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   const isFinalQuestion = !!question && !nextLiveItem
   const correctDisplay = correctAnswerDisplay(question)
   const questionDetails = hostQuestionDetails(question)
+  const showBonusInAnswers = Boolean(activeBonus && (questionStage === 'bonus' || phase !== 'open'))
   const compoundQuestion = question?.question_type === 'multi-answer'
     || question?.question_type === 'multi-part'
     || question?.question_type === 'ranking'
@@ -6010,13 +6011,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             {activeBonus && (
               <div
                 style={{
-                  background: questionStage === 'bonus' || phase === 'revealed' ? `${C.caution}18` : `${C.livePanel}B8`,
-                  border: `1px solid ${questionStage === 'bonus' || phase === 'revealed' ? `${C.caution}55` : C.liveLine}`,
+                  background: questionStage === 'bonus' || phase === 'revealed' ? `${C.violet}16` : `${C.livePanel}B8`,
+                  border: `1px solid ${questionStage === 'bonus' || phase === 'revealed' ? `${C.violet}55` : C.liveLine}`,
                 }}
                 className="mt-4 rounded-xl p-4"
               >
                 <div className="flex items-center justify-between gap-4">
-                  <p style={{ color: C.caution }} className="text-[10px] font-extrabold uppercase tracking-widest">
+                  <p style={{ color: '#C4B5FD' }} className="text-[10px] font-extrabold uppercase tracking-widest">
                     Bonus · {activeBonus.points} {activeBonus.points === 1 ? 'point' : 'points'}
                   </p>
                   <span style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">
@@ -6024,7 +6025,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   </span>
                 </div>
                 <p style={{ color: C.liveText }} className="mt-2 text-lg font-extrabold">{activeBonus.prompt}</p>
-                <p style={{ color: phase === 'revealed' ? C.go : C.caution }} className="mt-2 text-sm font-bold">
+                <p style={{ color: phase === 'revealed' ? C.go : '#C4B5FD' }} className="mt-2 text-sm font-bold">
                   Answer: {activeBonus.correctAnswer}
                 </p>
               </div>
@@ -6074,12 +6075,22 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             </div>
             <div className="flex items-center gap-3">
               {phase === 'revealed' && teams.length > 0 && (
-                <span
-                  style={{ background: `${C.go}20`, color: C.go, border: `1px solid ${C.go}45` }}
-                  className="px-3 py-1.5 rounded-lg text-xs font-extrabold tabular-nums"
-                >
-                  {coreCorrectness.correct} of {coreCorrectness.total} teams correct · {coreCorrectness.percentage}%
-                </span>
+                <div className="flex items-center gap-2">
+                  <span
+                    style={{ background: `${C.go}20`, color: C.go, border: `1px solid ${C.go}45` }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-extrabold tabular-nums"
+                  >
+                    Main: {coreCorrectness.correct} of {coreCorrectness.total} · {coreCorrectness.percentage}%
+                  </span>
+                  {activeBonus && (
+                    <span
+                      style={{ background: `${C.violet}20`, color: '#C4B5FD', border: `1px solid ${C.violet}45` }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-extrabold tabular-nums"
+                    >
+                      Bonus: {bonusCorrectness.correct} of {bonusCorrectness.total} · {bonusCorrectness.percentage}%
+                    </span>
+                  )}
+                </div>
               )}
               {reviewCount > 0 && (
                 <span
@@ -6107,14 +6118,16 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           className="text-[10px] font-bold uppercase tracking-widest px-4 py-2.5 gap-4"
         >
           <span>Team</span>
-          <span>Their answer</span>
+          <span>{showBonusInAnswers ? 'Their answers' : 'Their answer'}</span>
           <span className="text-right">Status</span>
         </div>
 
         {answerRows.map(({ team, submission, grading }) => {
           const waiting = !submission
           const item = grading?.items[0] ?? null
-          const needsReview = item?.status === 'review'
+          const bonusRow = bonusAnswerRows.find(row => row.team.id === team.id) ?? null
+          const bonusItem = bonusRow?.grading?.items[0] ?? null
+          const needsReview = item?.status === 'review' || (showBonusInAnswers && bonusItem?.status === 'review')
           const submittedIsCorrect = item?.status === 'correct' || submission?.is_correct === true
 
           return (
@@ -6129,58 +6142,59 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               className="items-center px-4 py-3 gap-4 last:border-0"
             >
               <span
-                style={{ color: waiting ? `${C.liveText}45` : needsReview ? C.liveText : `${C.liveText}85` }}
+                style={{ color: waiting && !bonusRow?.submission ? `${C.liveText}45` : needsReview ? C.liveText : `${C.liveText}85` }}
                 className={`text-sm truncate ${needsReview ? 'font-bold' : 'font-medium'}`}
               >
                 {team.name}
               </span>
 
-              <div className="min-w-0 flex items-center gap-2">
-                <span
-                  style={{
-                    color: waiting
-                      ? C.liveDim
-                      : submittedIsCorrect
-                        ? C.go
-                        : `${C.liveText}85`,
-                  }}
-                  className={`text-sm italic truncate ${submittedIsCorrect ? 'font-extrabold' : 'font-semibold'}`}
-                >
-                  {waiting ? 'Waiting…' : item?.submitted || submissionDisplay(question, submission.answer_text)}
-                </span>
-                {!waiting && item?.expected && item.status !== 'correct' && (
-                  <>
-                    <span style={{ color: `${C.liveText}35` }} className="text-xs shrink-0">→</span>
-                    <span
-                      style={{ color: C.go }}
-                      className="text-xs font-bold truncate"
-                      title={`Correct answer: ${item.expected}`}
-                    >
-                      {item.expected}
-                    </span>
-                  </>
-                )}
-                {needsReview && item?.review_reason && (
+              <div className="min-w-0 space-y-2">
+                <div className="flex min-h-9 min-w-0 items-center gap-2">
+                  {showBonusInAnswers && <span style={{ color: C.liveDim }} className="w-12 shrink-0 text-[10px] font-extrabold uppercase">Main</span>}
                   <span
-                    style={{ color: C.caution }}
-                    className="shrink-0 text-[10px] font-bold"
-                    title={reviewReasonLabel(item.review_reason)}
+                    style={{ color: waiting ? C.liveDim : submittedIsCorrect ? C.go : `${C.liveText}85` }}
+                    className={`truncate text-sm italic ${submittedIsCorrect ? 'font-extrabold' : 'font-semibold'}`}
                   >
-                    {reviewReasonLabel(item.review_reason)}
+                    {waiting ? 'Waiting…' : item?.submitted || submissionDisplay(question, submission.answer_text)}
                   </span>
+                  {!waiting && item?.expected && item.status !== 'correct' && (
+                    <>
+                      <span style={{ color: `${C.liveText}35` }} className="shrink-0 text-xs">→</span>
+                      <span style={{ color: C.go }} className="truncate text-xs font-bold" title={`Correct answer: ${item.expected}`}>{item.expected}</span>
+                    </>
+                  )}
+                  {item?.status === 'review' && item.review_reason && (
+                    <span style={{ color: C.caution }} className="shrink-0 text-[10px] font-bold" title={reviewReasonLabel(item.review_reason)}>{reviewReasonLabel(item.review_reason)}</span>
+                  )}
+                </div>
+                {showBonusInAnswers && (
+                  <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="flex min-h-9 min-w-0 items-center gap-2 pt-2">
+                    <span style={{ color: '#C4B5FD' }} className="w-12 shrink-0 text-[10px] font-extrabold uppercase">Bonus</span>
+                    <span style={{ color: bonusItem?.status === 'correct' ? C.go : bonusRow?.submission ? `${C.liveText}85` : C.liveDim }} className="truncate text-sm italic font-semibold">
+                      {bonusRow?.submission ? bonusItem?.submitted || bonusRow.submission.answer_text : 'Waiting…'}
+                    </span>
+                    {bonusItem?.expected && bonusItem.status !== 'correct' && (
+                      <><span style={{ color: `${C.liveText}35` }} className="shrink-0 text-xs">→</span><span style={{ color: C.go }} className="truncate text-xs font-bold">{bonusItem.expected}</span></>
+                    )}
+                    {bonusItem?.status === 'review' && bonusItem.review_reason && (
+                      <span style={{ color: C.caution }} className="shrink-0 text-[10px] font-bold" title={reviewReasonLabel(bonusItem.review_reason)}>{reviewReasonLabel(bonusItem.review_reason)}</span>
+                    )}
+                  </div>
                 )}
               </div>
 
-              <div className="flex items-center justify-end">
-                {waiting || !item || !submission ? (
-                  <span style={{ color: C.liveDim }} className="text-xs">—</span>
-                ) : (
-                  <ReviewBadge
-                    status={item.status}
-                    disabled={phase === 'revealed'}
-                    onCorrect={() => { void handleReviewItem(submission.id, 0, 'correct') }}
-                    onIncorrect={() => { void handleReviewItem(submission.id, 0, 'incorrect') }}
-                  />
+              <div className="space-y-2">
+                <div className="flex min-h-9 items-center justify-end">
+                  {waiting || !item || !submission ? <span style={{ color: C.liveDim }} className="text-xs">—</span> : (
+                    <ReviewBadge status={item.status} disabled={phase === 'revealed'} onCorrect={() => { void handleReviewItem(submission.id, 0, 'correct') }} onIncorrect={() => { void handleReviewItem(submission.id, 0, 'incorrect') }} />
+                  )}
+                </div>
+                {showBonusInAnswers && (
+                  <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="flex min-h-9 items-center justify-end pt-2">
+                    {bonusRow?.submission && bonusItem ? (
+                      <ReviewBadge status={bonusItem.status} disabled={phase === 'revealed'} onCorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'correct') }} onIncorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'incorrect') }} />
+                    ) : <span style={{ color: C.liveDim }} className="text-xs">—</span>}
+                  </div>
                 )}
               </div>
             </div>
@@ -6207,9 +6221,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         {answerRows.map(({ team, submission, grading }) => {
           const waiting = !submission
           const items = grading?.items ?? []
-          const hasReview = items.some(item => item.status === 'review')
-          const score = grading ? gradingPoints(grading, question?.points_max ?? 1) : 0
-          const max = question?.points_max ?? Math.max(1, items.length)
+          const bonusRow = bonusAnswerRows.find(row => row.team.id === team.id) ?? null
+          const bonusItem = bonusRow?.grading?.items[0] ?? null
+          const hasReview = items.some(item => item.status === 'review') || (showBonusInAnswers && bonusItem?.status === 'review')
+          const score = (grading ? gradingPoints(grading, question?.points_max ?? 1) : 0)
+            + (showBonusInAnswers && bonusRow?.grading ? gradingPoints(bonusRow.grading, activeBonus?.points ?? 1) : 0)
+          const max = (question?.points_max ?? Math.max(1, items.length)) + (showBonusInAnswers ? activeBonus?.points ?? 1 : 0)
 
           return (
             <div
@@ -6224,7 +6241,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               className="px-4 py-3 gap-4 last:border-0"
             >
               <span
-                style={{ color: waiting ? `${C.liveText}45` : hasReview ? C.liveText : `${C.liveText}85` }}
+                style={{ color: waiting && !bonusRow?.submission ? `${C.liveText}45` : hasReview ? C.liveText : `${C.liveText}85` }}
                 className={`text-sm truncate pt-1 ${hasReview ? 'font-bold' : 'font-medium'}`}
               >
                 {team.name}
@@ -6333,10 +6350,38 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     </div>
                   </div>
                 )}
+
+                {showBonusInAnswers && (
+                  <div
+                    style={{ borderTop: `1px solid ${C.liveLine}` }}
+                    className="mt-2 grid items-center gap-2 pt-2"
+                    aria-label="Bonus answer"
+                  >
+                    <div className="grid items-center gap-2" style={{ gridTemplateColumns: '52px minmax(0, 1fr) 120px' }}>
+                      <span style={{ color: '#C4B5FD' }} className="text-[10px] font-extrabold uppercase">Bonus</span>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span style={{ color: bonusItem?.status === 'correct' ? C.go : bonusRow?.submission ? `${C.liveText}85` : C.liveDim }} className="truncate text-sm italic font-semibold">
+                          {bonusRow?.submission ? bonusItem?.submitted || bonusRow.submission.answer_text : 'Waiting…'}
+                        </span>
+                        {bonusItem?.expected && bonusItem.status !== 'correct' && (
+                          <><span style={{ color: `${C.liveText}35` }} className="shrink-0 text-xs">→</span><span style={{ color: C.go }} className="truncate text-xs font-bold">{bonusItem.expected}</span></>
+                        )}
+                        {bonusItem?.status === 'review' && bonusItem.review_reason && (
+                          <span style={{ color: C.caution }} className="shrink-0 text-[10px] font-bold" title={reviewReasonLabel(bonusItem.review_reason)}>{reviewReasonLabel(bonusItem.review_reason)}</span>
+                        )}
+                      </div>
+                      <div className="flex justify-end">
+                        {bonusRow?.submission && bonusItem ? (
+                          <ReviewBadge status={bonusItem.status} disabled={phase === 'revealed'} onCorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'correct') }} onIncorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'incorrect') }} />
+                        ) : <span style={{ color: C.liveDim }} className="text-xs">—</span>}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="text-right pt-1">
-                {waiting ? (
+                {waiting && !bonusRow?.submission ? (
                   <span style={{ color: C.liveDim }} className="text-xs">—</span>
                 ) : (
                   <span
@@ -6361,55 +6406,6 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     )}
   </div>
 
-  {activeBonus && (questionStage === 'bonus' || phase !== 'open') && (
-    <div style={{ background: C.liveSurface, border: `1px solid ${C.caution}45` }} className="rounded-2xl overflow-hidden shrink-0">
-      {phase === 'revealed' && teams.length > 0 && (
-        <div style={{ background: `${C.go}18`, borderBottom: `1px solid ${C.go}35`, color: C.go }} className="px-4 py-2 text-right text-xs font-extrabold tabular-nums">
-          Bonus: {bonusCorrectness.correct} of {bonusCorrectness.total} teams correct · {bonusCorrectness.percentage}%
-        </div>
-      )}
-      <div
-        style={{ background: `${C.caution}14`, borderBottom: `1px solid ${C.liveLine}`, color: C.liveDim, display: 'grid', gridTemplateColumns: '1.1fr 1.5fr 150px' }}
-        className="text-[10px] font-bold uppercase tracking-widest px-4 py-2.5 gap-4"
-      >
-        <span>Team</span>
-        <span>Bonus answer</span>
-        <span className="text-right">Status</span>
-      </div>
-      {bonusAnswerRows.map(({ team, submission, grading }) => {
-        const item = grading?.items[0] ?? null
-        const needsReview = item?.status === 'review'
-        return (
-          <div key={team.id} style={{ borderBottom: `1px solid ${needsReview ? `${C.caution}45` : C.liveLine}`, background: needsReview ? `${C.caution}12` : 'transparent', display: 'grid', gridTemplateColumns: '1.1fr 1.5fr 150px' }} className="items-center px-4 py-3 gap-4 last:border-0">
-            <span style={{ color: submission ? C.liveText : `${C.liveText}45` }} className="truncate text-sm font-medium">{team.name}</span>
-            <div className="min-w-0 flex items-center gap-2">
-              <span style={{ color: item?.status === 'correct' ? C.go : submission ? C.liveText : C.liveDim }} className="truncate text-sm italic font-semibold">
-                {submission ? item?.submitted || submission.answer_text : 'Waiting…'}
-              </span>
-              {item?.expected && item.status !== 'correct' && (
-                <><span style={{ color: C.liveDim }}>→</span><span style={{ color: C.go }} className="truncate text-xs font-bold">{item.expected}</span></>
-              )}
-              {needsReview && item?.review_reason && (
-                <span style={{ color: C.caution }} className="shrink-0 text-[10px] font-bold" title={reviewReasonLabel(item.review_reason)}>
-                  {reviewReasonLabel(item.review_reason)}
-                </span>
-              )}
-            </div>
-            <div className="flex justify-end">
-              {submission && item ? (
-                <ReviewBadge
-                  status={item.status}
-                  disabled={phase === 'revealed'}
-                  onCorrect={() => { void handleBonusReview(submission.id, 'correct') }}
-                  onIncorrect={() => { void handleBonusReview(submission.id, 'incorrect') }}
-                />
-              ) : <span style={{ color: C.liveDim }} className="text-xs">—</span>}
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )}
 </div>
 
         <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 300 }} className="flex flex-col shrink-0 sticky top-[52px] h-[calc(100dvh-52px)]">

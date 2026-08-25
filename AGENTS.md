@@ -53,6 +53,7 @@
 - Media is optional content, not a grading mechanic. The durable mechanics are `single-answer`, `multiple-choice`, `multi-answer`, `multi-part`, and `ranking`; image content may accompany any suitable mechanic.
 - An ordinary scored question may have at most one attached bonus for MVP. Bonuses own their prompt, answer, aliases, points, media, and metadata; they affect maximum score, estimated time, and diversity, but not the displayed normal question count.
 - Live bonuses use two distinct answer stages within their parent question: the host closes the main answers before opening the bonus, then closes the bonus answers separately. Store bonus submissions and grading separately from ordinary submissions, then reveal and score both together exactly once.
+- On the live host review screen, show an attached bonus as a labelled part within the same team row as the main answer. Reserve amber answer-row treatment for items that genuinely need host review; use the normal purple visual language for bonus identity.
 - Multi-part source questions store category, tags, and difficulty on their individual parts. Derive the parent category union and difficulty range instead of inventing a single mixed category or average difficulty.
 - Keep manual question classification lightweight: parent questions default to Audience Fit `broad`, Adult Content `false`, and Scope `global`; tags, prompt pattern, answer type, and review dates remain optional enrichment.
 - Audience Fit is `broad`, `kids`, `young_adults`, or `older_adults` and is a soft selection preference. Adult Content is an independent hard family-safety flag. Scope is `global` or `country_specific` with a locale; a question about a country is not automatically country-specific.
@@ -62,6 +63,7 @@
 - Prevent duplicate team names within a game.
 - Games accept new zero-score teams while they are in the lobby or actively running. Finished and cancelled games are never joinable.
 - Host live controls and question content must remain usable on small laptop screens.
+- Player live screens use a compact two-line mobile header: brand with Leave Game, then round/question with team/score. Present question prompts as clear, prominent reading surfaces without centering long question text.
 - Quiz readiness is derived automatically when saving: complete quizzes become Ready, incomplete quizzes remain Draft with specific blockers. Do not reintroduce a manual readiness step or preparation progress wizard.
 - Saving and hosting are separate deliberate actions. Any edit disables hosting until the current quiz version is saved; saving must never automatically enter the hosting flow.
 - Quiz Builder overview cards expose the complete question and answer information needed for review, including accepted alternatives, choices, multi-part clues, ranking order, and bonuses. Omit absent optional category/difficulty metadata instead of showing placeholder labels such as Uncategorised or Unrated.

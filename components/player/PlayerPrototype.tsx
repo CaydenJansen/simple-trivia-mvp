@@ -995,32 +995,80 @@ function TopBar({
   const showScore = scoresVisible && score !== undefined && answerRevealMode === 'each'
 
   return (
-    <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="px-4 pt-3 pb-3 shrink-0">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div style={{ background: C.violet, borderRadius: 8 }}
-            className="w-7 h-7 flex items-center justify-center shrink-0">
-            <span className="text-white font-black" style={{ fontSize: 11 }}>ST</span>
+    <header style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="shrink-0 px-4 py-2.5">
+      {(round || question || team) && (
+        <div className="flex items-end justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-1.5">
+            {round && <span style={{ color: C.sub, fontSize: 12 }} className="truncate font-medium">{round}</span>}
+            {round && question && <span style={{ color: C.line, fontSize: 12 }}>·</span>}
+            {question && <span style={{ color: C.sub, fontSize: 12 }} className="truncate font-medium">{question}</span>}
           </div>
-          <span style={{ color: C.sub, fontSize: 14 }} className="font-semibold">Simple Trivia</span>
-        </div>
-        {team && (
-          <div className="text-right">
-            <div style={{ color: C.ink, fontSize: 14 }} className="font-bold leading-tight">{team}</div>
-            {showScore && (
-              <div style={{ color: C.violet, fontSize: 13 }} className="font-bold">{score} pts</div>
-            )}
-          </div>
-        )}
-      </div>
-      {(round || question) && (
-        <div className="flex items-center gap-2 mt-1.5">
-          {round && <span style={{ color: C.sub, fontSize: 13 }} className="font-medium">{round}</span>}
-          {round && question && <span style={{ color: C.line, fontSize: 13 }}>·</span>}
-          {question && <span style={{ color: C.sub, fontSize: 13 }} className="font-medium">{question}</span>}
+          {team && (
+            <div className="shrink-0 text-right">
+              <div style={{ color: C.ink, fontSize: 13 }} className="font-bold leading-tight">{team}</div>
+              {showScore && (
+                <div style={{ color: C.violet, fontSize: 12 }} className="font-bold">{score} pts</div>
+              )}
+            </div>
+          )}
         </div>
       )}
+    </header>
+  )
+}
+
+function PlayerPrimaryHeader({ onLeave }: { onLeave: () => void }) {
+  return (
+    <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="flex shrink-0 items-center justify-between px-4 py-2">
+      <div className="flex items-center gap-2">
+        <div style={{ background: C.violet, borderRadius: 8 }} className="flex h-7 w-7 shrink-0 items-center justify-center">
+          <span className="font-black text-white" style={{ fontSize: 11 }}>ST</span>
+        </div>
+        <span style={{ color: C.sub, fontSize: 14 }} className="font-semibold">Simple Trivia</span>
+      </div>
+      <button
+        type="button"
+        onClick={onLeave}
+        style={{ color: C.sub }}
+        className="rounded-lg px-2 py-1 text-xs font-bold transition-colors hover:bg-red-50 hover:text-red-700"
+      >
+        Leave game
+      </button>
     </div>
+  )
+}
+
+function PlayerQuestionCard({
+  prompt,
+  eyebrow,
+  tone = 'question',
+}: {
+  prompt: string
+  eyebrow?: string
+  tone?: 'question' | 'bonus'
+}) {
+  const bonus = tone === 'bonus'
+  return (
+    <section
+      style={{
+        background: bonus ? C.cautionMist : C.panel,
+        border: `1px solid ${bonus ? C.cautionBorder : C.line}`,
+        borderLeft: `4px solid ${bonus ? C.caution : C.violet}`,
+        borderRadius: 18,
+        boxShadow: '0 8px 24px rgba(44, 37, 80, 0.06)',
+        padding: '17px 18px 18px',
+      }}
+      className="mb-5 text-left"
+    >
+      {eyebrow && (
+        <p style={{ color: bonus ? C.caution : C.violet }} className="mb-2 text-[10px] font-black uppercase tracking-[0.13em]">
+          {eyebrow}
+        </p>
+      )}
+      <h2 style={{ color: C.ink, fontSize: 'clamp(22px, 6vw, 27px)', lineHeight: 1.3, fontWeight: 900 }}>
+        {prompt}
+      </h2>
+    </section>
   )
 }
 
@@ -1668,10 +1716,7 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <div style={{ background: C.violetPale, borderRadius: 8, display: 'inline-flex', padding: '4px 10px', marginBottom: 18 }}>
-          <span style={{ color: C.violet, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase' }}>{question?.category ?? 'Question'}</span>
-        </div>
-        <h2 style={{ color: C.ink, fontSize: 24, lineHeight: 1.25, fontWeight: 900, marginBottom: 28 }}>{question?.prompt ?? 'Loading question…'}</h2>
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
         <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
@@ -1705,7 +1750,7 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
         <div style={{ borderRadius: 16, overflow: 'hidden', background: C.ground, border: `1px solid ${C.line}`, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', height: 180 }}>
           {question?.image_url ? <img src={question.image_url} alt="Question image" style={{ maxHeight: 140, maxWidth: '80%', objectFit: 'contain' }} /> : <span style={{ color: C.sub }}>Loading image…</span>}
         </div>
-        <h2 style={{ color: C.ink, fontSize: 24, lineHeight: 1.25, fontWeight: 900, marginBottom: 24 }}>{question?.prompt ?? 'Loading question…'}</h2>
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
         <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
@@ -1737,7 +1782,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <h2 style={{ color: C.ink, fontSize: 22, lineHeight: 1.3, fontWeight: 900, marginBottom: 24 }}>{question?.prompt ?? 'Loading question…'}</h2>
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {choices.map((choice, i) => {
             const key = choice.key ?? String.fromCharCode(65 + i)
@@ -1780,8 +1825,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <h2 style={{ color: C.ink, fontSize: 23, lineHeight: 1.3, fontWeight: 900, marginBottom: 6 }}>{question?.prompt ?? 'Loading question…'}</h2>
-        <p style={{ color: C.sub, fontSize: 14, marginBottom: 24 }}>1 point per correct answer</p>
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · 1 point per correct answer`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {answers.map((answer, i) => <div key={i}>
             <input value={answer} onChange={e => setA(i, e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, anyFilled && !submitting, () => { void submit(answers) })} placeholder="Type an answer…"
@@ -1820,8 +1864,7 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-5">
-        <h2 style={{ color: C.ink, fontSize: 20, lineHeight: 1.35, fontWeight: 900, marginBottom: 4 }}>{question?.prompt ?? 'Loading question…'}</h2>
-        <p style={{ color: C.sub, fontSize: 13, marginBottom: 20 }}>1 point per part</p>
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · 1 point per part`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {parts.map((part, i) => <div key={part.label ?? i}>
             <p style={{ color: C.violet, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', marginBottom: 8 }}>PART {part.label ?? String.fromCharCode(65 + i)}</p>
@@ -1922,10 +1965,8 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
       />
 
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <h2 style={{ color: C.ink, fontSize: 23, lineHeight: 1.3, fontWeight: 900, marginBottom: 6 }}>
-          {question?.prompt ?? 'Loading question…'}
-        </h2>
-        <p style={{ color: C.sub, fontSize: 14, marginBottom: 24 }}>Tap the arrows to put them in order.</p>
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow="Put these in order" />
+        <p style={{ color: C.sub, fontSize: 14, marginBottom: 16 }}>Tap the arrows to change the order.</p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {items.map((item, i) => {
@@ -2050,17 +2091,16 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <div style={{ background: C.cautionMist, border: `1px solid ${C.cautionBorder}`, borderRadius: 999, display: 'inline-flex', padding: '5px 11px', marginBottom: 18 }}>
-          <span style={{ color: C.caution, fontSize: 11, fontWeight: 900, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-            Bonus · {bonus?.points ?? 1} {(bonus?.points ?? 1) === 1 ? 'point' : 'points'}
-          </span>
-        </div>
         {bonus?.imageUrl && (
           <div style={{ borderRadius: 16, overflow: 'hidden', background: C.ground, border: `1px solid ${C.line}`, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', height: 180 }}>
             <div role="img" aria-label="Bonus image" style={{ width: '85%', height: 150, backgroundImage: `url(${bonus.imageUrl})`, backgroundPosition: 'center', backgroundRepeat: 'no-repeat', backgroundSize: 'contain' }} />
           </div>
         )}
-        <h2 style={{ color: C.ink, fontSize: 24, lineHeight: 1.25, fontWeight: 900, marginBottom: 28 }}>{bonus?.prompt ?? 'Loading bonus…'}</h2>
+        <PlayerQuestionCard
+          prompt={bonus?.prompt ?? 'Loading bonus…'}
+          eyebrow={`Bonus · ${bonus?.points ?? 1} ${(bonus?.points ?? 1) === 1 ? 'point' : 'points'}`}
+          tone="bonus"
+        />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your bonus answer</label>
         <textarea rows={3} value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
@@ -2076,13 +2116,24 @@ function BonusSubmitted() {
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
-      <div className="flex-1 flex flex-col items-center justify-center px-5 py-6 text-center">
-        <div style={{ background: C.cautionMist, border: `2px solid ${C.cautionBorder}`, borderRadius: 999, width: 64, height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 27 }}>★</span></div>
-        <h1 style={{ color: C.ink, fontSize: 28 }} className="font-black mt-5">Bonus locked in</h1>
-        <p style={{ color: C.sub, fontSize: 14, marginTop: 8 }}>Your main and bonus answers are saved.</p>
-        <div style={{ background: C.ground, borderRadius: 16, border: `1px solid ${C.line}`, width: '100%', padding: '16px 20px', marginTop: 22, textAlign: 'left' }}>
-          <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em' }}>YOUR BONUS ANSWER</p>
-          <p style={{ color: C.ink, fontSize: 18, fontWeight: 800, marginTop: 6 }}>{snapshot.bonusAnswer || 'Submitted'}</p>
+      <div className="flex-1 overflow-y-auto px-5 py-5">
+        <PlayerQuestionCard prompt={snapshot.prompt || 'Question submitted'} />
+        <div className="mb-5 flex items-center gap-3">
+          <div style={{ background: C.violetPale, borderRadius: 999, width: 46, height: 46, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 21 }}>🔒</span></div>
+          <div>
+            <h1 style={{ color: C.ink, fontSize: 24 }} className="font-black">Answers locked in</h1>
+            <p style={{ color: C.sub, fontSize: 13, marginTop: 2 }}>Your main and bonus answers are saved.</p>
+          </div>
+        </div>
+        <div className="space-y-2">
+          <div style={{ background: C.panel, borderRadius: 16, border: `1px solid ${C.line}`, width: '100%', padding: '14px 18px', textAlign: 'left' }}>
+            <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em' }}>{playerResponseLabel(snapshot.questionType)}</p>
+            <p style={{ color: C.ink, fontSize: 18, fontWeight: 800, marginTop: 5 }}>{snapshot.answer || 'Submitted'}</p>
+          </div>
+          <div style={{ background: C.violetPale, borderRadius: 16, border: `1px solid ${C.line}`, width: '100%', padding: '14px 18px', textAlign: 'left' }}>
+            <p style={{ color: C.violet, fontSize: 11, fontWeight: 900, letterSpacing: '0.08em' }}>BONUS ANSWER</p>
+            <p style={{ color: C.ink, fontSize: 18, fontWeight: 800, marginTop: 5 }}>{snapshot.bonusAnswer || 'Submitted'}</p>
+          </div>
         </div>
         <div style={{ marginTop: 24 }}><WaitMsg msg="Waiting for the host to close answers…" /></div>
       </div>
@@ -2099,7 +2150,7 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <p style={{ color: C.sub, fontSize: 14, lineHeight: 1.5, marginBottom: 20 }}>{snapshot.prompt}</p>
+        <PlayerQuestionCard prompt={snapshot.prompt || 'Question submitted'} />
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
           <div style={{ background: C.violetPale, borderRadius: 999, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 26 }}>🔒</span></div>
           <h1 style={{ color: C.ink, fontSize: 28 }} className="font-black">Answer locked in</h1>
@@ -2107,7 +2158,6 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
             <p style={{ color: C.sub, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>{playerResponseLabel(snapshot.questionType)}</p>
             <p style={{ color: C.ink, fontSize: 18, fontWeight: 800 }}>{snapshot.answer || 'Submitted'}</p>
           </div>
-          <WaitMsg msg="Waiting for the host…" />
           {question?.has_bonus && !question.bonus && (
             <div style={{ background: C.cautionMist, border: `1px solid ${C.cautionBorder}`, borderRadius: 14, width: '100%', padding: '12px 16px', textAlign: 'center' }}>
               <p style={{ color: C.caution, fontSize: 14, fontWeight: 800 }}>★ Bonus question coming next</p>
@@ -2120,6 +2170,7 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
             </div>
           )}
           {scoresVisible && <p style={{ color: C.sub, fontSize: 14, marginTop: -8 }}>Your score: {snapshot.score}</p>}
+          <WaitMsg msg="Waiting for the host…" />
         </div>
       </div>
     </div>
@@ -2918,19 +2969,8 @@ export function PlayerFlow() {
           flexDirection: 'column',
         }}
       >
+        {canLeaveGame && <PlayerPrimaryHeader onLeave={() => setConfirmingLeave(true)} />}
         <PlayerScoreVisibilityContext.Provider value={scoresVisible}>
-          {canLeaveGame && (
-            <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="flex shrink-0 justify-end px-4 py-2">
-              <button
-                type="button"
-                onClick={() => setConfirmingLeave(true)}
-                style={{ color: C.sub }}
-                className="rounded-lg px-2 py-1 text-xs font-bold transition-colors hover:bg-red-50 hover:text-red-700"
-              >
-                Leave game
-              </button>
-            </div>
-          )}
           {renderScreen(screen, go)}
         </PlayerScoreVisibilityContext.Provider>
       </div>
