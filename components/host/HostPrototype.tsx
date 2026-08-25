@@ -5524,17 +5524,6 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold hover:bg-live-surface transition-colors text-left">
                   Pause Game
                 </button>
-                <button
-                  onClick={() => {
-                    setEmergency(false)
-                    void handleReopenAnswers()
-                  }}
-                  disabled={phase !== 'closed' || actionBusy}
-                  style={{ color: C.liveText }}
-                  className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold hover:bg-live-surface transition-colors text-left disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Reopen Answers
-                </button>
                 <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="mt-1 pt-1">
                   <p style={{ color: C.liveDim }} className="px-2 pb-1 pt-1 text-[10px] font-bold uppercase tracking-widest">Leave this session</p>
                   <button
