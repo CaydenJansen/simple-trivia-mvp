@@ -2520,27 +2520,42 @@ function LiveTiebreaker() {
     const won = outcome === 'won'
     const tied = outcome === 'tied'
     return (
-      <div className="flex flex-col items-center justify-center px-6 text-center" style={{ minHeight: '100%' }}>
-        <div
-          style={{
-            background: won ? '#DCFCE7' : tied ? C.cautionMist : C.violetMist,
-            color: won ? C.go : tied ? C.caution : C.violet,
-            width: 76,
-            height: 76,
-            borderRadius: 999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 34,
-            marginBottom: 22,
-          }}
-        >
-          {won ? '★' : tied ? '＝' : '◆'}
+      <div className="flex flex-col" style={{ minHeight: '100%' }}>
+        <div style={{ background: C.violet, color: 'white', padding: '24px 22px 28px', textAlign: 'center' }}>
+          <p style={{ opacity: 0.75, fontSize: 12, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Final Tiebreaker</p>
+          <h1 style={{ fontSize: 25, fontWeight: 900, lineHeight: 1.3, marginTop: 12 }}>{state.prompt}</h1>
         </div>
-        <h1 style={{ color: won ? C.go : tied ? C.caution : C.ink, fontSize: 38 }} className="font-black">
-          {won ? 'You Won!' : tied ? 'Still Tied!' : 'You Lost!'}
-        </h1>
-        {tied && <p style={{ color: C.sub, fontSize: 15, marginTop: 12 }}>The closest answers were equal.</p>}
+        <div className="flex-1 px-5 py-6">
+          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 18, padding: '22px', textAlign: 'center' }}>
+            <div
+              style={{
+                background: won ? '#DCFCE7' : tied ? C.cautionMist : C.violetMist,
+                color: won ? C.go : tied ? C.caution : C.violet,
+                width: 58,
+                height: 58,
+                borderRadius: 999,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 27,
+                margin: '0 auto 14px',
+              }}
+            >
+              {won ? '★' : tied ? '＝' : '◆'}
+            </div>
+            <h2 style={{ color: won ? C.go : tied ? C.caution : C.ink, fontSize: 30 }} className="font-black">
+              {won ? 'You Won the Tie!' : tied ? 'The Tie Remains!' : 'You Lost the Tie!'}
+            </h2>
+            <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 20, paddingTop: 20 }}>
+              <p style={{ color: C.sub, fontSize: 12, fontWeight: 800 }}>CORRECT ANSWER</p>
+              <p style={{ color: C.go, fontSize: 34, fontWeight: 900, marginTop: 6 }}>{state.correct_value}{state.answer_unit ? ` ${state.answer_unit}` : ''}</p>
+              <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 18, paddingTop: 18 }}>
+                <p style={{ color: C.sub, fontSize: 13 }}>Your answer: <strong style={{ color: C.ink }}>{state.numeric_answer}</strong></p>
+                <p style={{ color: C.sub, fontSize: 13, marginTop: 4 }}>Distance from correct: <strong style={{ color: C.ink }}>{state.distance}</strong></p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     )
   }
