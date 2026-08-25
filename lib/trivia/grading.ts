@@ -1,3 +1,5 @@
+import { answerCandidates, answerVariants } from './answer-variants'
+
 export type ReviewStatus = 'correct' | 'incorrect' | 'review'
 
 export type ReviewReason =
@@ -175,7 +177,7 @@ function acceptedAnswerGroups(value: unknown): string[][] {
 }
 
 function bestMatch(submitted: string, expected: string, accepted: string[] = []) {
-  const candidates = [expected, ...accepted]
+  const candidates = answerCandidates(expected, accepted)
   const matches = candidates.map(candidate => ({
     expected: candidate,
     ...reviewMatchForPair(submitted, candidate),
@@ -220,7 +222,7 @@ export function buildSubmissionGrading(question: GradingQuestion, answerText: st
 
     const items: ReviewItem[] = submittedRaw.map((submitted) => {
       const norm = normaliseTriviaAnswer(submitted)
-      const exactIndex = remaining.findIndex(candidate => norm && [candidate.value, ...candidate.accepted]
+      const exactIndex = remaining.findIndex(candidate => norm && answerCandidates(candidate.value, candidate.accepted)
         .some(value => normaliseTriviaAnswer(value) === norm))
 
       if (exactIndex >= 0) {
@@ -247,7 +249,7 @@ export function buildSubmissionGrading(question: GradingQuestion, answerText: st
       return { submitted, status: 'incorrect' }
     })
 
-    return { items, missing: remaining.map(candidate => candidate.value) }
+    return { items, missing: remaining.map(candidate => answerVariants(candidate.value).primary) }
   }
 
   if (question.question_type === 'multi-part') {

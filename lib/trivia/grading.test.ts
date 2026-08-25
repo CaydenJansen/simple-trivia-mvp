@@ -58,6 +58,18 @@ describe('single-answer grading', () => {
     ).items[0].status).toBe('correct')
   })
 
+  it('accepts alternatives and notes embedded in legacy answer copy', () => {
+    expect(buildSubmissionGrading(
+      question({ correct_answer: 'Harley Quinn/ Harleen Quinzel' }),
+      'Harley Quinn',
+    ).items[0]?.status).toBe('correct')
+
+    expect(buildSubmissionGrading(
+      question({ correct_answer: 'Cannes (kan) Film Festival' }),
+      'Cannes',
+    ).items[0]?.status).toBe('correct')
+  })
+
   it('reviews article-only and close-phrase differences', () => {
     expect(buildSubmissionGrading(
       question({ correct_answer: 'The Great Barrier Reef' }),
@@ -150,6 +162,20 @@ describe('multi-answer grading', () => {
     ])
     expect(result.missing).toEqual([])
     expect(gradingPoints(result, 2)).toBe(1)
+  })
+
+  it('accepts a clean response when a legacy expected answer contains a pronunciation note', () => {
+    const result = buildSubmissionGrading(
+      question({
+        question_type: 'multi-answer',
+        correct_answer: ['Casino Royale', 'Spectre (spect-tah)'],
+        points_max: 2,
+      }),
+      JSON.stringify(['Casino Royale', 'Spectre']),
+    )
+
+    expect(result.items.map(item => item.status)).toEqual(['correct', 'correct'])
+    expect(result.missing).toEqual([])
   })
 })
 

@@ -65,6 +65,7 @@ import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reord
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib/trivia/question-metadata";
 import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
+import { competitionPlacements } from "@/lib/trivia/leaderboard-ranking";
 import { loadAllSourceRows } from "@/lib/trivia/paginated-source-load";
 import {
   EMPTY_SOURCE_QUESTION_BONUS,
@@ -89,8 +90,8 @@ function getHostGameCode() {
 }
 
 function getHostGameTitle() {
-  if (typeof window === 'undefined') return 'Friday Night Trivia'
-  return localStorage.getItem('simple-trivia-host-game-title') || 'Friday Night Trivia'
+  if (typeof window === 'undefined') return 'Simple Trivia'
+  return localStorage.getItem('simple-trivia-host-game-title') || 'Simple Trivia'
 }
 
 function exitHostSession(go: Go) {
@@ -4461,8 +4462,7 @@ function HostSetup({ go }: { go: Go }) {
   const bottomPlaces = ['Last', '2nd Last', '3rd Last']
   const initPrize = (msg = ''): PrizePlace => ({ enabled: false, msg })
   const [topPrizes, setTopPrizes] = useState<PrizePlace[]>([
-    { enabled: true, msg: "You've won a $100 venue voucher!" },
-    initPrize(), initPrize(),
+    initPrize(), initPrize(), initPrize(),
   ])
   const [botPrizes, setBotPrizes] = useState<PrizePlace[]>([
     initPrize(), initPrize(), initPrize(),
@@ -5491,6 +5491,35 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     })
 
     if (scoringError) throw scoringError
+
+    const [submissionResult, bonusSubmissionResult, teamResult] = await Promise.all([
+      supabase
+        .from('submissions')
+        .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+        .eq('game_id', liveGameId)
+        .eq('question_key', question.question_key)
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('bonus_submissions')
+        .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+        .eq('game_id', liveGameId)
+        .eq('question_key', question.question_key)
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('teams')
+        .select('id, name, score')
+        .eq('game_id', liveGameId)
+        .order('created_at', { ascending: true }),
+    ])
+
+    const refreshError = submissionResult.error || bonusSubmissionResult.error || teamResult.error
+    if (refreshError) {
+      console.error('Question scored, but the refreshed results could not be loaded:', refreshError)
+    } else {
+      setSubmissions((submissionResult.data ?? []) as LiveSubmission[])
+      setBonusSubmissions((bonusSubmissionResult.data ?? []) as LiveBonusSubmission[])
+      setTeams((teamResult.data ?? []) as LiveTeam[])
+    }
   }
 
   async function handleRevealAnswer() {
@@ -5772,6 +5801,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   const coreCorrectness = correctnessSummary(teams.length, submissions)
   const bonusCorrectness = correctnessSummary(teams.length, bonusSubmissions)
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+  const leaderboardPlacements = competitionPlacements(leaderboard)
   const totalRounds = Math.max(1, ...allQuestions.map(item => item.round_number))
   const sequenceItems = liveSequenceItems(allQuestions, allContentScreens)
   const firstRoundItem = question
@@ -5950,11 +5980,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 {leaderboard.slice(0, 3).map((team, index) => (
                   <div
                     key={team.id}
-                    style={{ background: index === 0 ? `${C.violet}25` : C.livePanel, border: `1px solid ${index === 0 ? `${C.violet}55` : C.liveLine}` }}
+                    style={{ background: leaderboardPlacements[index] === 1 ? `${C.violet}25` : C.livePanel, border: `1px solid ${leaderboardPlacements[index] === 1 ? `${C.violet}55` : C.liveLine}` }}
                     className="flex items-center gap-4 rounded-2xl px-5 py-3"
                   >
-                    <span style={{ background: index === 0 ? C.violet : C.liveLine, color: index === 0 ? 'white' : C.liveDim }} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-extrabold">
-                      {index + 1}
+                    <span style={{ background: leaderboardPlacements[index] === 1 ? C.violet : C.liveLine, color: leaderboardPlacements[index] === 1 ? 'white' : C.liveDim }} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-extrabold">
+                      {leaderboardPlacements[index]}
                     </span>
                     <span style={{ color: C.liveText }} className="min-w-0 flex-1 truncate font-bold">{team.name}</span>
                     <span style={{ color: C.liveText }} className="font-extrabold tabular-nums">{team.score}</span>
@@ -6539,11 +6569,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">Leaderboard</p>
             <div className="space-y-1">
               {leaderboard.map((team, i) => (
-                <div key={team.id} style={{ background: i === 0 ? `${C.violet}20` : 'transparent' }} className="flex items-center gap-3 p-2.5 rounded-xl">
-                  <div style={{ background: i === 0 ? C.violet : C.liveLine, color: i === 0 ? 'white' : C.liveDim, width: 24, height: 24 }}
-                    className="rounded-full flex items-center justify-center text-xs font-bold shrink-0 tabular-nums">{i + 1}</div>
-                  <span style={{ color: i === 0 ? C.liveText : `${C.liveText}99` }} className={`text-sm flex-1 truncate ${i === 0 ? 'font-bold' : 'font-medium'}`}>{team.name}</span>
-                  <span style={{ color: i === 0 ? C.liveText : `${C.liveText}99` }} className="text-sm font-bold tabular-nums">{team.score}</span>
+                <div key={team.id} style={{ background: leaderboardPlacements[i] === 1 ? `${C.violet}20` : 'transparent' }} className="flex items-center gap-3 p-2.5 rounded-xl">
+                  <div style={{ background: leaderboardPlacements[i] === 1 ? C.violet : C.liveLine, color: leaderboardPlacements[i] === 1 ? 'white' : C.liveDim, width: 24, height: 24 }}
+                    className="rounded-full flex items-center justify-center text-xs font-bold shrink-0 tabular-nums">{leaderboardPlacements[i]}</div>
+                  <span style={{ color: leaderboardPlacements[i] === 1 ? C.liveText : `${C.liveText}99` }} className={`text-sm flex-1 truncate ${leaderboardPlacements[i] === 1 ? 'font-bold' : 'font-medium'}`}>{team.name}</span>
+                  <span style={{ color: leaderboardPlacements[i] === 1 ? C.liveText : `${C.liveText}99` }} className="text-sm font-bold tabular-nums">{team.score}</span>
                 </div>
               ))}
             </div>
@@ -6666,6 +6696,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
 function EndOfRound({ go }: { go: Go }) {
   const [gameId, setGameId] = useState('')
+  const [gameTitle, setGameTitle] = useState('Simple Trivia')
   const [intermission, setIntermission] = useState(false)
   const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
   const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
@@ -6687,7 +6718,7 @@ function EndOfRound({ go }: { go: Go }) {
     async function loadRoundSummary() {
       const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('id, current_question_key, current_screen, settings')
+        .select('id, title, current_question_key, current_screen, settings')
         .eq('code', getHostGameCode())
         .maybeSingle()
 
@@ -6699,6 +6730,7 @@ function EndOfRound({ go }: { go: Go }) {
 
       setIntermission(game.current_screen === 'intermission')
       setGameId(game.id)
+      setGameTitle(game.title || 'Simple Trivia')
       setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
       setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
       setRevealingAnswers(game.current_screen === 'delayed-reveal')
@@ -6847,6 +6879,7 @@ function EndOfRound({ go }: { go: Go }) {
   }
 
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+  const leaderboardPlacements = competitionPlacements(leaderboard)
   const roundNumber = currentQuestion?.round_number ?? 1
   const playersSeeRoundLeaderboard = roundResultsScreen(leaderboardVisibility) === 'round-results'
   const revealCorrectness = correctnessSummary(teams.length, currentSubmissions)
@@ -6918,7 +6951,7 @@ function EndOfRound({ go }: { go: Go }) {
           <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold">ST</div>
           <span style={{ color: C.liveDim }} className="font-bold text-sm">Simple Trivia</span>
         </div>
-        <div className="flex-1 text-center"><span style={{ color: C.liveDim }} className="text-sm">Friday Night Trivia</span></div>
+        <div className="flex-1 text-center"><span style={{ color: C.liveDim }} className="text-sm">{gameTitle}</span></div>
         <div className="flex items-center gap-3">
           <JoinCodeButton dark />
           <CancelGameButton go={go} dark />
@@ -6969,9 +7002,9 @@ function EndOfRound({ go }: { go: Go }) {
           </p>
           <div className="space-y-1.5">
             {leaderboard.map((team, i) => (
-              <div key={team.id} style={{ background: i < 3 ? C.livePanel : 'transparent', border: `1px solid ${i < 3 ? C.liveLine : 'transparent'}` }} className="flex items-center gap-4 p-3 rounded-xl">
-                <div style={{ background: i === 0 ? C.violet : C.liveLine, color: i === 0 ? 'white' : C.liveDim, border: `1px solid ${i === 0 ? C.violet : C.liveLine}`, width: 32, height: 32 }}
-                  className="rounded-full flex items-center justify-center text-sm font-extrabold shrink-0">{i + 1}</div>
+              <div key={team.id} style={{ background: leaderboardPlacements[i] <= 3 ? C.livePanel : 'transparent', border: `1px solid ${leaderboardPlacements[i] <= 3 ? C.liveLine : 'transparent'}` }} className="flex items-center gap-4 p-3 rounded-xl">
+                <div style={{ background: leaderboardPlacements[i] === 1 ? C.violet : C.liveLine, color: leaderboardPlacements[i] === 1 ? 'white' : C.liveDim, border: `1px solid ${leaderboardPlacements[i] === 1 ? C.violet : C.liveLine}`, width: 32, height: 32 }}
+                  className="rounded-full flex items-center justify-center text-sm font-extrabold shrink-0">{leaderboardPlacements[i]}</div>
                 <span style={{ color: C.liveText }} className="flex-1 text-sm font-semibold">{team.name}</span>
                 <span style={{ color: C.liveText }} className="font-extrabold tabular-nums">{team.score}</span>
               </div>
@@ -7305,7 +7338,7 @@ function FinalResults({ go }: { go: Go }) {
           <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold">ST</div>
           <span style={{ color: '#ffffff80' }} className="font-bold text-sm">Simple Trivia</span>
         </div>
-        <div className="flex-1 text-center"><span style={{ color: '#ffffff50' }} className="text-sm">Friday Night Trivia</span></div>
+        <div className="flex-1 text-center"><span style={{ color: '#ffffff50' }} className="text-sm">{game?.title ?? 'Simple Trivia'}</span></div>
         <div style={{ width: 80 }} />
       </header>
 

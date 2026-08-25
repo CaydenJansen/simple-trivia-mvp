@@ -1,5 +1,6 @@
 import type { AudienceScope, QuestionMechanic, QuestionStatus } from '@/lib/supabase/database.types'
 
+import { answerVariants } from './answer-variants'
 import { isStarterTagOrAlias, normalizeTagPhrase } from './question-library-tags'
 
 export const QUESTION_LIBRARY_IMPORT_VERSION = 3
@@ -137,6 +138,21 @@ function deduplicatedList(value: unknown): string[] {
 function acceptedAnswers(value: unknown, correctAnswer: string) {
   const correct = normalizedComparable(correctAnswer)
   return deduplicatedList(value).filter(alias => normalizedComparable(alias) !== correct)
+}
+
+function importedAnswer(value: unknown, aliasValue: unknown) {
+  const parsed = answerVariants(text(value))
+  const aliases = [...parsed.accepted, ...acceptedAnswers(aliasValue, parsed.primary)]
+  const seen = new Set<string>()
+  return {
+    correct: parsed.primary,
+    accepted: aliases.filter(alias => {
+      const key = normalizedComparable(alias)
+      if (!key || key === normalizedComparable(parsed.primary) || seen.has(key)) return false
+      seen.add(key)
+      return true
+    }),
+  }
 }
 
 function aliasesForColumn(column: string) {
@@ -329,9 +345,10 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
     const parts: ImportQuestionPart[] = []
 
     if (mechanic === 'single-answer') {
-      correctAnswer = text(valueAt(parentRow, 'Answer'))
+      const answer = importedAnswer(valueAt(parentRow, 'Answer'), valueAt(parentRow, 'Accepted Answers'))
+      correctAnswer = answer.correct
       if (!correctAnswer) addIssue('error', 'Questions', parentRow.rowNumber, 'Answer', 'required', 'Single Answer questions require an Answer.')
-      aliases = acceptedAnswers(valueAt(parentRow, 'Accepted Answers'), correctAnswer)
+      aliases = answer.accepted
       requireEffectiveClassification(parentMetadata, 'Questions', parentRow.rowNumber, addIssue)
     } else if (mechanic === 'multiple-choice') {
       if (structuralRows.length < 2) addIssue('error', 'Questions', parentRow.rowNumber, 'Row Type', 'too_few_choices', 'Multiple Choice requires at least two Choice rows.')
@@ -360,13 +377,14 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
       const aliasValues: string[][] = []
       const seenAnswers = new Set<string>()
       structuralRows.forEach(row => {
-        const answer = text(valueAt(row, 'Answer'))
+        const parsedAnswer = importedAnswer(valueAt(row, 'Answer'), valueAt(row, 'Accepted Answers'))
+        const answer = parsedAnswer.correct
         if (!answer) addIssue('error', 'Questions', row.rowNumber, 'Answer', 'required', 'Each Answer row requires an answer.')
         const normalized = normalizedComparable(answer)
         if (normalized && seenAnswers.has(normalized)) addIssue('error', 'Questions', row.rowNumber, 'Answer', 'duplicate_answer', `Answer “${answer}” is duplicated.`)
         seenAnswers.add(normalized)
         answerValues.push(answer)
-        aliasValues.push(acceptedAnswers(valueAt(row, 'Accepted Answers'), answer))
+        aliasValues.push(parsedAnswer.accepted)
       })
       if (answerValues.length < 2) addIssue('error', 'Questions', parentRow.rowNumber, 'Row Type', 'too_few_answers', 'Multi-Answer requires at least two distinct Answer rows.')
       correctAnswer = answerValues
@@ -378,14 +396,15 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
         const label = text(valueAt(row, 'Label')) || String.fromCharCode(65 + index)
         const normalizedLabel = normalizedComparable(label)
         const partPrompt = text(valueAt(row, 'Prompt / Clue'))
-        const answer = text(valueAt(row, 'Answer'))
+        const parsedAnswer = importedAnswer(valueAt(row, 'Answer'), valueAt(row, 'Accepted Answers'))
+        const answer = parsedAnswer.correct
         if (usedLabels.has(normalizedLabel)) addIssue('error', 'Questions', row.rowNumber, 'Label', 'duplicate_label', `Part label “${label}” is duplicated.`)
         usedLabels.add(normalizedLabel)
         if (!partPrompt) addIssue('error', 'Questions', row.rowNumber, 'Prompt / Clue', 'required', 'Each Part requires a clue.')
         if (!answer) addIssue('error', 'Questions', row.rowNumber, 'Answer', 'required', 'Each Part requires an answer.')
         const metadata = parseMetadata(row, 'Questions', addIssue, true)
         requireEffectiveClassification(effectiveMetadata(parentMetadata, metadata), 'Questions', row.rowNumber, addIssue)
-        parts.push({ ...metadata, position: index + 1, label, prompt: partPrompt, correctAnswer: answer, acceptedAnswers: acceptedAnswers(valueAt(row, 'Accepted Answers'), answer), tagMode: 'add' })
+        parts.push({ ...metadata, position: index + 1, label, prompt: partPrompt, correctAnswer: answer, acceptedAnswers: parsedAnswer.accepted, tagMode: 'add' })
       })
       if (parts.length < 2) addIssue('error', 'Questions', parentRow.rowNumber, 'Row Type', 'too_few_parts', 'Multi-Part requires at least two Part rows.')
       correctAnswer = parts.map(part => part.correctAnswer)
@@ -412,12 +431,13 @@ export function validateQuestionLibraryWorkbook(workbook: QuestionLibraryWorkboo
     if (bonusRows[0]) {
       const row = bonusRows[0]
       const bonusPrompt = text(valueAt(row, 'Prompt / Clue'))
-      const answer = text(valueAt(row, 'Answer'))
+      const parsedAnswer = importedAnswer(valueAt(row, 'Answer'), valueAt(row, 'Accepted Answers'))
+      const answer = parsedAnswer.correct
       if (!bonusPrompt) addIssue('error', 'Questions', row.rowNumber, 'Prompt / Clue', 'required', 'Bonus prompt is required.')
       if (!answer) addIssue('error', 'Questions', row.rowNumber, 'Answer', 'required', 'Bonus answer is required.')
       const metadata = parseMetadata(row, 'Questions', addIssue, true)
       requireEffectiveClassification(effectiveMetadata(parentMetadata, metadata), 'Questions', row.rowNumber, addIssue)
-      bonus = { ...metadata, prompt: bonusPrompt, correctAnswer: answer, acceptedAnswers: acceptedAnswers(valueAt(row, 'Accepted Answers'), answer), points: 1, tagMode: metadata.tagPhrases.length ? 'replace' : 'inherit', notes: text(valueAt(row, 'Notes')) || null }
+      bonus = { ...metadata, prompt: bonusPrompt, correctAnswer: answer, acceptedAnswers: parsedAnswer.accepted, points: 1, tagMode: metadata.tagPhrases.length ? 'replace' : 'inherit', notes: text(valueAt(row, 'Notes')) || null }
     }
 
     questions.push({ ...parentMetadata, importKey, prompt, mechanic, correctAnswer, acceptedAnswers: aliases, options, notes: text(valueAt(parentRow, 'Notes')) || null, status: 'needs_review', promptSignature: signature, parts, bonus })

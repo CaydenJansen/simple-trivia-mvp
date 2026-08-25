@@ -21,6 +21,7 @@ import { playersSeeScoresFromSettings } from "@/lib/trivia/score-visibility";
 import { gameAcceptsNewTeams, JOINABLE_GAME_STATUSES } from "@/lib/trivia/game-joining";
 import { playerTiebreakerOutcome } from "@/lib/trivia/tiebreakers";
 import { shouldSubmitPlayerAnswerOnEnter } from "@/lib/trivia/player-keyboard-submit";
+import { competitionPlacementAt, competitionPlacements, ordinalPlacement } from "@/lib/trivia/leaderboard-ranking";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -470,6 +471,7 @@ type PlayerReviewItem = {
 }
 
 type PlayerSnapshot = {
+  loaded: boolean
   teamName: string
   score: number
   answer: string
@@ -785,6 +787,7 @@ function PlayerQuestionResultSummary({ snapshot }: { snapshot: PlayerSnapshot })
 
 function usePlayerSnapshot(): PlayerSnapshot {
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>({
+    loaded: false,
     teamName: '', score: 0, answer: '', rawAnswer: null, hasSubmission: false,
     isCorrect: null, pointsAwarded: 0, pointsMax: 1,
     prompt: '', correctAnswer: '—', roundLabel: '', questionLabel: '', questionType: null,
@@ -842,6 +845,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
       const revealedBonus = runtimeBonusFromJson(question?.bonus)
 
       setSnapshot({
+        loaded: true,
         teamName: team?.name ?? fallbackName,
         score: team?.score ?? 0,
         answer: submission ? submittedAnswerLabel(submission.answer_text, question) : '',
@@ -878,6 +882,14 @@ function usePlayerSnapshot(): PlayerSnapshot {
   }, [])
 
   return snapshot
+}
+
+function PlayerSnapshotLoading() {
+  return (
+    <div className="flex flex-col items-center justify-center px-6 text-center" style={{ minHeight: '100%' }}>
+      <WaitMsg msg="Loading your result…" />
+    </div>
+  )
 }
 
 function playerResponseLabel(questionType: PlayerScreen | null) {
@@ -1617,7 +1629,7 @@ async function handleJoin() {
 // ─── SCREEN 3 — WAITING ───────────────────────────────────────────────────────
 function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
   const [teamName, setTeamName] = useState('Your team')
-  const [gameTitle, setGameTitle] = useState('Friday Night Trivia')
+  const [gameTitle, setGameTitle] = useState('Simple Trivia')
   const [gameCode, setGameCode] = useState('')
   const [teamCount, setTeamCount] = useState<number | null>(null)
 
@@ -2189,6 +2201,7 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const question = useLiveQuestionDefinition()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
@@ -2223,6 +2236,7 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 12 — NO ANSWER ────────────────────────────────────────────────────
 function NoAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
@@ -2242,6 +2256,7 @@ function NoAnswer({ go }: { go: (s: PlayerScreen) => void }) {
 function Correct({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
@@ -2263,6 +2278,7 @@ function Correct({ go }: { go: (s: PlayerScreen) => void }) {
 function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
@@ -2311,6 +2327,7 @@ function ContentScreen() {
 function Intermission({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} />
@@ -2334,7 +2351,10 @@ function LeaderboardResults({ scope }: { scope: 'question' | 'round' }) {
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   const { teams, teamId } = useLiveLeaderboard()
   const myIndex = teams.findIndex(team => team.id === teamId)
+  const placements = competitionPlacements(teams)
+  const myPlacement = competitionPlacementAt(teams, myIndex)
   const afterQuestion = scope === 'question'
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} />
@@ -2345,12 +2365,12 @@ function LeaderboardResults({ scope }: { scope: 'question' | 'round' }) {
         <div style={{ background: C.violetPale, borderRadius: 18, padding: '18px 20px', textAlign: 'center', marginBottom: 22 }}>
           <p style={{ color: C.violet, fontSize: 18, fontWeight: 800 }}>{snapshot.teamName}</p>
           {scoresVisible && <p style={{ color: C.ink, fontSize: 36, fontWeight: 900 }}>{snapshot.score}</p>}
-          <p style={{ color: C.violet, fontSize: 13, fontWeight: 700 }}>{myIndex >= 0 ? `${myIndex + 1}${myIndex === 0 ? 'st' : myIndex === 1 ? 'nd' : myIndex === 2 ? 'rd' : 'th'} place` : ''}</p>
+          <p style={{ color: C.violet, fontSize: 13, fontWeight: 700 }}>{myPlacement ? `${ordinalPlacement(myPlacement)} place` : ''}</p>
         </div>
         <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', marginBottom: 10 }}>LEADERBOARD</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {teams.map((team, i) => <div key={team.id} style={{ background: team.id === teamId ? C.violetMist : C.panel, border: `1px solid ${team.id === teamId ? C.violet : C.line}`, borderRadius: 13, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.ink, fontWeight: 800 }}>{team.score}</span>}
+            <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{placements[i]}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.ink, fontWeight: 800 }}>{team.score}</span>}
           </div>)}
         </div>
         <div style={{ marginTop: 24 }}><WaitMsg msg={afterQuestion ? 'Waiting for the next question…' : 'Waiting for the next round…'} /></div>
@@ -2371,6 +2391,7 @@ function RoundResults() {
 function DelayedReveal({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
   const fullyCorrect = snapshot.pointsAwarded > 0 && snapshot.pointsAwarded >= snapshot.pointsMax
   const partiallyCorrect = snapshot.pointsAwarded > 0 && snapshot.pointsAwarded < snapshot.pointsMax
   const resultTitle = !snapshot.answer
@@ -2458,6 +2479,7 @@ function FinalResult({ go }: { go: (s: PlayerScreen) => void }) {
   const { teams, teamId } = useLiveLeaderboard(showFinalLeaderboard)
   const myIndex = teams.findIndex(team => team.id === teamId)
   const me = teams.find(team => team.id === teamId)
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <div className="flex-1 overflow-y-auto px-5 py-6 text-center">
@@ -2713,6 +2735,7 @@ function GameEnded({ go }: { go: (s: PlayerScreen) => void }) {
 function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
   const totalAwarded = snapshot.pointsAwarded + snapshot.bonusPointsAwarded
   const totalMax = snapshot.pointsMax + snapshot.bonusPointsMax
   return (
@@ -2736,6 +2759,7 @@ function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
 function RoundResultsHidden({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} />

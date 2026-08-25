@@ -29,6 +29,14 @@ describe('bonus grading', () => {
     expect(buildBonusGrading(runtime, '  ottawa city! ').items[0]?.status).toBe('correct')
   })
 
+  it('accepts a primary answer stored with legacy acceptance prose', () => {
+    const runtime = runtimeBonusFromJson({
+      ...bonus,
+      correct_answer: 'Lady Gaga (we’ll also accept her real name)',
+    })!
+    expect(buildBonusGrading(runtime, 'Lady Gaga').items[0]?.status).toBe('correct')
+  })
+
   it('keeps a one-edit typo reviewable', () => {
     const runtime = runtimeBonusFromJson(bonus)!
     expect(buildBonusGrading(runtime, 'Ottowa').items[0]?.status).toBe('review')

@@ -1,4 +1,5 @@
 import type { Json } from '@/lib/supabase/database.types'
+import { answerCandidates } from './answer-variants'
 import { reviewMatchForPair, type SubmissionGrading } from './grading'
 
 export type RuntimeBonus = {
@@ -48,7 +49,7 @@ export function runtimeBonusFromJson(value: Json | null | undefined): RuntimeBon
 }
 
 export function buildBonusGrading(bonus: RuntimeBonus, answerText: string): SubmissionGrading {
-  const candidates = [bonus.correctAnswer, ...bonus.acceptedAnswers]
+  const candidates = answerCandidates(bonus.correctAnswer, bonus.acceptedAnswers)
   const statuses = candidates.map(expected => ({
     expected,
     ...reviewMatchForPair(answerText, expected),

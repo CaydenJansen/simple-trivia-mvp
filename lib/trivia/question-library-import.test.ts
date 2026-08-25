@@ -77,6 +77,17 @@ describe('long-format Question Library imports', () => {
     expect(validateQuestionLibraryWorkbook(workbook).valid).toBe(true)
   })
 
+  it('moves legacy inline alternatives into explicit accepted answers', () => {
+    const workbook = validWorkbook()
+    workbook.Questions!.rows[0].values.Answer = 'Harley Quinn/ Harleen Quinzel (either name is fine)'
+    const result = validateQuestionLibraryWorkbook(workbook)
+
+    expect(result.plan?.questions[0]).toMatchObject({
+      correctAnswer: 'Harley Quinn',
+      acceptedAnswers: expect.arrayContaining(['Harleen Quinzel']),
+    })
+  })
+
   it('rejects contradictory structures and duplicate multi-answer values', () => {
     const workbook = validWorkbook()
     workbook.Questions!.rows.splice(5, 0, row(7, { 'Question ID': 'Q002', 'Row Type': 'Part', Label: 'A', 'Prompt / Clue': 'Clue', Answer: 'Answer' }))
