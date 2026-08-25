@@ -83,6 +83,7 @@
 - **After every question** leaderboard mode inserts a dedicated standings screen between scored questions; it must never become a persistent overlay on question or answer screens.
 - Preserve the established visual language: purple brand surfaces, light builder UI, dark host console, rounded cards, Plus Jakarta Sans, and restrained SaaS styling.
 - Every host screen shown while a game is actively running, including round breaks and in-game leaderboards, uses the dark host-console treatment. Light surfaces are reserved for building/setup and post-game results.
+- Live host screens describe player-visible state once, keep answer status with the answer controls, and expose contextual previous/next show controls persistently. Do not bury the safe back action in the utility menu or duplicate the same state across banners and helper copy.
 
 ## Question and Grading Semantics
 

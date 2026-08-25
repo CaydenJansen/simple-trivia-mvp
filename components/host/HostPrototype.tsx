@@ -5457,9 +5457,19 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             <h1 className="text-5xl font-black leading-tight">{contentScreen?.title ?? 'Loading content screen…'}</h1>
             {contentScreen?.body && <p style={{ color: C.liveDim }} className="mx-auto mt-6 max-w-2xl text-xl leading-8">{contentScreen.body}</p>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
-            <button data-host-navigation="forward" onClick={handleAdvanceContentScreen} disabled={actionBusy || !contentScreen} style={{ background: C.violet, boxShadow: `0 8px 32px ${C.violet}60` }} className="mx-auto mt-10 min-w-72 rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
-              {actionBusy ? 'Advancing…' : contentButtonLabel}
-            </button>
+            <div className="mx-auto mt-10 grid max-w-xl grid-cols-[160px_minmax(0,1fr)] gap-3">
+              <button
+                data-host-navigation="back"
+                disabled
+                style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }}
+                className="rounded-2xl px-5 py-5 text-sm font-bold opacity-35 disabled:cursor-not-allowed"
+              >
+                ← Previous
+              </button>
+              <button data-host-navigation="forward" onClick={handleAdvanceContentScreen} disabled={actionBusy || !contentScreen} style={{ background: C.violet, boxShadow: `0 8px 32px ${C.violet}60` }} className="rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
+                {actionBusy ? 'Advancing…' : contentButtonLabel}
+              </button>
+            </div>
           </section>
         </main>
       </div>
@@ -5483,8 +5493,6 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           {gameScreen === 'round-start' ? (
             <>
               <span style={{ color: C.liveDim }}>Round {question?.round_number ?? 1} of {totalRounds}</span>
-              <span style={{ color: C.liveLine }}>·</span>
-              <span style={{ color: C.caution }} className="font-bold">Players: Round intro</span>
               <span style={{ color: C.liveLine }}>·</span>
               <span style={{ color: C.liveDim }}>{question?.round_title ?? 'Friday Night Trivia'}</span>
             </>
@@ -5527,10 +5535,6 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 >
                   Reopen Answers
                 </button>
-                <button onClick={() => setEmergency(false)} style={{ color: C.liveText }}
-                  className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold hover:bg-live-surface transition-colors text-left">
-                  Go Back to Previous
-                </button>
                 <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="mt-1 pt-1">
                   <p style={{ color: C.liveDim }} className="px-2 pb-1 pt-1 text-[10px] font-bold uppercase tracking-widest">Leave this session</p>
                   <button
@@ -5560,19 +5564,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 className="rounded-3xl px-8 py-10 text-center shadow-2xl shrink-0"
               >
                 <p style={{ color: C.caution }} className="mb-8 text-[11px] font-extrabold uppercase tracking-[0.2em]">
-                  Players are seeing
+                  On player screens
                 </p>
                 <p style={{ color: C.liveDim }} className="mb-5 text-xs font-bold uppercase tracking-[0.14em]">Starting now</p>
                 <p style={{ color: '#C4B5FD' }} className="mb-2 text-sm font-semibold">Round {question?.round_number ?? 1}</p>
                 <h1 style={{ color: C.liveText }} className="text-5xl font-black leading-tight">{question?.round_title ?? 'Loading round…'}</h1>
                 <p style={{ color: C.liveDim }} className="mt-3 text-base">{question?.round_question_count ?? 0} questions</p>
-                <div
-                  style={{ background: `${C.violet}18`, border: `1px solid ${C.violet}35`, color: '#C4B5FD' }}
-                  className="mx-auto mt-9 flex max-w-sm items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold"
-                >
-                  <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: C.violet }} />
-                  Waiting for the first question…
-                </div>
               </section>
 
               <section
@@ -5593,11 +5590,41 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 </div>
               </section>
             </>
+          ) : gameScreen === 'question-results' ? (
+            <section
+              style={{ background: C.liveSurface, border: `1px solid ${C.violet}55` }}
+              className="rounded-3xl px-8 py-8 shadow-2xl shrink-0"
+            >
+              <p style={{ color: '#C4B5FD' }} className="text-center text-[11px] font-extrabold uppercase tracking-[0.2em]">
+                On player screens
+              </p>
+              <h1 style={{ color: C.liveText }} className="mt-3 text-center text-4xl font-black">Leaderboard</h1>
+              <div className="mx-auto mt-6 max-w-xl space-y-2">
+                {leaderboard.slice(0, 3).map((team, index) => (
+                  <div
+                    key={team.id}
+                    style={{ background: index === 0 ? `${C.violet}25` : C.livePanel, border: `1px solid ${index === 0 ? `${C.violet}55` : C.liveLine}` }}
+                    className="flex items-center gap-4 rounded-2xl px-5 py-3"
+                  >
+                    <span style={{ background: index === 0 ? C.violet : C.liveLine, color: index === 0 ? 'white' : C.liveDim }} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-extrabold">
+                      {index + 1}
+                    </span>
+                    <span style={{ color: C.liveText }} className="min-w-0 flex-1 truncate font-bold">{team.name}</span>
+                    <span style={{ color: C.liveText }} className="font-extrabold tabular-nums">{team.score}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
           ) : (
           <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-6 shrink-0">
-            <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">
-              {(question?.category ?? 'General')} · {question?.difficulty ?? '—'} · {question?.points_max ?? 1} pts max
-            </p>
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <p style={{ color: '#C4B5FD' }} className="text-[11px] font-extrabold uppercase tracking-[0.18em]">
+                On player screens
+              </p>
+              <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest">
+                {(question?.category ?? 'General')} · {question?.difficulty ?? '—'} · {question?.points_max ?? 1} pts max
+              </p>
+            </div>
 
             {question?.image_url && (
               <div style={{ background: '#fff', borderRadius: 16 }} className="h-36 mb-5 flex items-center justify-center overflow-hidden">
@@ -5785,35 +5812,46 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           </div>
           )}
 
-          <div style={{
-            background: gameScreen === 'question-results' ? `${C.violet}20` : gameScreen === 'round-start' ? `${C.caution}20` : phase === 'open' ? `${C.violet}20` : phase === 'closed' ? `${C.caution}20` : `${C.go}20`,
-            border: `1px solid ${gameScreen === 'question-results' ? `${C.violet}40` : gameScreen === 'round-start' ? `${C.caution}40` : phase === 'open' ? `${C.violet}40` : phase === 'closed' ? `${C.caution}40` : `${C.go}40`}`,
-            color: gameScreen === 'question-results' ? C.violet : gameScreen === 'round-start' ? C.caution : phase === 'open' ? C.violet : phase === 'closed' ? C.caution : C.go,
-          }} className="flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-extrabold uppercase tracking-widest shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'currentColor' }} />
-            {gameScreen === 'question-results'
-              ? 'Players see the leaderboard · Waiting for you to continue'
-              : gameScreen === 'round-start'
-              ? 'Players see the round intro · Waiting for the first question'
-              : phase === 'open'
-                ? questionStage === 'bonus'
-                  ? `Players see the bonus · Bonus answers are open`
-                  : activeBonus
-                    ? `Players see Question ${question?.round_position ?? 1} · Bonus coming indicator is visible`
-                    : `Players see Question ${question?.round_position ?? 1} · Answer controls are open`
-                : phase === 'closed'
-                  ? 'Players see Submitted or No answer · Correct answer is still hidden'
-                  : 'Players see their result · Correct answer is revealed'}
-          </div>
-
           {liveError && (
             <div style={{ background: `${C.stop}18`, border: `1px solid ${C.stop}45`, color: '#FCA5A5' }} className="rounded-xl px-4 py-3 text-sm font-semibold">
               {liveError}
             </div>
           )}
 
-          <div className="flex items-center justify-between shrink-0">
-            <h3 style={{ color: C.liveText }} className="font-bold text-sm">Team Answers</h3>
+          <div className="flex items-center justify-between gap-4 shrink-0">
+            <div className="flex min-w-0 items-center gap-3">
+              <h3 style={{ color: C.liveText }} className="shrink-0 font-bold text-sm">Team Answers</h3>
+              <span
+                style={{
+                  background: gameScreen === 'question-results'
+                    ? `${C.violet}20`
+                    : gameScreen === 'round-start' || phase === 'closed'
+                      ? `${C.caution}20`
+                      : phase === 'open' ? `${C.violet}20` : `${C.go}20`,
+                  border: `1px solid ${gameScreen === 'question-results'
+                    ? `${C.violet}45`
+                    : gameScreen === 'round-start' || phase === 'closed'
+                      ? `${C.caution}45`
+                      : phase === 'open' ? `${C.violet}45` : `${C.go}45`}`,
+                  color: gameScreen === 'question-results'
+                    ? '#C4B5FD'
+                    : gameScreen === 'round-start' || phase === 'closed'
+                      ? C.caution
+                      : phase === 'open' ? '#C4B5FD' : C.go,
+                }}
+                className="truncate rounded-lg px-2.5 py-1 text-[11px] font-extrabold uppercase tracking-wide"
+              >
+                {gameScreen === 'question-results'
+                  ? 'Leaderboard shown'
+                  : gameScreen === 'round-start'
+                    ? 'Waiting to start'
+                  : phase === 'open'
+                    ? `${questionStage === 'bonus' ? 'Accepting bonus answers' : 'Accepting answers'} · ${questionStage === 'bonus' ? bonusAnsweredCount : answeredCount}/${teams.length}`
+                    : phase === 'closed'
+                      ? `Answers closed · ${answeredCount}/${teams.length}`
+                      : 'Answer revealed'}
+              </span>
+            </div>
             <div className="flex items-center gap-3">
               {phase === 'revealed' && teams.length > 0 && (
                 <span
@@ -5831,11 +5869,6 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   {reviewCount} need{reviewCount === 1 ? 's' : ''} review
                 </span>
               )}
-              <div style={{ background: C.liveLine }} className="h-1.5 w-32 rounded-full overflow-hidden">
-                <div style={{ width: `${teams.length ? (answeredCount / teams.length) * 100 : 0}%`, background: C.violet }} className="h-full rounded-full" />
-              </div>
-              <span style={{ color: C.liveText }} className="text-sm font-bold tabular-nums">{answeredCount} / {teams.length}</span>
-              <span style={{ color: C.liveDim }} className="text-xs">answered</span>
             </div>
           </div>
 
@@ -6175,33 +6208,37 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           </div>
 
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="p-5 shrink-0">
-            {gameScreen === 'round-start' ? (
-              <div className="space-y-3">
-                <p style={{ color: C.caution }} className="text-[11px] text-center font-semibold uppercase tracking-widest">Round intro is on player phones</p>
+            <div className="space-y-3">
+              <button
+                data-host-navigation="back"
+                onClick={handleReopenAnswers}
+                disabled={actionBusy || phase !== 'closed' || gameScreen === 'round-start' || gameScreen === 'question-results'}
+                title={phase === 'revealed' ? 'Revealed scores cannot be safely undone' : undefined}
+                style={{ background: 'transparent', color: C.liveText, border: `1px solid ${C.liveLine}` }}
+                className="w-full rounded-xl py-3 text-sm font-bold transition-all hover:bg-white/5 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                {phase === 'closed' && gameScreen !== 'round-start' && gameScreen !== 'question-results'
+                  ? '← Reopen Answers'
+                  : '← Previous'}
+              </button>
+
+              {gameScreen === 'round-start' ? (
                 <button data-host-navigation="forward" onClick={handleOpenQuestion} disabled={actionBusy || !question}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
-                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
-                  {actionBusy ? 'Opening…' : firstRoundItem?.kind === 'content' ? 'Show First Content Screen' : 'Open First Question'}
+                  className="w-full rounded-2xl py-6 text-xl font-extrabold transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
+                  {actionBusy
+                    ? 'Opening…'
+                    : firstRoundItem?.kind === 'content'
+                      ? 'Show First Content Screen →'
+                      : `Show Question ${question?.round_position ?? 1} →`}
                 </button>
-              </div>
-            ) : gameScreen === 'question-results' ? (
-              <div className="space-y-3">
-                <p style={{ color: '#C4B5FD' }} className="text-[11px] text-center font-extrabold uppercase tracking-widest">
-                  Leaderboard is on player phones
-                </p>
+              ) : gameScreen === 'question-results' ? (
                 <button data-host-navigation="forward" onClick={handleAdvance} disabled={actionBusy}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
-                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
+                  className="w-full rounded-2xl py-6 text-xl font-extrabold transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
                   {actionBusy ? 'Advancing…' : nextLiveItem?.kind === 'content' ? 'Show Content Screen →' : 'Next Question →'}
                 </button>
-              </div>
-            ) : phase === 'open' ? (
-              <div className="space-y-3">
-                <p style={{ color: C.caution }} className="text-[11px] text-center font-extrabold uppercase tracking-widest">
-                  {questionStage === 'bonus'
-                    ? `Accepting bonus answers · ${bonusAnsweredCount}/${teams.length} submitted`
-                    : `Accepting main answers · ${answeredCount}/${teams.length} submitted`}
-                </p>
+              ) : phase === 'open' ? (
                 <button
                   data-host-navigation="forward"
                   onClick={activeBonus && questionStage === 'core' ? handleShowBonus : handleCloseAnswers}
@@ -6212,74 +6249,44 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     border: activeBonus && questionStage === 'core' ? 'none' : '2px solid #FBBF24',
                     boxShadow: activeBonus && questionStage === 'core' ? `0 8px 32px ${C.violet}60` : '0 10px 34px rgba(245,158,11,0.32)',
                   }}
-                  className="w-full py-6 rounded-2xl text-xl font-black hover:brightness-110 transition-all active:scale-[0.98] disabled:opacity-50"
-                >
-                  {actionBusy ? activeBonus && questionStage === 'core' ? 'Showing…' : 'Closing…' : activeBonus && questionStage === 'core' ? 'Show Bonus →' : 'Close Answers'}
-                  {!actionBusy && (
-                    <span className="block text-xs font-bold opacity-70 mt-1">
-                      {activeBonus && questionStage === 'core' ? 'Main answers stay locked in' : 'Close main and bonus answers'}
-                    </span>
-                  )}
-                </button>
-              </div>
-            ) : phase === 'closed' ? (
-              <div className="space-y-3">
-                <button
-                  data-host-navigation="back"
-                  onClick={handleReopenAnswers}
-                  disabled={actionBusy}
-                  style={{
-                    background: 'transparent',
-                    color: C.liveText,
-                    border: `1px solid ${C.liveLine}`,
-                  }}
-                  className="w-full py-3 rounded-xl text-sm font-bold hover:bg-white/5 transition-all active:scale-[0.99] disabled:opacity-50"
-                >
-                  ← Reopen Answers
-                </button>
-
-                <p style={{ color: reviewCount > 0 ? C.caution : C.go }} className="text-[11px] text-center font-semibold uppercase tracking-widest">
-                  {reviewCount > 0
-                    ? `${reviewCount} answer${reviewCount === 1 ? '' : 's'} still need review`
-                    : answerRevealMode === 'round'
-                      ? 'Answers closed — score now, reveal at round end'
-                      : 'Answers closed — ready to reveal'}
-                </p>
-                <button
-                  data-host-navigation="forward"
-                  onClick={answerRevealMode === 'round' ? handleScoreAndContinue : handleRevealAnswer}
-                  disabled={actionBusy || !question || reviewCount > 0}
-                  style={{
-                    background: reviewCount > 0 ? C.livePanel : C.violet,
-                    color: reviewCount > 0 ? C.liveDim : 'white',
-                    boxShadow: reviewCount > 0 ? 'none' : `0 8px 32px ${C.violet}60`,
-                    border: reviewCount > 0 ? `1px solid ${C.liveLine}` : 'none',
-                  }}
-                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="w-full rounded-2xl py-6 text-xl font-black transition-all hover:brightness-110 active:scale-[0.98] disabled:opacity-50"
                 >
                   {actionBusy
-                    ? answerRevealMode === 'round' ? 'Scoring…' : 'Revealing…'
-                    : reviewCount > 0
-                      ? 'Resolve Reviews First'
-                      : answerRevealMode === 'round'
-                        ? 'Score & Continue'
-                        : 'Reveal Answer'}
-                  {!actionBusy && reviewCount === 0 && (
-                    <span className="block text-sm font-semibold opacity-80 mt-0.5">
-                      {answerRevealMode === 'round' ? 'Keep the answer hidden' : '& Apply Points'}
-                    </span>
-                  )}
+                    ? activeBonus && questionStage === 'core' ? 'Showing…' : 'Closing…'
+                    : activeBonus && questionStage === 'core' ? 'Show Bonus →' : 'Close Answers →'}
                 </button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div style={{ background: `${C.go}18`, border: `1.5px solid ${C.go}50`, borderRadius: 14 }} className="p-3 text-center">
-                  <p style={{ color: C.go }} className="font-extrabold text-base">Answer Revealed</p>
-                  <p style={{ color: C.liveDim }} className="text-[11px] mt-0.5">{correctDisplay}</p>
-                </div>
+              ) : phase === 'closed' ? (
+                <>
+                  <button
+                    data-host-navigation="forward"
+                    onClick={answerRevealMode === 'round' ? handleScoreAndContinue : handleRevealAnswer}
+                    disabled={actionBusy || !question || reviewCount > 0}
+                    style={{
+                      background: reviewCount > 0 ? C.livePanel : C.violet,
+                      color: reviewCount > 0 ? C.liveDim : 'white',
+                      boxShadow: reviewCount > 0 ? 'none' : `0 8px 32px ${C.violet}60`,
+                      border: reviewCount > 0 ? `1px solid ${C.liveLine}` : 'none',
+                    }}
+                    className="w-full rounded-2xl py-6 text-xl font-extrabold transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {actionBusy
+                      ? answerRevealMode === 'round' ? 'Scoring…' : 'Revealing…'
+                      : reviewCount > 0
+                        ? 'Resolve Reviews First'
+                        : answerRevealMode === 'round'
+                          ? 'Score & Continue →'
+                          : 'Reveal Answer →'}
+                  </button>
+                  {reviewCount > 0 && (
+                    <p style={{ color: C.caution }} className="text-center text-[11px] font-semibold">
+                      {reviewCount} answer{reviewCount === 1 ? '' : 's'} still need review
+                    </p>
+                  )}
+                </>
+              ) : (
                 <button data-host-navigation="forward" onClick={handleAdvance} disabled={actionBusy}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
-                  className="w-full py-6 rounded-2xl text-xl font-extrabold hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-50">
+                  className="w-full rounded-2xl py-6 text-xl font-extrabold transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
                   {actionBusy
                     ? 'Advancing…'
                     : isFinalQuestion
@@ -6290,8 +6297,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                           ? 'Show Content Screen →'
                           : 'Next Question →'}
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </div>
