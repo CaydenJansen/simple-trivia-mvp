@@ -6549,13 +6549,13 @@ function EndOfRound({ go }: { go: Go }) {
   }
 
   return (
-    <div style={{ background: C.ground }} className="min-h-screen flex flex-col">
-      <header style={{ background: C.ink }} className="h-12 flex items-center px-6 shrink-0">
+    <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-screen flex flex-col">
+      <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}` }} className="h-12 flex items-center px-6 shrink-0">
         <div className="flex items-center gap-2.5">
           <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold">ST</div>
-          <span style={{ color: '#ffffff80' }} className="font-bold text-sm">Simple Trivia</span>
+          <span style={{ color: C.liveDim }} className="font-bold text-sm">Simple Trivia</span>
         </div>
-        <div className="flex-1 text-center"><span style={{ color: '#ffffff50' }} className="text-sm">Friday Night Trivia</span></div>
+        <div className="flex-1 text-center"><span style={{ color: C.liveDim }} className="text-sm">Friday Night Trivia</span></div>
         <div className="flex items-center gap-3">
           <JoinCodeButton dark />
           <CancelGameButton go={go} dark />
@@ -6567,15 +6567,15 @@ function EndOfRound({ go }: { go: Go }) {
         <div className="text-center mb-10">
           <div style={{ background: `${C.go}15`, color: C.go, border: `1px solid ${C.go}30` }}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-5">✓ Round Complete</div>
-          <h1 style={{ color: C.ink }} className="text-5xl font-extrabold">Round {roundNumber} Complete</h1>
-          <p style={{ color: C.sub }} className="mt-2 text-sm">
+          <h1 style={{ color: C.liveText }} className="text-5xl font-extrabold">Round {roundNumber} Complete</h1>
+          <p style={{ color: C.liveDim }} className="mt-2 text-sm">
             {nextQuestion ? `Next up: Round ${nextQuestion.round_number} · ${nextQuestion.round_title}` : 'That was the final round.'}
           </p>
         </div>
 
-        {error && <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="rounded-xl px-4 py-3 mb-5 text-sm font-semibold">{error}</div>}
+        {error && <div style={{ background: `${C.stop}18`, border: `1px solid ${C.stop}55`, color: '#FCA5A5' }} className="rounded-xl px-4 py-3 mb-5 text-sm font-semibold">{error}</div>}
 
-        <section style={{ background: C.liveBg, border: `1px solid ${C.liveLine}` }} className="mb-7 overflow-hidden rounded-2xl text-center">
+        <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="mb-7 overflow-hidden rounded-2xl text-center shadow-2xl">
           <div style={{ borderBottom: `1px solid ${C.liveLine}`, color: '#C4B5FD' }} className="px-4 py-2 text-[11px] font-extrabold uppercase tracking-[0.18em]">
             Players are seeing
           </div>
@@ -6600,32 +6600,53 @@ function EndOfRound({ go }: { go: Go }) {
           )}
         </section>
 
-        <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5 mb-7">
-          <p style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider mb-4">
+        <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-5 mb-7 shadow-2xl">
+          <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-wider mb-4">
             Current Standings · {playersSeeRoundLeaderboard && !intermission ? 'Also visible to players' : 'Host only'}
           </p>
           <div className="space-y-1.5">
             {leaderboard.map((team, i) => (
-              <div key={team.id} style={{ background: i < 3 ? C.ground : 'transparent' }} className="flex items-center gap-4 p-3 rounded-xl">
-                <div style={{ background: i === 0 ? C.violetPale : C.panel, color: i === 0 ? C.violet : C.sub, border: `1px solid ${C.line}`, width: 32, height: 32 }}
+              <div key={team.id} style={{ background: i < 3 ? C.livePanel : 'transparent', border: `1px solid ${i < 3 ? C.liveLine : 'transparent'}` }} className="flex items-center gap-4 p-3 rounded-xl">
+                <div style={{ background: i === 0 ? C.violet : C.liveLine, color: i === 0 ? 'white' : C.liveDim, border: `1px solid ${i === 0 ? C.violet : C.liveLine}`, width: 32, height: 32 }}
                   className="rounded-full flex items-center justify-center text-sm font-extrabold shrink-0">{i + 1}</div>
-                <span style={{ color: C.ink }} className="flex-1 text-sm font-semibold">{team.name}</span>
-                <span style={{ color: C.ink }} className="font-extrabold tabular-nums">{team.score}</span>
+                <span style={{ color: C.liveText }} className="flex-1 text-sm font-semibold">{team.name}</span>
+                <span style={{ color: C.liveText }} className="font-extrabold tabular-nums">{team.score}</span>
               </div>
             ))}
           </div>
         </div>
 
         <div className="flex gap-3 mb-6">
-          <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={toggleIntermission} disabled={busy}>
+          <button
+            type="button"
+            onClick={toggleIntermission}
+            disabled={busy}
+            style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, color: C.liveText }}
+            className="flex-1 cursor-pointer rounded-xl px-5 py-3.5 text-sm font-semibold transition-all hover:brightness-125 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+          >
             {intermission ? 'Hide Intermission' : 'Take a Break'}
-          </Btn>
+          </button>
           {nextQuestion ? (
-            <Btn sz="lg" cls="flex-1 justify-center" onClick={startNextRound} disabled={busy} hostNavigation="forward">
+            <button
+              type="button"
+              data-host-navigation="forward"
+              onClick={startNextRound}
+              disabled={busy}
+              style={{ background: C.violet, color: 'white', boxShadow: `0 8px 28px ${C.violet}45` }}
+              className="flex-1 cursor-pointer rounded-xl px-6 py-3.5 text-base font-semibold transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+            >
               Start Round {nextQuestion.round_number}
-            </Btn>
+            </button>
           ) : (
-            <Btn sz="lg" cls="flex-1 justify-center" onClick={() => go('final-results')} hostNavigation="forward">View Final Results</Btn>
+            <button
+              type="button"
+              data-host-navigation="forward"
+              onClick={() => go('final-results')}
+              style={{ background: C.violet, color: 'white', boxShadow: `0 8px 28px ${C.violet}45` }}
+              className="flex-1 cursor-pointer rounded-xl px-6 py-3.5 text-base font-semibold transition-all hover:opacity-90 active:scale-[0.98]"
+            >
+              View Final Results
+            </button>
           )}
         </div>
 

@@ -82,6 +82,7 @@
 - Leaderboard visibility rules must not leak prohibited team names, scores, or ranks. A team sees point totals only when the host enables player score visibility; this setting is independent from leaderboard visibility.
 - **After every question** leaderboard mode inserts a dedicated standings screen between scored questions; it must never become a persistent overlay on question or answer screens.
 - Preserve the established visual language: purple brand surfaces, light builder UI, dark host console, rounded cards, Plus Jakarta Sans, and restrained SaaS styling.
+- Every host screen shown while a game is actively running, including round breaks and in-game leaderboards, uses the dark host-console treatment. Light surfaces are reserved for building/setup and post-game results.
 
 ## Question and Grading Semantics
 
