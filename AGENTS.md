@@ -67,6 +67,9 @@
 - Player live screens use a compact two-line mobile header: brand with Leave Game, then round/question with team/score. Present question prompts as clear, prominent reading surfaces without centering long question text.
 - Quiz readiness is derived automatically when saving: complete quizzes become Ready, incomplete quizzes remain Draft with specific blockers. Do not reintroduce a manual readiness step or preparation progress wizard.
 - Saving and hosting are separate deliberate actions. Any edit disables hosting until the current quiz version is saved; saving must never automatically enter the hosting flow.
+- Leaving Quiz Builder with unsaved changes must offer Save & Leave, Discard Changes, and Keep Editing. Closing or reloading the browser must also warn while builder changes are unsaved.
+- My Quizzes supports direct renaming and independent duplication. A duplicated quiz copies its question, content-screen, bonus, provenance, and prepared-tiebreaker snapshots without linking future edits between the two quizzes.
+- Quiz Preview supports Space or Right Arrow to advance and Left Arrow to go back, while keeping the visible Previous and Next controls.
 - Quiz Builder overview cards expose the complete question and answer information needed for review, including accepted alternatives, choices, multi-part clues, ranking order, and bonuses. Omit absent optional category/difficulty metadata instead of showing placeholder labels such as Uncategorised or Unrated.
 - Prepared tiebreakers are optional for manually built quizzes; recommend at least two without blocking save or hosting. Automatically built quizzes must prepare exactly three.
 - Auto-Build must fail clearly when active source content cannot satisfy the requested count, topics, difficulty range, or three-tiebreaker requirement. Never silently duplicate questions or reduce the requested quiz.

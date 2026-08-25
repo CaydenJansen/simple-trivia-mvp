@@ -67,6 +67,8 @@ import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib
 import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
 import { competitionPlacements } from "@/lib/trivia/leaderboard-ranking";
 import { loadAllSourceRows } from "@/lib/trivia/paginated-source-load";
+import { nextQuizCopyTitle } from "@/lib/trivia/quiz-copy";
+import { quizPreviewIndexForKey } from "@/lib/trivia/quiz-preview-navigation";
 import {
   EMPTY_SOURCE_QUESTION_BONUS,
   estimatedQuizMinutes,
@@ -761,8 +763,13 @@ function Dashboard({ go }: { go: Go }) {
   const [gamesHosted, setGamesHosted] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [actionNotice, setActionNotice] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<QuizSummary | null>(null)
   const [deletingQuiz, setDeletingQuiz] = useState(false)
+  const [pendingRename, setPendingRename] = useState<QuizSummary | null>(null)
+  const [renameTitle, setRenameTitle] = useState('')
+  const [renamingQuiz, setRenamingQuiz] = useState(false)
+  const [duplicatingQuizId, setDuplicatingQuizId] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
@@ -820,6 +827,108 @@ function Dashboard({ go }: { go: Go }) {
     }
   }
 
+  function openRename(quiz: QuizSummary) {
+    setLoadError(null)
+    setActionNotice(null)
+    setPendingRename(quiz)
+    setRenameTitle(quiz.title)
+  }
+
+  async function renameQuiz() {
+    if (!pendingRename || renamingQuiz) return
+    const nextTitle = renameTitle.trim()
+    if (!nextTitle) {
+      setLoadError('Enter a quiz name before saving.')
+      return
+    }
+
+    setRenamingQuiz(true)
+    setLoadError(null)
+    const updatedAt = new Date().toISOString()
+    const { error } = await supabase
+      .from('quizzes')
+      .update({ title: nextTitle, updated_at: updatedAt })
+      .eq('id', pendingRename.id)
+
+    if (error) {
+      console.error('Could not rename quiz:', error)
+      setLoadError('Could not rename that quiz. Please try again.')
+      setRenamingQuiz(false)
+      return
+    }
+
+    setQuizzes(current => current.map(quiz => quiz.id === pendingRename.id
+      ? { ...quiz, title: nextTitle, updated_at: updatedAt }
+      : quiz))
+    if (localStorage.getItem('simple-trivia-selected-quiz-id') === pendingRename.id) {
+      localStorage.setItem('simple-trivia-selected-quiz-title', nextTitle)
+    }
+    setPendingRename(null)
+    setRenamingQuiz(false)
+    setActionNotice(`Renamed quiz to “${nextTitle}”.`)
+  }
+
+  async function duplicateQuiz(quiz: QuizSummary) {
+    if (duplicatingQuizId) return
+    setDuplicatingQuizId(quiz.id)
+    setLoadError(null)
+    setActionNotice(null)
+
+    const [questionResult, contentScreenResult, tiebreakerResult] = await Promise.all([
+      supabase
+        .from('quiz_questions')
+        .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, tags, image_url, points_max, bonus, metadata_snapshot, notes, source_question_id, source_revision')
+        .eq('quiz_id', quiz.id)
+        .order('position', { ascending: true }),
+      supabase
+        .from('quiz_content_screens')
+        .select('screen_key, item_position, round_number, round_title, title, body, image_url')
+        .eq('quiz_id', quiz.id)
+        .order('item_position', { ascending: true }),
+      supabase
+        .from('quiz_tiebreakers')
+        .select('tiebreaker_key, position, prompt, correct_value, answer_unit, notes')
+        .eq('quiz_id', quiz.id)
+        .order('position', { ascending: true }),
+    ])
+
+    const snapshotError = questionResult.error || contentScreenResult.error || tiebreakerResult.error
+    if (snapshotError) {
+      console.error('Could not load quiz snapshots for duplication:', snapshotError)
+      setLoadError('Could not copy that quiz. Please try again.')
+      setDuplicatingQuizId(null)
+      return
+    }
+
+    const copyTitle = nextQuizCopyTitle(quiz.title, quizzes.map(item => item.title))
+    const { data: copiedQuizId, error: copyError } = await supabase.rpc('save_quiz_with_bonus_snapshots', {
+      p_quiz_id: null,
+      p_title: copyTitle,
+      p_status: quiz.status,
+      p_estimated_minutes: quiz.estimated_minutes,
+      p_questions: (questionResult.data ?? []) as Json,
+      p_content_screens: (contentScreenResult.data ?? []) as Json,
+      p_tiebreakers: (tiebreakerResult.data ?? []) as Json,
+    })
+
+    if (copyError || !copiedQuizId) {
+      console.error('Could not duplicate quiz:', copyError)
+      setLoadError('Could not copy that quiz. Please try again.')
+      setDuplicatingQuizId(null)
+      return
+    }
+
+    const createdAt = new Date().toISOString()
+    setQuizzes(current => [{
+      ...quiz,
+      id: copiedQuizId,
+      title: copyTitle,
+      updated_at: createdAt,
+    }, ...current])
+    setDuplicatingQuizId(null)
+    setActionNotice(`Created “${copyTitle}”.`)
+  }
+
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
       <Nav go={go} active="My Quizzes" />
@@ -847,6 +956,12 @@ function Dashboard({ go }: { go: Go }) {
           </div>
         )}
 
+        {actionNotice && (
+          <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }} className="mb-5 rounded-xl px-4 py-3">
+            <p style={{ color: '#166534' }} className="text-sm font-semibold">{actionNotice}</p>
+          </div>
+        )}
+
         {loading ? (
           <div style={{ color: C.sub }} className="py-24 text-center text-sm">Loading quizzes…</div>
         ) : quizzes.length === 0 ? (
@@ -867,7 +982,17 @@ function Dashboard({ go }: { go: Go }) {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {quizzes.map(q => <QuizCard key={q.id} q={q} go={go} onDelete={() => setPendingDelete(q)} />)}
+            {quizzes.map(q => (
+              <QuizCard
+                key={q.id}
+                q={q}
+                go={go}
+                duplicating={duplicatingQuizId === q.id}
+                onRename={() => openRename(q)}
+                onDuplicate={() => { void duplicateQuiz(q) }}
+                onDelete={() => setPendingDelete(q)}
+              />
+            ))}
             <button
               onClick={() => go('create-quiz')}
               style={{ border: `2px dashed ${C.line}` }}
@@ -893,11 +1018,39 @@ function Dashboard({ go }: { go: Go }) {
           </section>
         </div>
       )}
+      {pendingRename && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/50 px-4 backdrop-blur-sm">
+          <section className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <h2 className="text-xl font-bold text-zinc-900">Rename quiz</h2>
+            <label htmlFor="dashboard-quiz-name" className="mt-5 block text-xs font-bold uppercase tracking-wider text-zinc-500">Quiz name</label>
+            <input
+              id="dashboard-quiz-name"
+              autoFocus
+              value={renameTitle}
+              onChange={event => setRenameTitle(event.target.value)}
+              onKeyDown={event => { if (event.key === 'Enter') void renameQuiz() }}
+              className="mt-2 w-full rounded-xl border border-zinc-200 px-4 py-3 text-base font-semibold text-zinc-900 outline-none focus:border-violet focus:ring-2 focus:ring-violet/20"
+            />
+            {loadError && <p className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{loadError}</p>}
+            <div className="mt-6 flex justify-end gap-3">
+              <button disabled={renamingQuiz} onClick={() => setPendingRename(null)} className="rounded-xl border border-zinc-200 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Cancel</button>
+              <button disabled={renamingQuiz || !renameTitle.trim()} onClick={() => void renameQuiz()} className="rounded-xl bg-violet px-4 py-2 text-sm font-semibold text-white hover:bg-violet-hover disabled:opacity-50">{renamingQuiz ? 'Saving…' : 'Save Name'}</button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
 
-function QuizCard({ q, go, onDelete }: { q: QuizSummary; go: Go; onDelete: () => void }) {
+function QuizCard({ q, go, duplicating, onRename, onDuplicate, onDelete }: {
+  q: QuizSummary
+  go: Go
+  duplicating: boolean
+  onRename: () => void
+  onDuplicate: () => void
+  onDelete: () => void
+}) {
   const ready = q.status === 'ready'
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -917,7 +1070,10 @@ function QuizCard({ q, go, onDelete }: { q: QuizSummary; go: Go; onDelete: () =>
       className="rounded-2xl p-5 flex flex-col group hover:shadow-lg transition-all duration-200"
     >
       <div className="flex items-start justify-between gap-2 mb-2">
-        <h3 style={{ color: C.ink }} className="font-bold text-[15px] leading-snug">{q.title}</h3>
+        <div className="flex min-w-0 items-start gap-1">
+          <h3 style={{ color: C.ink }} className="min-w-0 truncate font-bold text-[15px] leading-snug">{q.title}</h3>
+          <button type="button" aria-label={`Rename ${q.title}`} title="Rename quiz" onClick={onRename} style={{ color: C.sub }} className="shrink-0 rounded-md p-1 transition-colors hover:bg-violet-mist hover:text-violet"><I.pencil /></button>
+        </div>
         <Chip color={ready ? 'ready' : 'draft'}>{ready ? 'Ready' : 'Draft'}</Chip>
       </div>
       <div style={{ color: C.sub }} className="text-sm flex items-center gap-2 mb-1">
@@ -931,9 +1087,11 @@ function QuizCard({ q, go, onDelete }: { q: QuizSummary; go: Go; onDelete: () =>
       <div style={{ borderTop: `1px solid ${C.line}` }} className="relative flex items-center gap-2 pt-3.5 mt-2">
         <Btn v="ghost" sz="sm" onClick={() => selectQuiz('quiz-builder')} cls="flex-1 justify-center">Edit</Btn>
         <Btn sz="sm" onClick={() => selectQuiz('host-setup')} cls="flex-1 justify-center" disabled={!ready}>Host Game</Btn>
-        <button aria-label={`Quiz actions for ${q.title}`} onClick={() => setMenuOpen(open => !open)} style={{ color: C.sub }} className="p-1.5 rounded-lg hover:bg-ground transition-colors"><I.menu /></button>
+        <button disabled={duplicating} aria-label={`Quiz actions for ${q.title}`} onClick={() => setMenuOpen(open => !open)} style={{ color: C.sub }} className="p-1.5 rounded-lg hover:bg-ground transition-colors disabled:opacity-40"><I.menu /></button>
         {menuOpen && (
-          <div className="absolute bottom-10 right-0 z-20 w-40 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl">
+          <div className="absolute bottom-10 right-0 z-20 w-44 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl">
+            <button onClick={() => { setMenuOpen(false); onRename() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Rename Quiz</button>
+            <button onClick={() => { setMenuOpen(false); onDuplicate() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">{duplicating ? 'Duplicating…' : 'Duplicate Quiz'}</button>
             <button onClick={() => { setMenuOpen(false); onDelete() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50">Delete Quiz</button>
           </div>
         )}
@@ -1271,6 +1429,7 @@ function QuizBuilder({ go }: { go: Go }) {
   const [roundDropTarget, setRoundDropTarget] = useState<{ id: number; placement: DropPlacement } | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [pendingExit, setPendingExit] = useState<Screen | null>(null)
   const questionCount = rounds.reduce((total, round) => total + round.questions.length, 0)
   const bonusCount = rounds.reduce((total, round) => total + round.questions.filter(question => question.bonus !== null).length, 0)
   const estimatedMinutes = estimatedQuizMinutes(questionCount, bonusCount)
@@ -1289,6 +1448,18 @@ function QuizBuilder({ go }: { go: Go }) {
   const needsStatusSync = persisted && !dirty && quizStatus !== expectedQuizStatus
   const needsSave = !persisted || dirty || needsStatusSync
   const canHost = quizCanHost({ persisted, dirty, ready: readiness.ready, status: quizStatus })
+
+  useEffect(() => {
+    if (loading || !needsSave) return
+
+    function warnBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', warnBeforeUnload)
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload)
+  }, [loading, needsSave])
 
   useEffect(() => {
     let active = true
@@ -1764,40 +1935,34 @@ function QuizBuilder({ go }: { go: Go }) {
     go('host-setup')
   }
 
+  function requestExit(next: Screen) {
+    if (loading || !needsSave) {
+      go(next)
+      return
+    }
+    setSaveError(null)
+    setPendingExit(next)
+  }
+
+  async function saveAndExit() {
+    if (!pendingExit) return
+    const next = pendingExit
+    const savedQuizId = await saveQuiz()
+    if (!savedQuizId) return
+    setPendingExit(null)
+    go(next)
+  }
+
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
       {/* Builder top bar */}
       <header style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }}
         className="h-14 flex items-center px-6 gap-4 sticky top-0 z-40">
-        <button onClick={() => go('dashboard')} style={{ color: C.sub }}
+        <button onClick={() => requestExit('dashboard')} style={{ color: C.sub }}
           className="flex items-center gap-1.5 text-sm font-medium hover:text-violet transition-colors shrink-0">
           <I.back /> My Quizzes
         </button>
-        <div className="flex flex-1 justify-center">
-          <div
-            title="Click to rename this quiz"
-            style={{ border: `1px solid ${C.line}`, background: C.ground }}
-            className="group flex min-w-[250px] items-center gap-2 rounded-xl px-3 py-1.5 transition-colors hover:border-violet/40 hover:bg-violet-mist"
-          >
-            <span style={{ color: C.sub }} className="text-[10px] font-extrabold uppercase tracking-wider">Quiz name</span>
-            <input
-              ref={quizTitleInputRef}
-              aria-label="Quiz name"
-              value={title}
-              onChange={e => { setTitle(e.target.value); setDirty(true) }}
-              style={{ color: C.ink }}
-              className="min-w-0 flex-1 bg-transparent text-center text-[15px] font-bold focus:outline-none"
-            />
-            <button
-              type="button"
-              aria-label="Rename quiz"
-              title="Rename quiz"
-              onClick={() => { quizTitleInputRef.current?.focus(); quizTitleInputRef.current?.select() }}
-              style={{ color: C.sub }}
-              className="rounded-md p-1 transition-colors hover:bg-violet-mist hover:text-violet group-hover:text-violet"
-            ><I.pencil /></button>
-          </div>
-        </div>
+        <div className="flex-1" />
         <div style={{ color: C.sub }} className="text-xs flex items-center gap-2 shrink-0">
           <span className="font-mono">{questionCount}q</span>
           <span style={{ color: C.line }}>·</span>
@@ -1831,6 +1996,31 @@ function QuizBuilder({ go }: { go: Go }) {
 
       <div className="flex" style={{ maxWidth: 1280, margin: '0 auto' }}>
         <main className="flex-1 px-6 py-7 space-y-3.5 min-w-0">
+          <div className="mx-auto mb-5 flex w-full max-w-xl justify-center">
+            <div
+              title="Click to rename this quiz"
+              style={{ border: `1px solid ${C.line}`, background: C.panel }}
+              className="group flex w-full items-center gap-3 rounded-2xl px-5 py-3 shadow-sm transition-colors hover:border-violet/40 hover:bg-violet-mist"
+            >
+              <span style={{ color: C.sub }} className="shrink-0 text-[10px] font-extrabold uppercase tracking-wider">Quiz name</span>
+              <input
+                ref={quizTitleInputRef}
+                aria-label="Quiz name"
+                value={title}
+                onChange={e => { setTitle(e.target.value); setDirty(true) }}
+                style={{ color: C.ink }}
+                className="min-w-0 flex-1 bg-transparent text-center text-lg font-extrabold focus:outline-none"
+              />
+              <button
+                type="button"
+                aria-label="Rename quiz"
+                title="Rename quiz"
+                onClick={() => { quizTitleInputRef.current?.focus(); quizTitleInputRef.current?.select() }}
+                style={{ color: C.sub }}
+                className="rounded-lg p-1.5 transition-colors hover:bg-violet-pale hover:text-violet group-hover:text-violet"
+              ><I.pencil /></button>
+            </div>
+          </div>
           {!loading && !loadError && !readiness.ready && (
             <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }} className="rounded-2xl px-5 py-4">
               <p style={{ color: '#92400E' }} className="text-sm font-bold">Before you can host</p>
@@ -2186,6 +2376,21 @@ function QuizBuilder({ go }: { go: Go }) {
             setNewQuestionRoundId(null)
           }}
         />
+      )}
+
+      {pendingExit && (
+        <div data-host-shortcuts="blocked" className="fixed inset-0 z-[130] flex items-center justify-center bg-zinc-950/55 px-4 backdrop-blur-sm">
+          <section className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <h2 className="text-xl font-bold text-zinc-900">Save your changes?</h2>
+            <p className="mt-3 text-sm leading-6 text-zinc-600">This quiz has changes that haven’t been saved yet. Save them before leaving, or discard them and return to My Quizzes.</p>
+            {saveError && <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{saveError}</p>}
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button disabled={saving} onClick={() => setPendingExit(null)} className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Keep Editing</button>
+              <button disabled={saving} onClick={() => { const next = pendingExit; setPendingExit(null); go(next) }} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50">Discard Changes</button>
+              <button disabled={saving} onClick={() => void saveAndExit()} className="rounded-xl bg-violet px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-hover disabled:opacity-50">{saving ? 'Saving…' : 'Save & Leave'}</button>
+            </div>
+          </section>
+        </div>
       )}
 
       {previewOpen && <QuizPreview title={title} rounds={rounds} onClose={() => setPreviewOpen(false)} />}
@@ -2702,8 +2907,24 @@ function QuizPreview({ title, rounds, onClose }: {
   const active = items[activeIndex]
   const activeBonus = active?.kind === 'question' ? sourceQuestionBonusDraft(active.question.bonus) : null
 
+  useEffect(() => {
+    function handlePreviewKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) return
+
+      const nextIndex = quizPreviewIndexForKey(event.key, event.code, activeIndex, items.length)
+      if (nextIndex === null) return
+      event.preventDefault()
+      setActiveIndex(nextIndex)
+    }
+
+    window.addEventListener('keydown', handlePreviewKeyDown)
+    return () => window.removeEventListener('keydown', handlePreviewKeyDown)
+  }, [activeIndex, items.length])
+
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/80 px-4 py-8 backdrop-blur-sm">
+    <div data-host-shortcuts="blocked" className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/80 px-4 py-8 backdrop-blur-sm">
       <section className="flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-[#171526] text-white shadow-2xl">
         <header className="flex items-center gap-4 border-b border-white/10 px-6 py-4">
           <div className="min-w-0 flex-1">
@@ -2759,9 +2980,10 @@ function QuizPreview({ title, rounds, onClose }: {
           </div>
         </div>
 
-        <footer className="flex items-center justify-between border-t border-white/10 px-6 py-4">
-          <button disabled={activeIndex === 0 || items.length === 0} onClick={() => setActiveIndex(index => Math.max(0, index - 1))} className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold disabled:opacity-30">Previous</button>
-          <button disabled={items.length === 0 || activeIndex >= items.length - 1} onClick={() => setActiveIndex(index => Math.min(items.length - 1, index + 1))} className="rounded-xl bg-violet-600 px-5 py-2 text-sm font-semibold disabled:opacity-30">Next</button>
+        <footer className="grid grid-cols-[1fr_auto_1fr] items-center border-t border-white/10 px-6 py-4">
+          <button disabled={activeIndex === 0 || items.length === 0} onClick={() => setActiveIndex(index => Math.max(0, index - 1))} className="justify-self-start rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold disabled:opacity-30">← Previous</button>
+          <span className="text-xs font-semibold text-zinc-500">Space / → next · ← previous</span>
+          <button disabled={items.length === 0 || activeIndex >= items.length - 1} onClick={() => setActiveIndex(index => Math.min(items.length - 1, index + 1))} className="justify-self-end rounded-xl bg-violet-600 px-5 py-2 text-sm font-semibold disabled:opacity-30">Next →</button>
         </footer>
       </section>
     </div>
