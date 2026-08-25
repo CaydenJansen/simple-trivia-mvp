@@ -70,6 +70,7 @@
 - Explicit round themes discount their own broad category/tag repetition, but not repeated specific subtopics. Check whole-quiz saturation as well as adjacent repetition.
 - Tiebreakers are numeric closest-answer questions used only to resolve a consequential final-placement tie. Normal round and in-game ties are allowed.
 - Do not include tiebreakers in normal question counts, running-time estimates, or game points. Resolving a tie must never change a team's trivia score.
+- Tiebreaker resolution choices require an explicit host selection and confirmation. Player numeric submissions lock immediately after submission and cannot be edited.
 - A future final-results resolution must offer tiebreaker, allowed-tie, and manual ordering methods, and store the decision and placement separately from score.
 - Never expose a prepared tiebreaker's correct numeric value to players before the relevant tiebreaker reveal.
 - The host must be able to reopen answers after closing them but before reveal.

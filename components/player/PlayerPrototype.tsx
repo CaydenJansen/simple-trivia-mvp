@@ -2512,6 +2512,7 @@ function LiveTiebreaker() {
   }
 
   const revealed = state.attempt_status === 'resolved' || state.attempt_status === 'tied'
+  const hasSubmitted = state.numeric_answer !== null
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <div style={{ background: C.violet, color: 'white', padding: '24px 22px 28px', textAlign: 'center' }}>
@@ -2536,6 +2537,13 @@ function LiveTiebreaker() {
             <p style={{ color: C.ink, fontSize: 20, fontWeight: 900 }}>{state.numeric_answer}</p>
             <p style={{ color: C.sub, fontSize: 14, marginTop: 8 }}>Answers are closed. Waiting for the reveal…</p>
           </div>
+        ) : hasSubmitted ? (
+          <div style={{ background: '#F0FDF4', border: `1px solid ${C.go}`, borderRadius: 18, padding: '24px', textAlign: 'center' }}>
+            <div style={{ background: C.go, color: 'white', width: 42, height: 42, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 900, margin: '0 auto 14px' }}>✓</div>
+            <p style={{ color: C.ink, fontSize: 13, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Answer locked in</p>
+            <p style={{ color: C.go, fontSize: 28, fontWeight: 900, marginTop: 6 }}>{state.numeric_answer}{state.answer_unit ? ` ${state.answer_unit}` : ''}</p>
+            <p style={{ color: C.sub, fontSize: 14, marginTop: 10 }}>Waiting for the host to close answers…</p>
+          </div>
         ) : (
           <form onSubmit={submit}>
             <label style={{ color: C.sub, fontSize: 12, fontWeight: 800 }}>YOUR CLOSEST ANSWER{state.answer_unit ? ` (${state.answer_unit})` : ''}</label>
@@ -2543,9 +2551,8 @@ function LiveTiebreaker() {
               style={{ width: '100%', marginTop: 8, border: `2px solid ${C.line}`, borderRadius: 16, padding: '16px', fontSize: 22, fontWeight: 800, color: C.ink, background: C.panel }} />
             {error && <p style={{ color: C.stop, fontSize: 13, fontWeight: 700, marginTop: 10 }}>{error}</p>}
             <button type="submit" disabled={!answer.trim() || submitting} style={{ width: '100%', marginTop: 16, background: C.violet, color: 'white', borderRadius: 16, padding: '15px', fontSize: 16, fontWeight: 900, opacity: !answer.trim() || submitting ? 0.5 : 1 }}>
-              {submitting ? 'Submitting…' : state.numeric_answer !== null ? 'Update Answer' : 'Submit Answer'}
+              {submitting ? 'Submitting…' : 'Submit Answer'}
             </button>
-            {state.numeric_answer !== null && <p style={{ color: C.go, fontSize: 13, fontWeight: 800, textAlign: 'center', marginTop: 12 }}>Answer submitted. You can edit it until the host closes answers.</p>}
           </form>
         )}
       </div>

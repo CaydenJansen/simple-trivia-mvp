@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   AUTO_BUILD_TIEBREAKER_COUNT,
   availableTiebreakerReplacements,
+  closestTiebreakerTeamIds,
   evaluateClosestAnswers,
   hasRequiredAutoBuildTiebreakers,
   isValidTiebreakerNumericValue,
@@ -68,5 +69,20 @@ describe('prepared tiebreaker authoring semantics', () => {
       { teamId: 'team-a', value: 90 },
       { teamId: 'team-b', value: 110 },
     ])).toMatchObject({ unresolved: true, orderedTeamIds: null })
+  })
+
+  it('identifies the closest submitted answer for host highlighting', () => {
+    expect([...closestTiebreakerTeamIds([
+      { teamId: 'team-a', distance: 1196 },
+      { teamId: 'team-b', distance: 6196 },
+      { teamId: 'waiting', distance: null },
+    ])]).toEqual(['team-a'])
+  })
+
+  it('highlights every equally close answer when the tiebreaker remains tied', () => {
+    expect([...closestTiebreakerTeamIds([
+      { teamId: 'team-a', distance: 10 },
+      { teamId: 'team-b', distance: 10 },
+    ])]).toEqual(['team-a', 'team-b'])
   })
 })

@@ -41,6 +41,25 @@ export type NumericTiebreakerAnswer = {
   value: number
 }
 
+export type TiebreakerDistance = {
+  teamId: string
+  distance: number | null
+}
+
+export function closestTiebreakerTeamIds(submissions: TiebreakerDistance[]) {
+  const completed = submissions.filter(
+    (submission): submission is TiebreakerDistance & { distance: number } => submission.distance !== null,
+  )
+  if (completed.length === 0) return new Set<string>()
+
+  const closestDistance = Math.min(...completed.map(submission => submission.distance))
+  return new Set(
+    completed
+      .filter(submission => submission.distance === closestDistance)
+      .map(submission => submission.teamId),
+  )
+}
+
 export function evaluateClosestAnswers(correctValue: number, answers: NumericTiebreakerAnswer[]) {
   const ranked = answers
     .map(answer => ({ ...answer, distance: Math.abs(answer.value - correctValue) }))

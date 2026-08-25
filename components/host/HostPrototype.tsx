@@ -49,6 +49,7 @@ import { buildGameJoinUrl } from "@/lib/trivia/join-code";
 import {
   AUTO_BUILD_TIEBREAKER_COUNT,
   availableTiebreakerReplacements,
+  closestTiebreakerTeamIds,
   isValidTiebreakerNumericValue,
   needsMoreManualTiebreakers,
 } from "@/lib/trivia/tiebreakers";
@@ -6648,6 +6649,83 @@ type HostTieResolution = Database['public']['Tables']['game_tie_resolutions']['R
 type HostTiebreakerAttempt = Database['public']['Tables']['game_tiebreaker_attempts']['Row']
 type HostTiebreakerSubmission = Database['public']['Tables']['game_tiebreaker_submissions']['Row']
 type HostPreparedTiebreaker = Database['public']['Tables']['game_tiebreakers']['Row']
+type TieResolutionChoice = 'tiebreaker' | 'allowed_tie' | 'manual'
+
+function TieResolutionChooser({
+  selected,
+  onSelect,
+  onConfirm,
+  unusedTiebreakerCount,
+  busy,
+  runLabel = 'Run a Tiebreaker',
+}: {
+  selected: TieResolutionChoice | null
+  onSelect: (choice: TieResolutionChoice) => void
+  onConfirm: () => void
+  unusedTiebreakerCount: number
+  busy: boolean
+  runLabel?: string
+}) {
+  const choices: { id: TieResolutionChoice; label: string; description: string; disabled?: boolean }[] = [
+    {
+      id: 'tiebreaker',
+      label: runLabel,
+      description: `${unusedTiebreakerCount} prepared question${unusedTiebreakerCount === 1 ? '' : 's'} available`,
+      disabled: unusedTiebreakerCount === 0,
+    },
+    { id: 'allowed_tie', label: 'Allow the Tie', description: 'Keep the equal placement.' },
+    { id: 'manual', label: 'Choose Manually', description: 'Set the tied teams’ order yourself.' },
+  ]
+  const selectedLabel = choices.find(choice => choice.id === selected)?.label
+
+  return (
+    <div>
+      <p style={{ color: C.ink }} className="mb-3 text-center text-sm font-bold">Select one option, then confirm.</p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {choices.map(choice => {
+          const isSelected = selected === choice.id
+          return (
+            <button
+              key={choice.id}
+              type="button"
+              aria-pressed={isSelected}
+              onClick={() => onSelect(choice.id)}
+              disabled={busy || choice.disabled}
+              style={{
+                background: isSelected ? C.violetPale : C.panel,
+                border: `2px solid ${isSelected ? C.violet : C.line}`,
+                color: C.ink,
+              }}
+              className="cursor-pointer rounded-2xl p-5 text-left transition-all hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet/40 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+            >
+              <span className="flex items-start justify-between gap-3">
+                <span className="text-lg font-extrabold">{choice.label}</span>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    background: isSelected ? C.violet : C.panel,
+                    border: `2px solid ${isSelected ? C.violet : C.line}`,
+                    color: 'white',
+                  }}
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-black"
+                >
+                  {isSelected ? '✓' : ''}
+                </span>
+              </span>
+              <span style={{ color: C.sub }} className="mt-2 block text-xs">{choice.description}</span>
+            </button>
+          )
+        })}
+      </div>
+      <Btn sz="lg" cls="mt-4 w-full justify-center" onClick={onConfirm} disabled={busy || !selected}>
+        {selectedLabel ? `Confirm: ${selectedLabel}` : 'Select an option to continue'}
+      </Btn>
+      {unusedTiebreakerCount === 0 && (
+        <p style={{ color: C.caution }} className="mt-3 text-center text-sm font-semibold">No unused prepared tiebreakers remain. Allow the tie or choose the order manually.</p>
+      )}
+    </div>
+  )
+}
 
 function FinalResults({ go }: { go: Go }) {
   const [game, setGame] = useState<HostFinalGame | null>(null)
@@ -6658,6 +6736,7 @@ function FinalResults({ go }: { go: Go }) {
   const [tiebreakerSubmissions, setTiebreakerSubmissions] = useState<HostTiebreakerSubmission[]>([])
   const [manualOrder, setManualOrder] = useState<string[]>([])
   const [manualMode, setManualMode] = useState(false)
+  const [selectedTieChoice, setSelectedTieChoice] = useState<TieResolutionChoice | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -6727,6 +6806,10 @@ function FinalResults({ go }: { go: Go }) {
     ?? null
   const activePrepared = preparedTiebreakers.find(item => item.id === activeAttempt?.game_tiebreaker_id) ?? null
   const activeSubmissions = tiebreakerSubmissions.filter(submission => submission.attempt_id === activeAttempt?.id)
+  const closestTeamIds = closestTiebreakerTeamIds(activeSubmissions.map(submission => ({
+    teamId: submission.team_id,
+    distance: submission.distance,
+  })))
   const tiedTeams = displayResolution
     ? displayResolution.team_ids.flatMap(teamId => teams.find(team => team.id === teamId) ?? [])
     : []
@@ -6743,6 +6826,7 @@ function FinalResults({ go }: { go: Go }) {
     try {
       await action()
       setManualMode(false)
+      setSelectedTieChoice(null)
       await loadFinal()
     } catch (actionError) {
       console.error(message, actionError)
@@ -6805,7 +6889,14 @@ function FinalResults({ go }: { go: Go }) {
   function beginManualOrder() {
     if (!pendingResolution) return
     setManualOrder([...pendingResolution.team_ids])
+    setSelectedTieChoice(null)
     setManualMode(true)
+  }
+
+  function confirmTieResolutionChoice() {
+    if (selectedTieChoice === 'tiebreaker') startTiebreaker()
+    if (selectedTieChoice === 'allowed_tie') allowTie()
+    if (selectedTieChoice === 'manual') beginManualOrder()
   }
 
   function moveManualTeam(index: number, direction: -1 | 1) {
@@ -6857,10 +6948,12 @@ function FinalResults({ go }: { go: Go }) {
                 <div className="mt-6 space-y-2">
                   {tiedTeams.map(team => {
                     const submission = activeSubmissions.find(item => item.team_id === team.id)
+                    const isClosest = closestTeamIds.has(team.id)
                     return (
-                      <div key={team.id} style={{ background: C.ground, border: `1px solid ${C.line}` }} className="flex items-center gap-3 rounded-xl px-4 py-3">
-                        <span style={{ color: C.ink }} className="flex-1 text-sm font-bold">{team.name}</span>
-                        <span style={{ color: submission ? C.ink : C.sub }} className="text-sm font-extrabold tabular-nums">
+                      <div key={team.id} style={{ background: isClosest ? '#F0FDF4' : C.ground, border: `1px solid ${isClosest ? C.go : C.line}` }} className="flex items-center gap-3 rounded-xl px-4 py-3">
+                        <span style={{ color: isClosest ? C.go : C.ink }} className="flex-1 text-sm font-bold">{team.name}</span>
+                        {isClosest && <span style={{ color: C.go }} className="text-[10px] font-extrabold uppercase tracking-wider">Closest</span>}
+                        <span style={{ color: isClosest ? C.go : submission ? C.ink : C.sub }} className="text-sm font-extrabold tabular-nums">
                           {submission ? submission.numeric_answer : 'Waiting…'}
                         </span>
                         {submission?.distance !== null && submission?.distance !== undefined && (
@@ -6882,11 +6975,16 @@ function FinalResults({ go }: { go: Go }) {
                     <Btn sz="lg" cls="flex-1 justify-center" onClick={continueAfterTiebreaker} disabled={busy}>Continue to Final Results</Btn>
                   )}
                   {activeAttempt.status === 'tied' && (
-                    <>
-                      <Btn sz="lg" cls="flex-1 justify-center" onClick={startTiebreaker} disabled={busy || unusedTiebreakerCount === 0}>Run Next Tiebreaker</Btn>
-                      <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={allowTie} disabled={busy}>Allow the Tie</Btn>
-                      <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={beginManualOrder} disabled={busy}>Choose Manually</Btn>
-                    </>
+                    <div className="w-full">
+                      <TieResolutionChooser
+                        selected={selectedTieChoice}
+                        onSelect={setSelectedTieChoice}
+                        onConfirm={confirmTieResolutionChoice}
+                        unusedTiebreakerCount={unusedTiebreakerCount}
+                        busy={busy}
+                        runLabel="Run Next Tiebreaker"
+                      />
+                    </div>
                   )}
                 </div>
                 {activeAttempt.status === 'tied' && <p style={{ color: C.caution }} className="mt-3 text-center text-sm font-bold">Two or more teams were equally close, so the tie remains unresolved.</p>}
@@ -6912,21 +7010,13 @@ function FinalResults({ go }: { go: Go }) {
                 </div>
               </div>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-3">
-                <button onClick={startTiebreaker} disabled={busy || unusedTiebreakerCount === 0} style={{ background: C.violet, color: 'white' }} className="rounded-2xl p-5 text-left disabled:opacity-45">
-                  <span className="text-lg font-extrabold">Run a Tiebreaker</span>
-                  <span className="mt-2 block text-xs opacity-75">{unusedTiebreakerCount} prepared question{unusedTiebreakerCount === 1 ? '' : 's'} available</span>
-                </button>
-                <button onClick={allowTie} disabled={busy} style={{ background: C.panel, border: `1px solid ${C.line}`, color: C.ink }} className="rounded-2xl p-5 text-left disabled:opacity-45">
-                  <span className="text-lg font-extrabold">Allow the Tie</span>
-                  <span style={{ color: C.sub }} className="mt-2 block text-xs">Keep the equal placement.</span>
-                </button>
-                <button onClick={beginManualOrder} disabled={busy} style={{ background: C.panel, border: `1px solid ${C.line}`, color: C.ink }} className="rounded-2xl p-5 text-left disabled:opacity-45">
-                  <span className="text-lg font-extrabold">Choose Manually</span>
-                  <span style={{ color: C.sub }} className="mt-2 block text-xs">Set the tied teams’ order yourself.</span>
-                </button>
-                {unusedTiebreakerCount === 0 && <p style={{ color: C.caution }} className="sm:col-span-3 text-center text-sm font-semibold">No unused prepared tiebreakers remain. Allow the tie or choose the order manually.</p>}
-              </div>
+              <TieResolutionChooser
+                selected={selectedTieChoice}
+                onSelect={setSelectedTieChoice}
+                onConfirm={confirmTieResolutionChoice}
+                unusedTiebreakerCount={unusedTiebreakerCount}
+                busy={busy}
+              />
             )}
           </>
         ) : (
