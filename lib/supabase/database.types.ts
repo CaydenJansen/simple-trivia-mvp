@@ -581,10 +581,33 @@ export type Database = {
         Update: Partial<Database['public']['Tables']['game_tiebreaker_submissions']['Insert']>
         Relationships: []
       }
+      team_profiles: {
+        Row: {
+          id: string
+          display_name: string
+          name_key: string
+          pin_digest: string
+          created_at: string
+          updated_at: string
+          last_joined_at: string
+        }
+        Insert: {
+          id?: string
+          display_name: string
+          name_key: string
+          pin_digest: string
+          created_at?: string
+          updated_at?: string
+          last_joined_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['team_profiles']['Insert']>
+        Relationships: []
+      }
       teams: {
         Row: {
           id: string
           game_id: string
+          team_profile_id: string | null
           name: string
           score: number
           prize_awards: Json
@@ -596,6 +619,7 @@ export type Database = {
         Insert: {
           id?: string
           game_id: string
+          team_profile_id?: string | null
           name: string
           score?: number
           prize_awards?: Json
@@ -607,6 +631,7 @@ export type Database = {
         Update: {
           id?: string
           game_id?: string
+          team_profile_id?: string | null
           name?: string
           score?: number
           prize_awards?: Json
@@ -615,13 +640,22 @@ export type Database = {
           final_sort_order?: number | null
           created_at?: string
         }
-        Relationships: [{
-          foreignKeyName: 'teams_game_id_fkey'
-          columns: ['game_id']
-          isOneToOne: false
-          referencedRelation: 'games'
-          referencedColumns: ['id']
-        }]
+        Relationships: [
+          {
+            foreignKeyName: 'teams_game_id_fkey'
+            columns: ['game_id']
+            isOneToOne: false
+            referencedRelation: 'games'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'teams_team_profile_id_fkey'
+            columns: ['team_profile_id']
+            isOneToOne: false
+            referencedRelation: 'team_profiles'
+            referencedColumns: ['id']
+          },
+        ]
       }
       submissions: {
         Row: {
@@ -789,6 +823,8 @@ export type Database = {
         Args: {
           p_game_id: string
           p_team_name: string
+          p_team_pin?: string | null
+          p_pin_mode?: 'none' | 'have' | 'create'
         }
         Returns: {
           id: string

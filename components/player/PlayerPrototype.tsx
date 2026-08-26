@@ -22,6 +22,13 @@ import { gameAcceptsNewTeams, JOINABLE_GAME_STATUSES } from "@/lib/trivia/game-j
 import { playerTiebreakerOutcome } from "@/lib/trivia/tiebreakers";
 import { shouldSubmitPlayerAnswerOnEnter } from "@/lib/trivia/player-keyboard-submit";
 import { competitionPlacementAt, competitionPlacements, ordinalPlacement } from "@/lib/trivia/leaderboard-ranking";
+import {
+  isValidTeamPin,
+  normalizeTeamPin,
+  TEAM_PIN_LENGTH,
+  teamPinErrorMessage,
+  type TeamPinMode,
+} from "@/lib/trivia/team-pin";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -1343,13 +1350,13 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
 }
 
 // ─── SCREEN 2 — TEAM SETUP ────────────────────────────────────────────────────
-type PinMode = 'none' | 'have' | 'create'
-
 function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   const [name, setName] = useState('')
   const [pin, setPin] = useState('')
-  const [pinMode, setPinMode] = useState<PinMode>('none')
+  const [pinMode, setPinMode] = useState<TeamPinMode>('none')
   const [taken, setTaken] = useState(false)
+  const [pinError, setPinError] = useState<string | null>(null)
+  const [joinError, setJoinError] = useState<string | null>(null)
   const [joining, setJoining] = useState(false)
   const [gameTitle, setGameTitle] = useState('Trivia game')
 
@@ -1363,6 +1370,14 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
 async function handleJoin() {
   if (!name.trim() || joining) return;
   setTaken(false);
+  setPinError(null);
+  setJoinError(null);
+
+  if (pinMode !== 'none' && !isValidTeamPin(pin)) {
+    setPinError(`Enter a ${TEAM_PIN_LENGTH}-digit team PIN.`);
+    return;
+  }
+
   setJoining(true);
 
   const gameId = localStorage.getItem("simple-trivia-game-id");
@@ -1377,14 +1392,22 @@ async function handleJoin() {
     .rpc("join_live_game", {
       p_game_id: gameId,
       p_team_name: name.trim(),
+      p_pin_mode: pinMode,
+      p_team_pin: pinMode === 'none' ? null : pin,
     })
     .single();
 
   if (error) {
     console.error("Error creating team:", error);
 
-    if (error.code === "23505") {
+    const friendlyPinError = teamPinErrorMessage(error.message)
+
+    if (friendlyPinError) {
+      setPinError(friendlyPinError)
+    } else if (error.code === "23505") {
       setTaken(true);
+    } else {
+      setJoinError('We couldn’t join the game. Check your details and try again.')
     }
 
     setJoining(false);
@@ -1421,7 +1444,7 @@ async function handleJoin() {
           type="text"
           enterKeyHint="go"
           value={name}
-          onChange={e => { setName(e.target.value); setTaken(false) }}
+          onChange={e => { setName(e.target.value); setTaken(false); setPinError(null); setJoinError(null) }}
           onKeyDown={event => {
             if (event.key !== 'Enter' || !name.trim() || joining) return
             event.preventDefault()
@@ -1457,14 +1480,22 @@ async function handleJoin() {
           </div>
         )}
 
-        <div style={{ marginTop: 14 }}>
-          <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || joining}>
-            {joining ? 'Joining…' : 'Join Game'}
-          </Btn>
-          <p style={{ color: C.sub, fontSize: 12, marginTop: 7 }} className="text-center">
-            One phone per team. You can also press Go on your keyboard.
+        {pinMode === 'none' && (
+          <div style={{ marginTop: 14 }}>
+            <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || joining}>
+              {joining ? 'Joining…' : 'Join Game'}
+            </Btn>
+            <p style={{ color: C.sub, fontSize: 12, marginTop: 7 }} className="text-center">
+              One phone per team. You can also press Go on your keyboard.
+            </p>
+          </div>
+        )}
+
+        {joinError && (
+          <p role="alert" style={{ color: C.stop, fontSize: 14, fontWeight: 600, marginTop: 12 }}>
+            {joinError}
           </p>
-        </div>
+        )}
 
         {/* ── Team PIN section ── */}
         <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 28, paddingTop: 22 }}>
@@ -1480,7 +1511,7 @@ async function handleJoin() {
           {pinMode === 'none' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <button
-                onClick={() => setPinMode('have')}
+                onClick={() => { setPin(''); setPinError(null); setJoinError(null); setPinMode('have') }}
                 style={{
                   background: C.panel,
                   border: `2px solid ${C.line}`,
@@ -1503,7 +1534,7 @@ async function handleJoin() {
                 </span>
               </button>
               <button
-                onClick={() => setPinMode('create')}
+                onClick={() => { setPin(''); setPinError(null); setJoinError(null); setPinMode('create') }}
                 style={{
                   background: C.panel,
                   border: `2px solid ${C.line}`,
@@ -1525,13 +1556,6 @@ async function handleJoin() {
                   <span style={{ color: C.sub, fontSize: 13 }}>Start building your team history tonight</span>
                 </span>
               </button>
-              <button
-                onClick={() => { void handleJoin() }}
-                disabled={!name.trim() || joining}
-                style={{ color: C.sub, fontSize: 14, background: 'none', border: 'none', cursor: !name.trim() || joining ? 'not-allowed' : 'pointer', opacity: !name.trim() || joining ? 0.45 : 1, fontFamily: 'inherit', padding: '6px 0', textAlign: 'left' }}
-              >
-                {joining ? 'Joining…' : 'Skip for now →'}
-              </button>
             </div>
           )}
 
@@ -1542,11 +1566,17 @@ async function handleJoin() {
                 Your team PIN
               </label>
               <input
-                type="tel"
+                aria-label="Existing team PIN"
+                type="password"
                 inputMode="numeric"
-                maxLength={4}
+                maxLength={TEAM_PIN_LENGTH}
                 value={pin}
-                onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+                onChange={e => { setPin(normalizeTeamPin(e.target.value)); setPinError(null); setJoinError(null) }}
+                onKeyDown={event => {
+                  if (event.key !== 'Enter' || joining) return
+                  event.preventDefault()
+                  void handleJoin()
+                }}
                 placeholder="e.g. 4821"
                 style={{
                   border: `2px solid ${pin.length === 4 ? C.violet : C.line}`,
@@ -1563,8 +1593,17 @@ async function handleJoin() {
                   transition: 'border-color 0.14s',
                 }}
               />
+              <p style={{ color: C.sub, fontSize: 13, lineHeight: 1.5, marginTop: 9 }}>
+                Use the same team name and PIN as your previous game.
+              </p>
+              {pinError && <p role="alert" style={{ color: C.stop, fontSize: 13, fontWeight: 600, marginTop: 9 }}>{pinError}</p>}
+              <div style={{ marginTop: 12 }}>
+                <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || !isValidTeamPin(pin) || joining}>
+                  {joining ? 'Joining…' : 'Link Team & Join'}
+                </Btn>
+              </div>
               <button
-                onClick={() => { setPin(''); setPinMode('none') }}
+                onClick={() => { setPin(''); setPinError(null); setJoinError(null); setPinMode('none') }}
                 style={{ color: C.sub, fontSize: 13, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', marginTop: 10, textDecoration: 'underline' }}
               >
                 ← Back
@@ -1576,14 +1615,20 @@ async function handleJoin() {
           {pinMode === 'create' && (
             <div>
               <label style={{ color: C.sub, fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', display: 'block', marginBottom: 8 }}>
-                Choose a 4-digit PIN
+                Choose a {TEAM_PIN_LENGTH}-digit PIN
               </label>
               <input
-                type="tel"
+                aria-label="New team PIN"
+                type="password"
                 inputMode="numeric"
-                maxLength={4}
+                maxLength={TEAM_PIN_LENGTH}
                 value={pin}
-                onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+                onChange={e => { setPin(normalizeTeamPin(e.target.value)); setPinError(null); setJoinError(null) }}
+                onKeyDown={event => {
+                  if (event.key !== 'Enter' || joining) return
+                  event.preventDefault()
+                  void handleJoin()
+                }}
                 placeholder="e.g. 4821"
                 style={{
                   border: `2px solid ${pin.length === 4 ? C.violet : C.line}`,
@@ -1605,8 +1650,14 @@ async function handleJoin() {
                   Remember this PIN — you’ll use it at your next trivia night to pick up where you left off.
                 </p>
               </div>
+              {pinError && <p role="alert" style={{ color: C.stop, fontSize: 13, fontWeight: 600, marginTop: 9 }}>{pinError}</p>}
+              <div style={{ marginTop: 12 }}>
+                <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || !isValidTeamPin(pin) || joining}>
+                  {joining ? 'Joining…' : 'Create PIN & Join'}
+                </Btn>
+              </div>
               <button
-                onClick={() => { setPin(''); setPinMode('none') }}
+                onClick={() => { setPin(''); setPinError(null); setJoinError(null); setPinMode('none') }}
                 style={{ color: C.sub, fontSize: 13, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', marginTop: 10, textDecoration: 'underline' }}
               >
                 ← Back
