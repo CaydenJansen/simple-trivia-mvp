@@ -55,6 +55,7 @@ import {
 } from "@/lib/trivia/tiebreakers";
 import { checkQuizReadiness, quizCanHost, quizStatusFromReadiness } from "@/lib/trivia/quiz-readiness";
 import {
+  autoBuildSizeSummary,
   buildAutoQuizPlan,
   getAutoBuildAvailability,
   getEligibleAutoBuildTiebreakers,
@@ -415,8 +416,22 @@ function useTeamJoinRequests(gameCode: string) {
   return { requests, error, decidingId, decide }
 }
 
-function TeamAdmissionList({ gameCode, dark = false }: { gameCode: string; dark?: boolean }) {
+function TeamAdmissionList({
+  gameCode,
+  dark = false,
+  compact = false,
+  hideWhenEmpty = false,
+  className = '',
+}: {
+  gameCode: string
+  dark?: boolean
+  compact?: boolean
+  hideWhenEmpty?: boolean
+  className?: string
+}) {
   const { requests, error, decidingId, decide } = useTeamJoinRequests(gameCode)
+
+  if (hideWhenEmpty && requests.length === 0 && !error) return null
 
   return (
     <section
@@ -424,12 +439,12 @@ function TeamAdmissionList({ gameCode, dark = false }: { gameCode: string; dark?
         background: dark ? C.liveSurface : C.panel,
         border: `1px solid ${dark ? C.liveLine : requests.length > 0 ? C.caution : C.line}`,
       }}
-      className="rounded-2xl p-4 text-left"
+      className={`rounded-2xl text-left ${compact ? 'p-3' : 'p-4'} ${className}`}
     >
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p style={{ color: dark ? C.liveText : C.ink }} className="text-sm font-extrabold">Team approval</p>
-          <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-0.5 text-xs">Approve a team name before it enters the game.</p>
+          <p style={{ color: dark ? C.liveText : C.ink }} className="text-sm font-extrabold">Pending approval</p>
+          {!compact && <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-0.5 text-xs">Approve a team name before it enters the game.</p>}
         </div>
         {requests.length > 0 && (
           <span style={{ background: C.caution, color: '#18171F' }} className="rounded-full px-2.5 py-1 text-xs font-black">
@@ -510,8 +525,9 @@ function JoinCodeButton({
       </button>
 
       {open && (
-        <div data-host-shortcuts="blocked" className="fixed inset-0 z-[100] flex items-center justify-center bg-[#080713]/80 px-5 py-8 backdrop-blur-sm">
-          <section style={{ background: C.panel }} className="w-full max-w-lg rounded-3xl p-7 text-center shadow-2xl">
+        <div data-host-shortcuts="blocked" className="fixed inset-0 z-[100] overflow-y-auto bg-[#080713]/80 backdrop-blur-sm">
+          <div className="flex min-h-full items-start justify-center px-4 py-4 sm:items-center sm:px-5 sm:py-8">
+            <section style={{ background: C.panel }} className="w-full max-w-lg rounded-3xl p-7 text-center shadow-2xl">
             <div className="flex items-start justify-between gap-4 text-left">
               <div>
                 <p style={{ color: C.violet }} className="text-xs font-extrabold uppercase tracking-widest">Join this game</p>
@@ -527,14 +543,12 @@ function JoinCodeButton({
             <p style={{ color: C.ink, letterSpacing: '0.16em' }} className="mt-1 text-5xl font-black tabular-nums">{gameCode}</p>
             <p style={{ color: C.sub }} className="mt-4 break-all text-xs">{joinUrl}</p>
             <p style={{ color: C.caution }} className="mt-4 text-xs font-semibold">New teams can join while the game is running.</p>
-            <div className="mt-6">
-              <TeamAdmissionList gameCode={gameCode} />
-            </div>
             <div className="mt-6 flex justify-center gap-3">
               <Btn v="secondary" onClick={() => downloadGameQr(dataUrl, gameCode)} disabled={!dataUrl}>Download QR</Btn>
               <Btn onClick={() => setOpen(false)}>Done</Btn>
             </div>
-          </section>
+            </section>
+          </div>
         </div>
       )}
     </>
@@ -4402,7 +4416,7 @@ function AutoBuild({ go }: { go: Go }) {
             </div>
             <p style={{ color: countsAreValid ? C.sub : C.stop }} className="mt-4 text-xs">
               {countsAreValid
-                ? `About ${Math.round(questionCount * 2.4)} minutes, with roughly ${Math.floor(questionCount / roundCount)}–${Math.ceil(questionCount / roundCount)} questions per round.`
+                ? autoBuildSizeSummary(questionCount, roundCount)
                 : 'Add at least one question for every round.'}
             </p>
           </div>
@@ -6922,6 +6936,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
         <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 300 }} className="flex flex-col shrink-0 sticky top-[52px] h-[calc(100dvh-52px)]">
           <div className="flex-1 p-5 overflow-y-auto">
+            <TeamAdmissionList gameCode={getHostGameCode()} dark compact hideWhenEmpty className="mb-5" />
             <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">Leaderboard</p>
             <div className="space-y-1">
               {leaderboard.map((team, i) => (
@@ -7349,6 +7364,8 @@ function EndOfRound({ go }: { go: Go }) {
             </div>
           )}
         </section>
+
+        <TeamAdmissionList gameCode={getHostGameCode()} dark compact hideWhenEmpty className="mb-7" />
 
         <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-5 mb-7 shadow-2xl">
           <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-wider mb-4">

@@ -63,6 +63,7 @@
 - Effective package Adult Content is true when any content shown to players is adult. Any country-specific child makes the package not fully international-friendly.
 - Prevent duplicate team names within a game.
 - Every fresh team join requires an explicit host approval or denial before a real game team is created. Keep pending/denied requests out of teams, scoring, submissions, leaderboards, and joined-team counts.
+- During live play, pending team requests appear in a separate approval panel beside the host leaderboard. Keep approval controls out of the QR/join-code dialog so that dialog remains compact and easy to dismiss on short screens.
 - Player-facing denial copy stays neutral and does not assume why the host denied entry; the host handles any explanation in the room.
 - Games accept new zero-score teams, after host approval, while they are in the lobby or actively running. Finished and cancelled games are never joinable.
 - Host live controls and question content must remain usable on small laptop screens.

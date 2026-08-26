@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  autoBuildSizeSummary,
   buildAutoQuizPlan,
   distributeQuestionCount,
   getAutoBuildAvailability,
@@ -35,6 +36,14 @@ const expandedQuestions = ['General Knowledge', 'Movies', 'Sport', 'Music'].flat
 describe('Auto-Build selection semantics', () => {
   it('distributes 30 questions across four rounds without changing the total', () => {
     expect(distributeQuestionCount(30, 4)).toEqual([8, 8, 7, 7])
+  })
+
+  it('uses an exact per-round count when every round is the same size', () => {
+    expect(autoBuildSizeSummary(20, 4)).toBe('About 48 minutes, with 5 questions per round.')
+  })
+
+  it('uses a rough range only when round sizes differ', () => {
+    expect(autoBuildSizeSummary(30, 4)).toBe('About 72 minutes, with roughly 7–8 questions per round.')
   })
 
   it('requires at least one question in every configured round', () => {

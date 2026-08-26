@@ -67,6 +67,17 @@ export function distributeQuestionCount(questionCount: number, roundCount: numbe
   return Array.from({ length: roundCount }, (_, index) => base + (index < remainder ? 1 : 0))
 }
 
+export function autoBuildSizeSummary(questionCount: number, roundCount: number) {
+  const counts = distributeQuestionCount(questionCount, roundCount)
+  const minimum = Math.min(...counts)
+  const maximum = Math.max(...counts)
+  const perRound = minimum === maximum
+    ? `${minimum} question${minimum === 1 ? '' : 's'} per round`
+    : `roughly ${minimum}–${maximum} questions per round`
+
+  return `About ${Math.round(questionCount * 2.4)} minutes, with ${perRound}.`
+}
+
 function shuffled<T>(items: readonly T[], random: () => number) {
   const result = [...items]
   for (let index = result.length - 1; index > 0; index -= 1) {
