@@ -439,16 +439,16 @@ function TeamAdmissionList({
         background: dark ? C.liveSurface : C.panel,
         border: `1px solid ${dark ? C.liveLine : requests.length > 0 ? C.caution : C.line}`,
       }}
-      className={`rounded-2xl text-left ${compact ? 'p-3' : 'p-4'} ${className}`}
+      className={`${compact ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} text-left ${className}`}
     >
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p style={{ color: dark ? C.liveText : C.ink }} className="text-sm font-extrabold">Pending approval</p>
+          <p style={{ color: dark ? C.liveText : C.ink }} className={`${compact ? 'text-xs' : 'text-sm'} font-extrabold`}>Pending approval</p>
           {!compact && <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-0.5 text-xs">Approve a team name before it enters the game.</p>}
         </div>
         {requests.length > 0 && (
-          <span style={{ background: C.caution, color: '#18171F' }} className="rounded-full px-2.5 py-1 text-xs font-black">
-            {requests.length} waiting
+          <span style={{ background: C.caution, color: '#18171F' }} className={`rounded-full font-black ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-xs'}`}>
+            {compact ? requests.length : `${requests.length} waiting`}
           </span>
         )}
       </div>
@@ -460,20 +460,20 @@ function TeamAdmissionList({
         </p>
       )}
       {requests.length > 0 && (
-        <div className="mt-4 space-y-2">
+        <div className={compact ? 'mt-2 space-y-1' : 'mt-4 space-y-2'}>
           {requests.map(request => (
             <div
               key={request.id}
               style={{ background: dark ? C.livePanel : C.ground, border: `1px solid ${dark ? C.liveLine : C.line}` }}
-              className="flex items-center gap-3 rounded-xl p-3"
+              className={`flex items-center rounded-xl ${compact ? 'gap-1.5 px-2 py-1.5' : 'gap-3 p-3'}`}
             >
-              <span style={{ color: dark ? C.liveText : C.ink }} className="min-w-0 flex-1 truncate text-sm font-bold">{request.requested_name}</span>
+              <span style={{ color: dark ? C.liveText : C.ink }} className={`min-w-0 flex-1 truncate font-bold ${compact ? 'text-xs' : 'text-sm'}`}>{request.requested_name}</span>
               <button
                 type="button"
                 onClick={() => { void decide(request.id, 'denied') }}
                 disabled={decidingId === request.id}
                 style={{ color: C.stop, border: `1px solid ${C.stop}55` }}
-                className="cursor-pointer rounded-lg px-3 py-2 text-xs font-bold hover:bg-red-500/10 disabled:cursor-wait disabled:opacity-50"
+                className={`cursor-pointer rounded-lg font-bold hover:bg-red-500/10 disabled:cursor-wait disabled:opacity-50 ${compact ? 'px-2 py-1 text-[10px]' : 'px-3 py-2 text-xs'}`}
               >
                 Deny
               </button>
@@ -482,7 +482,7 @@ function TeamAdmissionList({
                 onClick={() => { void decide(request.id, 'approved') }}
                 disabled={decidingId === request.id}
                 style={{ background: C.go, color: '#FFFFFF' }}
-                className="cursor-pointer rounded-lg px-3 py-2 text-xs font-bold hover:opacity-90 disabled:cursor-wait disabled:opacity-50"
+                className={`cursor-pointer rounded-lg font-bold hover:opacity-90 disabled:cursor-wait disabled:opacity-50 ${compact ? 'px-2 py-1 text-[10px]' : 'px-3 py-2 text-xs'}`}
               >
                 Approve
               </button>
@@ -6936,7 +6936,6 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
         <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 300 }} className="flex flex-col shrink-0 sticky top-[52px] h-[calc(100dvh-52px)]">
           <div className="flex-1 p-5 overflow-y-auto">
-            <TeamAdmissionList gameCode={getHostGameCode()} dark compact hideWhenEmpty className="mb-5" />
             <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">Leaderboard</p>
             <div className="space-y-1">
               {leaderboard.map((team, i) => (
@@ -6948,6 +6947,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 </div>
               ))}
             </div>
+            <TeamAdmissionList gameCode={getHostGameCode()} dark compact hideWhenEmpty className="mt-5" />
           </div>
 
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="p-5 shrink-0">
@@ -7365,8 +7365,6 @@ function EndOfRound({ go }: { go: Go }) {
           )}
         </section>
 
-        <TeamAdmissionList gameCode={getHostGameCode()} dark compact hideWhenEmpty className="mb-7" />
-
         <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-5 mb-7 shadow-2xl">
           <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-wider mb-4">
             Current Standings · {playersSeeRoundLeaderboard && !intermission ? 'Also visible to players' : 'Host only'}
@@ -7382,6 +7380,8 @@ function EndOfRound({ go }: { go: Go }) {
             ))}
           </div>
         </div>
+
+        <TeamAdmissionList gameCode={getHostGameCode()} dark compact hideWhenEmpty className="mb-7" />
 
         <div className="flex gap-3 mb-6">
           <button
