@@ -20,6 +20,12 @@ const familyAustraliaSettings: AutoBuildContentSettings = {
   scopeMode: 'include_locale',
   locale: 'Australia',
 }
+const allAudienceSettings: AutoBuildContentSettings = {
+  audienceFit: 'all',
+  allowAdultContent: false,
+  scopeMode: 'global_only',
+  locale: '',
+}
 const expandedQuestions = ['General Knowledge', 'Movies', 'Sport', 'Music'].flatMap(category => (
   ['Hard', 'Very Hard'].flatMap(difficulty => (
     Array.from({ length: 6 }, (_, index) => ({ id: `${category}-${difficulty}-${index}`, category, difficulty }))
@@ -121,6 +127,24 @@ describe('Auto-Build selection semantics', () => {
     })
 
     expect(plan.rounds[0].questions.map(question => question.id)).toEqual(['kids', 'broad'])
+  })
+
+  it('does not prefer or exclude any audience fit when all audience fits are selected', () => {
+    const plan = buildAutoQuizPlan({
+      questions: [
+        { id: 'kids', category: 'Music', difficulty: 'Easy', audience_fit: 'kids' as const },
+        { id: 'older-adults', category: 'Music', difficulty: 'Easy', audience_fit: 'older_adults' as const },
+        { id: 'broad', category: 'Music', difficulty: 'Easy', audience_fit: 'broad' as const },
+      ],
+      tiebreakers,
+      questionCount: 3,
+      roundTopics: ['Music'],
+      difficulties: ['Easy'],
+      contentSettings: allAudienceSettings,
+      random: noShuffle,
+    })
+
+    expect(plan.rounds[0].questions.map(question => question.id)).toEqual(['kids', 'older-adults', 'broad'])
   })
 
   it('applies adult-content and locale rules to prepared tiebreakers', () => {

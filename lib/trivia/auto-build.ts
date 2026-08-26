@@ -19,10 +19,11 @@ export type AutoBuildTiebreaker = {
 }
 
 export type AutoBuildAudienceFit = 'broad' | 'kids' | 'young_adults' | 'older_adults'
+export type AutoBuildAudiencePreference = AutoBuildAudienceFit | 'all'
 export type AutoBuildScopeMode = 'global_only' | 'include_locale'
 
 export type AutoBuildContentSettings = {
-  audienceFit: AutoBuildAudienceFit
+  audienceFit: AutoBuildAudiencePreference
   allowAdultContent: boolean
   scopeMode: AutoBuildScopeMode
   locale: string
@@ -101,6 +102,7 @@ function audiencePreferenceRank(
   settings?: AutoBuildContentSettings,
 ) {
   if (!settings) return 0
+  if (settings.audienceFit === 'all') return 0
   const fit = item.audience_fit ?? 'broad'
   if (fit === settings.audienceFit) return 0
   if (fit === 'broad') return 1

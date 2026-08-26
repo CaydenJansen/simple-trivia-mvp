@@ -58,7 +58,7 @@ import {
   buildAutoQuizPlan,
   getAutoBuildAvailability,
   getEligibleAutoBuildTiebreakers,
-  type AutoBuildAudienceFit,
+  type AutoBuildAudiencePreference,
   type AutoBuildScopeMode,
 } from "@/lib/trivia/auto-build";
 import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
@@ -4133,7 +4133,7 @@ function AutoBuild({ go }: { go: Go }) {
   const [questionCountInput, setQuestionCountInput] = useState('30')
   const [roundCount, setRoundCount] = useState(4)
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [audienceFit, setAudienceFit] = useState<AutoBuildAudienceFit>('broad')
+  const [audienceFit, setAudienceFit] = useState<AutoBuildAudiencePreference>('all')
   const [allowAdultContent, setAllowAdultContent] = useState(false)
   const [scopeMode, setScopeMode] = useState<AutoBuildScopeMode>('global_only')
   const [audienceLocale, setAudienceLocale] = useState('')
@@ -4511,14 +4511,15 @@ function AutoBuild({ go }: { go: Go }) {
 
                 <div>
                   <label htmlFor="auto-build-audience-fit" style={{ color: C.ink }} className="block text-sm font-bold">Audience fit</label>
-                  <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">Preferred audience for the quiz. Broad questions can still be used when they are the best fit.</p>
+                  <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">Use every audience fit, or prioritise one. Broad questions can still be used when they are the best fit.</p>
                   <select
                     id="auto-build-audience-fit"
                     value={audienceFit}
-                    onChange={event => setAudienceFit(event.target.value as AutoBuildAudienceFit)}
+                    onChange={event => setAudienceFit(event.target.value as AutoBuildAudiencePreference)}
                     style={{ border: `1px solid ${C.line}`, color: C.ink }}
                     className="mt-3 w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30"
                   >
+                    <option value="all">All audience fits</option>
                     <option value="broad">Broad audience</option>
                     <option value="kids">Kids</option>
                     <option value="young_adults">Young adults</option>
