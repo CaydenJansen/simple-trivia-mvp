@@ -526,8 +526,14 @@ function JoinCodeButton({
         type="button"
         onClick={() => setOpen(true)}
         style={{ border: `1px solid ${dark ? C.liveLine : C.line}`, color: dark ? C.liveText : C.ink }}
-        className={`rounded-lg px-3 py-2 text-xs font-bold transition-colors hover:border-violet hover:text-violet ${className}`}
+        className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition-colors hover:border-violet hover:text-violet ${className}`}
       >
+        <svg aria-hidden="true" width="13" height="13" viewBox="0 0 13 13" fill="none" className="shrink-0">
+          <rect x="0.75" y="0.75" width="4.25" height="4.25" rx="0.6" stroke="currentColor" strokeWidth="1.5" />
+          <rect x="8" y="0.75" width="4.25" height="4.25" rx="0.6" stroke="currentColor" strokeWidth="1.5" />
+          <rect x="0.75" y="8" width="4.25" height="4.25" rx="0.6" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M8 8h1.5v1.5H8zM10.75 8h1.5v4.25H10.75zM8 10.75h1.5v1.5H8z" fill="currentColor" />
+        </svg>
         {label ?? `Join code ${gameCode}`}
         {requests.length > 0 && (
           <span style={{ background: C.caution, color: '#18171F' }} className="ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-black">
