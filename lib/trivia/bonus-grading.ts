@@ -98,3 +98,9 @@ export function buildBonusRevealResults(bonus: RuntimeBonus | null, submissions:
       }
     })
 }
+
+export function buildConfidentBonusRevealResults(bonus: RuntimeBonus | null, submissions: BonusSubmissionForScoring[]) {
+  return buildBonusRevealResults(bonus, submissions).filter(result =>
+    result.grading_json.items.every(item => item.status !== 'review'),
+  )
+}

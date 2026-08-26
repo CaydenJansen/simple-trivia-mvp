@@ -51,6 +51,14 @@ describe('live bonus stage flow', () => {
       bonusSubmission: { points_awarded: 2 },
     })).toBe('correct')
   })
+
+  it('keeps unresolved Auto-Run grading neutral after reveal', () => {
+    expect(playerQuestionStageScreen({
+      ...base,
+      answerPhase: 'revealed',
+      coreSubmission: { points_awarded: 0, is_correct: null },
+    })).toBe('pending-review')
+  })
 })
 
 describe('multi-answer input count', () => {

@@ -1,7 +1,7 @@
 export type LiveAnswerPhase = 'open' | 'closed' | 'revealed'
 export type LiveQuestionStage = 'core' | 'bonus'
 
-type ScoredSubmission = { points_awarded?: number | null } | null
+type ScoredSubmission = { points_awarded?: number | null; is_correct?: boolean | null } | null
 
 export function playerQuestionStageScreen(input: {
   answerPhase: string | null
@@ -24,6 +24,7 @@ export function playerQuestionStageScreen(input: {
 
   if (answerPhase === 'revealed') {
     if (!coreSubmission && !bonusSubmission) return 'no-answer'
+    if (coreSubmission?.is_correct === null || bonusSubmission?.is_correct === null) return 'pending-review'
     const points = (coreSubmission?.points_awarded ?? 0) + (bonusSubmission?.points_awarded ?? 0)
     const max = Math.max(1, corePointsMax) + Math.max(0, bonusPointsMax)
     if (points <= 0) return 'incorrect'

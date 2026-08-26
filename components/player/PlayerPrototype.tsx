@@ -17,7 +17,7 @@ import { gameCodeFromSearch } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
 import type { Json } from "@/lib/supabase/database.types";
 import { multiAnswerInputCount, playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
-import { playersSeeScoresFromSettings } from "@/lib/trivia/score-visibility";
+import { playersSeeScoresOnScreen } from "@/lib/trivia/score-visibility";
 import { gameAcceptsNewTeams, JOINABLE_GAME_STATUSES } from "@/lib/trivia/game-joining";
 import { playerTiebreakerOutcome } from "@/lib/trivia/tiebreakers";
 import { shouldSubmitPlayerAnswerOnEnter } from "@/lib/trivia/player-keyboard-submit";
@@ -38,7 +38,7 @@ type PlayerScreen =
   | 'multi-answer' | 'multi-part' | 'ranking'
   | 'bonus-answer' | 'bonus-submitted'
   | 'submitted' | 'no-answer' | 'correct' | 'incorrect'
-  | 'partial-correct'
+  | 'partial-correct' | 'pending-review'
   | 'content-screen' | 'intermission' | 'question-results' | 'round-results' | 'round-results-hidden'
   | 'delayed-reveal' | 'winner' | 'final-result'
   | 'tiebreaker-pending' | 'tiebreaker' | 'tiebreaker-result'
@@ -68,6 +68,7 @@ const LIVE_PLAYER_SCREENS = new Set<PlayerScreen>([
   'multi-answer', 'multi-part', 'ranking', 'submitted', 'no-answer', 'correct',
   'bonus-answer', 'bonus-submitted',
   'incorrect', 'partial-correct', 'content-screen', 'intermission', 'question-results', 'round-results',
+  'pending-review',
   'round-results-hidden', 'delayed-reveal', 'winner', 'final-result', 'reconnecting', 'game-ended',
   'tiebreaker-pending', 'tiebreaker', 'tiebreaker-result',
 ])
@@ -2459,6 +2460,29 @@ function Incorrect() {
   )
 }
 
+function PendingReview() {
+  const snapshot = usePlayerSnapshot()
+  if (!snapshot.loaded) return <PlayerSnapshotLoading />
+  return (
+    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={snapshot.roundLabel} question={snapshot.questionLabel} />
+      <div className="flex-1 overflow-y-auto px-5 py-5">
+        <PlayerQuestionCard prompt={snapshot.prompt || 'Question result'} />
+        <div className="flex flex-col items-center gap-4 text-center">
+          <div style={{ background: C.violetPale, border: `2px solid #C4B5FD` }} className="flex h-16 w-16 items-center justify-center rounded-full text-2xl">…</div>
+          <h1 style={{ color: C.violet }} className="text-3xl font-black">Pending review</h1>
+          <div style={{ background: C.ground, border: `1px solid ${C.line}` }} className="w-full rounded-2xl px-5 py-4 text-left">
+            <p style={{ color: C.sub }} className="text-xs font-bold uppercase tracking-wider">Your answer</p>
+            <p style={{ color: C.ink }} className="mt-1 text-lg font-extrabold">{snapshot.answer || 'Submitted'}</p>
+          </div>
+          <p style={{ color: C.sub }} className="text-sm leading-6">The host will settle this answer at the end of the round.</p>
+          <WaitMsg msg="The round is continuing…" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── SCREEN 15 — CONTENT SCREEN ───────────────────────────────────────────────
 function ContentScreen() {
   const snapshot = usePlayerSnapshot()
@@ -2984,6 +3008,7 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
     case 'correct':        return <Correct />
     case 'incorrect':            return <Incorrect />
     case 'partial-correct':      return <PartialCorrect />
+    case 'pending-review':       return <PendingReview />
     case 'content-screen':       return <ContentScreen />
     case 'intermission':   return <Intermission />
     case 'question-results':      return <QuestionResults />
@@ -3016,17 +3041,21 @@ export function PlayerFlow() {
     let active = true
 
     async function loadScoreVisibility() {
-      const { data, error } = await supabase.from('games').select('settings').eq('id', activeGameId).maybeSingle()
+      const { data, error } = await supabase.from('games').select('settings, round_scores_finalized').eq('id', activeGameId).maybeSingle()
       if (!active) return
       if (error) {
         console.error('Could not load player score visibility:', error)
         return
       }
-      setScoresVisible(playersSeeScoresFromSettings(data?.settings))
+      setScoresVisible(playersSeeScoresOnScreen(data?.settings, screen, data?.round_scores_finalized ?? false))
     }
 
     void loadScoreVisibility()
-    return () => { active = false }
+    const channel = supabase
+      .channel(`player-score-visibility-${activeGameId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, () => { void loadScoreVisibility() })
+      .subscribe()
+    return () => { active = false; void supabase.removeChannel(channel) }
   }, [screen])
 
   useEffect(() => {

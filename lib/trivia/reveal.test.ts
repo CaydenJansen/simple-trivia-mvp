@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GradingQuestion } from './grading'
-import { buildRevealResults, type RevealSubmission } from './reveal'
+import { buildConfidentRevealResults, buildRevealResults, type RevealSubmission } from './reveal'
 
 const question: GradingQuestion = {
   question_type: 'single-answer',
@@ -39,5 +39,13 @@ describe('buildRevealResults', () => {
     expect(buildRevealResults(question, [submission({
       is_correct: true,
     })])).toEqual([])
+  })
+
+  it('leaves reviewable answers unresolved during Auto-Run', () => {
+    const results = buildConfidentRevealResults(question, [
+      submission({ id: 'exact', answer_text: 'Canada' }),
+      submission({ id: 'review', answer_text: 'Cannada' }),
+    ])
+    expect(results.map(result => result.submission_id)).toEqual(['exact'])
   })
 })

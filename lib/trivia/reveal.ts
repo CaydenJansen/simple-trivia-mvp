@@ -33,3 +33,12 @@ export function buildRevealResults(
       }
     })
 }
+
+export function buildConfidentRevealResults(
+  question: GradingQuestion,
+  submissions: RevealSubmission[],
+) {
+  return buildRevealResults(question, submissions).filter(result =>
+    result.grading_json.items.every(item => item.status !== 'review'),
+  )
+}

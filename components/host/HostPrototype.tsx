@@ -25,9 +25,10 @@ import {
   type ReviewStatus,
   type SubmissionGrading,
 } from "@/lib/trivia/grading";
-import { buildRevealResults } from "@/lib/trivia/reveal";
+import { buildConfidentRevealResults, buildRevealResults } from "@/lib/trivia/reveal";
 import {
   buildBonusRevealResults,
+  buildConfidentBonusRevealResults,
   runtimeBonusFromJson,
   storedBonusGrading,
 } from "@/lib/trivia/bonus-grading";
@@ -77,6 +78,16 @@ import {
   sourceQuestionBonusPayload,
   validateSourceQuestionBonus,
 } from "@/lib/trivia/source-question-bonus";
+import {
+  AUTO_RUN_CONTENT_SECONDS,
+  AUTO_RUN_EXTENSION_SECONDS,
+  autoRunAnswerSeconds,
+  autoRunClockLabel,
+  autoRunModeFromSettings,
+  autoRunRevealSeconds,
+  type AutoRunMode,
+} from "@/lib/trivia/auto-run";
+import { playerScoreVisibilityFromSettings, type PlayerScoreVisibility } from "@/lib/trivia/score-visibility";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -111,6 +122,7 @@ async function updateLiveGame(values: {
   question_stage?: 'core' | 'bonus'
   current_question_key?: string | null
   current_content_screen_key?: string | null
+  round_scores_finalized?: boolean
 }) {
   const { error } = await supabase
     .from('games')
@@ -4822,7 +4834,8 @@ function ReviewQuestion({ item, idx, onEdit }: {
 function HostSetup({ go }: { go: Go }) {
   const [reveal, setReveal] = useState<'each' | 'round'>('each')
   const [lb, setLb] = useState<LeaderboardVisibility>('round')
-  const [scoresVisible, setScoresVisible] = useState(true)
+  const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
+  const [scoreVisibility, setScoreVisibility] = useState<PlayerScoreVisibility>('live')
   type PrizePlace = { enabled: boolean; msg: string }
   const topPlaces = ['1st', '2nd', '3rd']
   const bottomPlaces = ['Last', '2nd Last', '3rd Last']
@@ -4887,7 +4900,9 @@ function HostSetup({ go }: { go: Go }) {
           p_settings: {
             answer_reveal: reveal,
             leaderboard_visibility: lb,
-            scores_visible_to_players: scoresVisible,
+            auto_run_mode: autoRunMode,
+            player_score_visibility: scoreVisibility,
+            scores_visible_to_players: scoreVisibility === 'live',
             top_prizes: topPrizes,
             bottom_prizes: botPrizes,
           },
@@ -4937,6 +4952,31 @@ function HostSetup({ go }: { go: Go }) {
         )}
 
         <div className="space-y-4">
+          <SCard title="Auto-Run">
+            <p style={{ color: C.sub }} className="mb-3 text-xs leading-5">
+              Run each round automatically, then stop so you can review and finalize it before starting the next round.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { v: 'off' as const, l: 'Off' },
+                { v: 'round' as const, l: 'Run each round automatically' },
+              ].map(option => (
+                <button key={option.v} type="button" onClick={() => {
+                  setAutoRunMode(option.v)
+                  if (option.v === 'round') setScoreVisibility('round')
+                }}
+                  style={{
+                    border: `1.5px solid ${autoRunMode === option.v ? C.violet : C.line}`,
+                    background: autoRunMode === option.v ? C.violetMist : 'white',
+                    color: autoRunMode === option.v ? C.violet : C.sub,
+                  }}
+                  className="rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-all">
+                  {option.l}
+                </button>
+              ))}
+            </div>
+          </SCard>
+
           {/* Answer reveal */}
           <SCard title="Answer Reveal">
             <div className="space-y-1">
@@ -4982,20 +5022,27 @@ function HostSetup({ go }: { go: Go }) {
             </p>
             <div className="grid grid-cols-2 gap-2">
               {[
-                { v: true, l: 'Show scores' },
-                { v: false, l: 'Hide scores' },
+                { v: 'live' as const, l: 'Live' },
+                { v: 'round' as const, l: 'After each round is finalized' },
+                { v: 'final' as const, l: 'Final results only' },
+                { v: 'hidden' as const, l: 'Hidden' },
               ].map(option => (
-                <button key={String(option.v)} onClick={() => setScoresVisible(option.v)}
+                <button key={option.v} onClick={() => setScoreVisibility(option.v)}
                   style={{
-                    border: `1.5px solid ${scoresVisible === option.v ? C.violet : C.line}`,
-                    background: scoresVisible === option.v ? C.violetMist : 'white',
-                    color: scoresVisible === option.v ? C.violet : C.sub,
+                    border: `1.5px solid ${scoreVisibility === option.v ? C.violet : C.line}`,
+                    background: scoreVisibility === option.v ? C.violetMist : 'white',
+                    color: scoreVisibility === option.v ? C.violet : C.sub,
                   }}
                   className="rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-all">
                   {option.l}
                 </button>
               ))}
             </div>
+            {autoRunMode === 'round' && scoreVisibility === 'round' && (
+              <p style={{ color: C.violet }} className="mt-3 text-xs font-semibold">
+                Recommended for Auto-Run. Scores update after you review and finalize each round.
+              </p>
+            )}
           </SCard>
 
           {/* Prizes */}
@@ -5338,6 +5385,7 @@ type LiveTeam = {
 type LiveSubmission = {
   id: string
   team_id: string
+  question_key?: string
   answer_text: string
   is_correct: boolean | null
   points_awarded: number
@@ -5528,6 +5576,12 @@ function LiveQuestion({ go }: { go: Go }) {
   const [allContentScreens, setAllContentScreens] = useState<LiveContentScreenDefinition[]>([])
   const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
   const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
+  const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
+  const [autoRunOperating, setAutoRunOperating] = useState(false)
+  const [autoRunPaused, setAutoRunPaused] = useState(false)
+  const [autoRunRemaining, setAutoRunRemaining] = useState(0)
+  const autoRunInitializedRef = useRef(false)
+  const autoRunActionRef = useRef<() => void>(() => {})
   const [liveError, setLiveError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
 
@@ -5554,6 +5608,12 @@ function LiveQuestion({ go }: { go: Go }) {
       setGameScreen(game.current_screen ?? '')
       setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
       setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
+      const configuredAutoRun = autoRunModeFromSettings(game.settings)
+      setAutoRunMode(configuredAutoRun)
+      if (!autoRunInitializedRef.current) {
+        autoRunInitializedRef.current = true
+        setAutoRunOperating(configuredAutoRun === 'round')
+      }
       setQuestionStage(game.question_stage === 'bonus' ? 'bonus' : 'core')
 
       if (game.answer_phase === 'open' || game.answer_phase === 'closed' || game.answer_phase === 'revealed') {
@@ -5827,7 +5887,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     }
   }
 
-  async function scoreCurrentQuestion(revealNow: boolean) {
+  async function scoreCurrentQuestion(revealNow: boolean, allowPendingReview = false) {
     if (!liveGameId || !question) throw new Error('Live question is not available')
 
     const { data: freshSubmissions, error: submissionError } = await supabase
@@ -5846,12 +5906,16 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
     if (bonusSubmissionError) throw bonusSubmissionError
 
-    const results = buildRevealResults(question, (freshSubmissions ?? []) as LiveSubmission[])
-    const bonusResults = buildBonusRevealResults(
+    const results = allowPendingReview
+      ? buildConfidentRevealResults(question, (freshSubmissions ?? []) as LiveSubmission[])
+      : buildRevealResults(question, (freshSubmissions ?? []) as LiveSubmission[])
+    const bonusResults = (allowPendingReview ? buildConfidentBonusRevealResults : buildBonusRevealResults)(
       runtimeBonusFromJson(question.bonus),
       (freshBonusSubmissions ?? []) as LiveBonusSubmission[],
     )
-    const { error: scoringError } = await supabase.rpc('finalize_question_and_bonus_scoring', {
+    const { error: scoringError } = await supabase.rpc(allowPendingReview
+      ? 'finalize_auto_run_question_scoring'
+      : 'finalize_question_and_bonus_scoring', {
       p_game_id: liveGameId,
       p_question_key: question.question_key,
       p_results: results as unknown as Json,
@@ -5902,6 +5966,22 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     } catch (error) {
       console.error('Could not reveal answer:', error)
       setLiveError('Could not reveal and score the answer. Please try again.')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  async function handleAutoRunReveal() {
+    if (!liveGameId || !question || actionBusy) return
+    setActionBusy(true)
+    setLiveError(null)
+    try {
+      await scoreCurrentQuestion(true, true)
+      setPhase('revealed')
+    } catch (error) {
+      console.error('Could not Auto-Run scoring and reveal:', error)
+      setLiveError('Auto-Run paused because this answer could not be scored safely.')
+      setAutoRunPaused(true)
     } finally {
       setActionBusy(false)
     }
@@ -5990,6 +6070,16 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
       if (!nextItem) {
         if (!liveGameId) throw new Error('The live game could not be found.')
+        if (autoRunMode === 'round') {
+          await updateLiveGame({
+            current_screen: 'intermission',
+            answer_phase: 'closed',
+            current_question_key: question.question_key,
+            current_content_screen_key: null,
+          })
+          go('end-of-round')
+          return
+        }
         await finalizeLiveGame(liveGameId)
         go('final-results')
         return
@@ -5997,7 +6087,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
       if (nextItem.roundNumber !== question.round_number) {
         await updateLiveGame({
-          current_screen: roundResultsScreen(leaderboardVisibility),
+          current_screen: autoRunMode === 'round' ? 'intermission' : roundResultsScreen(leaderboardVisibility),
           answer_phase: 'closed',
           current_question_key: question.question_key,
           current_content_screen_key: null,
@@ -6079,6 +6169,15 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
       if (!nextItem) {
         if (!liveGameId) throw new Error('The live game could not be found.')
+        if (autoRunMode === 'round') {
+          await updateLiveGame({
+            current_screen: 'intermission',
+            answer_phase: 'closed',
+            current_content_screen_key: null,
+          })
+          go('end-of-round')
+          return
+        }
         await finalizeLiveGame(liveGameId)
         go('final-results')
         return
@@ -6086,7 +6185,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
       if (nextItem.roundNumber !== contentScreen.round_number) {
         await updateLiveGame({
-          current_screen: roundResultsScreen(leaderboardVisibility),
+          current_screen: autoRunMode === 'round' ? 'intermission' : roundResultsScreen(leaderboardVisibility),
           answer_phase: 'closed',
           current_content_screen_key: null,
         })
@@ -6186,6 +6285,85 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     || question?.question_type === 'multi-part'
     || question?.question_type === 'ranking'
 
+  const autoRunTimer = (() => {
+    if (gameScreen === 'round-start') return { key: `round-${question?.round_number ?? 0}`, seconds: 5, label: 'First question opens in' }
+    if (gameScreen === 'content-screen') return { key: `content-${contentScreen?.screen_key ?? ''}`, seconds: AUTO_RUN_CONTENT_SECONDS, label: 'Content advances in' }
+    if (gameScreen === 'question-results') return { key: `leaderboard-${question?.question_key ?? ''}`, seconds: 15, label: 'Next question opens in' }
+    if (phase === 'open') {
+      const bonus = runtimeBonusFromJson(question?.bonus)
+      const seconds = questionStage === 'bonus' && bonus
+        ? 30 + ((Math.max(1, bonus.points) - 1) * 15)
+        : autoRunAnswerSeconds(question ?? {})
+      return { key: `open-${question?.question_key ?? ''}-${questionStage}`, seconds, label: 'Answers close in' }
+    }
+    if (phase === 'closed') return { key: `closed-${question?.question_key ?? ''}-${questionStage}`, seconds: 1, label: 'Scoring answers' }
+    return { key: `reveal-${question?.question_key ?? ''}`, seconds: autoRunRevealSeconds(question ?? {}), label: 'Next question opens in' }
+  })()
+
+  useEffect(() => {
+    autoRunActionRef.current = () => {
+      if (actionBusy) return
+      if (gameScreen === 'round-start') { void handleOpenQuestion(); return }
+      if (gameScreen === 'content-screen') { void handleAdvanceContentScreen(); return }
+      if (gameScreen === 'question-results') { void handleAdvance(); return }
+      if (phase === 'open') { void handleCloseAnswers(); return }
+      if (phase === 'closed' && activeBonus && questionStage === 'core') { void handleShowBonus(); return }
+      if (phase === 'closed') { void handleAutoRunReveal(); return }
+      void handleAdvance()
+    }
+  })
+
+  useEffect(() => {
+    // A persisted live-state transition starts a fresh countdown for that state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAutoRunRemaining(autoRunTimer.seconds)
+  }, [autoRunTimer.key, autoRunTimer.seconds])
+
+  useEffect(() => {
+    if (autoRunMode !== 'round' || !autoRunOperating || autoRunPaused || actionBusy || autoRunRemaining <= 0) return
+    const timer = window.setTimeout(() => {
+      setAutoRunRemaining(current => {
+        if (current <= 1) {
+          window.setTimeout(() => autoRunActionRef.current(), 0)
+          return 0
+        }
+        return current - 1
+      })
+    }, 1000)
+    return () => window.clearTimeout(timer)
+  }, [actionBusy, autoRunMode, autoRunOperating, autoRunPaused, autoRunRemaining, autoRunTimer.key])
+
+  const autoRunControls = autoRunMode === 'round' ? (
+    <section style={{ background: C.livePanel, borderBottom: `1px solid ${C.liveLine}` }} className="flex flex-wrap items-center justify-center gap-3 px-5 py-2.5">
+      <span style={{ color: autoRunOperating && !autoRunPaused ? '#C4B5FD' : C.caution }} className="text-xs font-black uppercase tracking-wider">
+        {autoRunOperating ? autoRunPaused ? 'Auto-Run paused' : 'Auto-Run on' : 'Manual control'}
+      </span>
+      <span style={{ color: C.liveText }} className="min-w-40 text-sm font-bold tabular-nums">
+        {autoRunTimer.label}: {autoRunClockLabel(autoRunRemaining)}
+      </span>
+      <button type="button" onClick={() => setAutoRunRemaining(value => value + AUTO_RUN_EXTENSION_SECONDS)} style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-bold hover:bg-white/5">+15 sec</button>
+      {autoRunOperating && (
+        <button type="button" onClick={() => setAutoRunPaused(value => !value)} style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-bold hover:bg-white/5">
+          {autoRunPaused ? 'Resume' : 'Pause'}
+        </button>
+      )}
+      {phase === 'open' && gameScreen !== 'round-start' && (
+        <button type="button" onClick={() => { setAutoRunPaused(true); void handleCloseAnswers() }} style={{ border: `1px solid ${C.caution}`, color: C.caution }} className="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-bold hover:bg-white/5">Close now</button>
+      )}
+      <button type="button" onClick={() => {
+        if (autoRunOperating) {
+          setAutoRunOperating(false)
+          setAutoRunPaused(false)
+        } else {
+          setAutoRunOperating(true)
+          setAutoRunPaused(false)
+        }
+      }} style={{ border: `1px solid ${C.violet}`, color: '#C4B5FD' }} className="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-bold hover:bg-white/5">
+        {autoRunOperating ? 'Take manual control' : 'Resume Auto-Run'}
+      </button>
+    </section>
+  ) : null
+
   if (gameScreen === 'content-screen') {
     const nextContentItem = contentScreen
       ? sequenceItems.find(item => item.itemPosition > contentScreen.item_position) ?? null
@@ -6209,6 +6387,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <CancelGameButton go={go} dark />
           <span style={{ background: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">CONTENT SCREEN LIVE</span>
         </header>
+        {autoRunControls}
 
         <main className="flex flex-1 items-center justify-center px-8 py-10">
           <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-8 text-center shadow-2xl">
@@ -6300,6 +6479,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <span style={{ color: C.liveDim }} className="text-xs font-semibold">LIVE</span>
         </div>
       </header>
+      {autoRunControls}
 
       <div className="flex flex-1 items-start min-h-0">
         <div className="mx-auto flex w-full max-w-[1500px] flex-1 flex-col gap-5 px-5 py-5 pb-12 min-w-0 lg:px-7 lg:py-6">
@@ -7071,6 +7251,9 @@ function EndOfRound({ go }: { go: Go }) {
   const [intermission, setIntermission] = useState(false)
   const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
   const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
+  const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
+  const [roundFinalized, setRoundFinalized] = useState(false)
+  const [scoreVisibility, setScoreVisibility] = useState<PlayerScoreVisibility>('live')
   const [revealingAnswers, setRevealingAnswers] = useState(false)
   const [teams, setTeams] = useState<LiveTeam[]>([])
   const [currentQuestion, setCurrentQuestion] = useState<LiveQuestionDefinition | null>(null)
@@ -7078,6 +7261,8 @@ function EndOfRound({ go }: { go: Go }) {
   const [roundQuestions, setRoundQuestions] = useState<LiveQuestionDefinition[]>([])
   const [currentSubmissions, setCurrentSubmissions] = useState<Pick<LiveSubmission, 'is_correct'>[]>([])
   const [currentBonusSubmissions, setCurrentBonusSubmissions] = useState<Pick<LiveBonusSubmission, 'is_correct'>[]>([])
+  const [roundSubmissions, setRoundSubmissions] = useState<LiveSubmission[]>([])
+  const [roundBonusSubmissions, setRoundBonusSubmissions] = useState<LiveBonusSubmission[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -7088,7 +7273,7 @@ function EndOfRound({ go }: { go: Go }) {
     async function loadRoundSummary() {
       const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('id, title, current_question_key, current_screen, settings')
+        .select('id, title, current_question_key, current_screen, settings, round_scores_finalized')
         .eq('code', getHostGameCode())
         .maybeSingle()
 
@@ -7103,6 +7288,14 @@ function EndOfRound({ go }: { go: Go }) {
       setGameTitle(game.title || 'Simple Trivia')
       setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
       setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
+      setScoreVisibility(playerScoreVisibilityFromSettings(game.settings))
+      const configuredAutoRun = autoRunModeFromSettings(game.settings)
+      setAutoRunMode(configuredAutoRun)
+      const finalizedForDisplay = configuredAutoRun === 'off' ? true : game.round_scores_finalized
+      setRoundFinalized(finalizedForDisplay)
+      if (configuredAutoRun === 'off' && !game.round_scores_finalized) {
+        await supabase.from('games').update({ round_scores_finalized: true }).eq('id', game.id)
+      }
       setRevealingAnswers(game.current_screen === 'delayed-reveal')
 
       const [{ data: questionRows }, { data: teamRows }] = await Promise.all([
@@ -7128,6 +7321,18 @@ function EndOfRound({ go }: { go: Go }) {
       setNextQuestion(next)
       setRoundQuestions(current ? questions.filter(item => item.round_number === current.round_number) : [])
       setTeams((teamRows ?? []) as LiveTeam[])
+
+      if (current) {
+        const roundKeys = questions.filter(item => item.round_number === current.round_number).map(item => item.question_key)
+        const [submissionResult, bonusSubmissionResult] = await Promise.all([
+          supabase.from('submissions').select('id, team_id, question_key, answer_text, is_correct, points_awarded, grading_json').eq('game_id', game.id).in('question_key', roundKeys),
+          supabase.from('bonus_submissions').select('id, team_id, question_key, answer_text, is_correct, points_awarded, grading_json').eq('game_id', game.id).in('question_key', roundKeys),
+        ])
+        if (active) {
+          setRoundSubmissions((submissionResult.data ?? []) as LiveSubmission[])
+          setRoundBonusSubmissions((bonusSubmissionResult.data ?? []) as LiveBonusSubmission[])
+        }
+      }
       setError(null)
 
       if (!channel) {
@@ -7194,6 +7399,7 @@ function EndOfRound({ go }: { go: Go }) {
         current_screen: 'round-start',
         answer_phase: 'open',
         question_stage: 'core',
+        round_scores_finalized: false,
       })
       go('live-question')
     } catch (err) {
@@ -7247,6 +7453,83 @@ function EndOfRound({ go }: { go: Go }) {
     }
   }
 
+  async function reviewRoundSubmission(submission: LiveSubmission, itemIndex: number, status: 'correct' | 'incorrect', bonus = false) {
+    const roundQuestion = roundQuestions.find(item => item.question_key === submission.question_key)
+    if (!roundQuestion) return
+    const bonusDefinition = runtimeBonusFromJson(roundQuestion.bonus)
+    const current = bonus && bonusDefinition
+      ? storedBonusGrading(bonusDefinition, submission)
+      : storedSubmissionGrading(roundQuestion, submission)
+    const next: SubmissionGrading = {
+      items: current.items.map((item, index) => index === itemIndex ? { ...item, status } : item),
+    }
+    if (!bonus && roundQuestion.question_type === 'multi-answer') next.missing = multiAnswerMissing(roundQuestion, next)
+
+    const table = bonus ? 'bonus_submissions' : 'submissions'
+    const { error: reviewError } = await supabase.from(table).update({ grading_json: next }).eq('id', submission.id)
+    if (reviewError) {
+      setError('Could not save that review decision.')
+      return
+    }
+    const setter = bonus ? setRoundBonusSubmissions : setRoundSubmissions
+    setter(rows => rows.map(row => row.id === submission.id ? { ...row, grading_json: next } : row))
+  }
+
+  async function finalizeRound(markPendingIncorrect = false) {
+    if (!gameId || !currentQuestion || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      for (const roundQuestion of roundQuestions) {
+        const core = roundSubmissions.filter(item => item.question_key === roundQuestion.question_key)
+        const bonuses = roundBonusSubmissions.filter(item => item.question_key === roundQuestion.question_key)
+        const results = buildConfidentRevealResults(roundQuestion, core)
+        const bonusResults = buildConfidentBonusRevealResults(runtimeBonusFromJson(roundQuestion.bonus), bonuses)
+        if (results.length > 0 || bonusResults.length > 0) {
+          const { error: scoreError } = await supabase.rpc('finalize_auto_run_question_scoring', {
+            p_game_id: gameId,
+            p_question_key: roundQuestion.question_key,
+            p_results: results as unknown as Json,
+            p_bonus_results: bonusResults as unknown as Json,
+            p_reveal: false,
+          })
+          if (scoreError) throw scoreError
+        }
+      }
+
+      const { error: finalizeError } = await supabase.rpc('finalize_auto_run_round', {
+        p_game_id: gameId,
+        p_round_number: currentQuestion.round_number,
+        p_mark_pending_incorrect: markPendingIncorrect,
+      })
+      if (finalizeError) throw finalizeError
+      await updateLiveGame({ current_screen: roundResultsScreen(leaderboardVisibility) })
+      setIntermission(false)
+      setRoundFinalized(true)
+      const { data: refreshedTeams } = await supabase.from('teams').select('id, name, score').eq('game_id', gameId).order('score', { ascending: false })
+      setTeams((refreshedTeams ?? []) as LiveTeam[])
+    } catch (finalizeError) {
+      console.error('Could not finalize Auto-Run round:', finalizeError)
+      setError(finalizeError instanceof Error ? finalizeError.message : 'Could not finalize this round.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function viewFinalResults() {
+    if (!gameId || busy || (autoRunMode === 'round' && !roundFinalized)) return
+    setBusy(true)
+    setError(null)
+    try {
+      await finalizeLiveGame(gameId)
+      go('final-results')
+    } catch (finalizeError) {
+      console.error('Could not finish game:', finalizeError)
+      setError('Could not finish the game.')
+      setBusy(false)
+    }
+  }
+
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const leaderboardPlacements = competitionPlacements(leaderboard)
   const roundNumber = currentQuestion?.round_number ?? 1
@@ -7254,6 +7537,22 @@ function EndOfRound({ go }: { go: Go }) {
   const revealCorrectness = correctnessSummary(teams.length, currentSubmissions)
   const revealBonusCorrectness = correctnessSummary(teams.length, currentBonusSubmissions)
   const revealBonus = runtimeBonusFromJson(currentQuestion?.bonus)
+  const playerScoresAtCheckpoint = scoreVisibility === 'live' || (scoreVisibility === 'round' && roundFinalized)
+  const pendingRoundItems = [
+    ...roundSubmissions.flatMap(submission => {
+      const roundQuestion = roundQuestions.find(item => item.question_key === submission.question_key)
+      if (!roundQuestion || submission.is_correct !== null) return []
+      const grading = storedSubmissionGrading(roundQuestion, submission)
+      return grading.items.flatMap((item, itemIndex) => item.status === 'review' ? [{ submission, question: roundQuestion, item, itemIndex, bonus: false }] : [])
+    }),
+    ...roundBonusSubmissions.flatMap(submission => {
+      const roundQuestion = roundQuestions.find(item => item.question_key === submission.question_key)
+      const bonus = runtimeBonusFromJson(roundQuestion?.bonus)
+      if (!roundQuestion || !bonus || submission.is_correct !== null) return []
+      const grading = storedBonusGrading(bonus, submission)
+      return grading.items.flatMap((item, itemIndex) => item.status === 'review' ? [{ submission, question: roundQuestion, item, itemIndex, bonus: true }] : [])
+    }),
+  ]
 
   if (answerRevealMode === 'round' && revealingAnswers && currentQuestion) {
     const orderedRoundQuestions = [...roundQuestions].sort((a, b) => a.round_position - b.round_position)
@@ -7340,6 +7639,44 @@ function EndOfRound({ go }: { go: Go }) {
 
         {error && <div style={{ background: `${C.stop}18`, border: `1px solid ${C.stop}55`, color: '#FCA5A5' }} className="rounded-xl px-4 py-3 mb-5 text-sm font-semibold">{error}</div>}
 
+        {autoRunMode === 'round' && (
+          <section style={{ background: C.liveSurface, border: `1px solid ${roundFinalized ? `${C.go}55` : `${C.violet}70`}` }} className="mb-7 rounded-2xl p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p style={{ color: roundFinalized ? C.go : '#C4B5FD' }} className="text-xs font-black uppercase tracking-wider">Host checkpoint</p>
+                <h2 className="mt-1 text-xl font-extrabold">{roundFinalized ? 'Round finalized' : `${pendingRoundItems.length} answer${pendingRoundItems.length === 1 ? '' : 's'} need review`}</h2>
+                <p style={{ color: C.liveDim }} className="mt-1 text-xs">{roundFinalized ? 'Scores for this round are now official.' : 'Auto-Run is stopped. Resolve these answers, then finalize the round.'}</p>
+              </div>
+              {!roundFinalized && (
+                <button type="button" disabled={busy || pendingRoundItems.length > 0} onClick={() => { void finalizeRound(false) }} style={{ background: pendingRoundItems.length > 0 ? C.livePanel : C.go, color: pendingRoundItems.length > 0 ? C.liveDim : 'white' }} className="cursor-pointer rounded-xl px-4 py-2.5 text-sm font-extrabold disabled:cursor-not-allowed">
+                  Finalize Round
+                </button>
+              )}
+            </div>
+
+            {!roundFinalized && pendingRoundItems.length > 0 && (
+              <div className="mt-4 space-y-2">
+                {pendingRoundItems.map(({ submission, question: pendingQuestion, item, itemIndex, bonus }) => (
+                  <div key={`${bonus ? 'bonus' : 'main'}-${submission.id}-${itemIndex}`} style={{ background: C.livePanel, border: `1px solid ${C.caution}55` }} className="rounded-xl p-3">
+                    <div className="flex items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-wider">{teams.find(team => team.id === submission.team_id)?.name ?? 'Team'} · Q{pendingQuestion.round_position}{bonus ? ' bonus' : ''}</p>
+                        <p className="mt-1 truncate text-sm font-bold">{item.submitted || '—'} <span style={{ color: C.liveDim }}>→</span> <span style={{ color: C.go }}>{item.expected ?? '—'}</span></p>
+                      </div>
+                      <ReviewBadge status="review" onCorrect={() => { void reviewRoundSubmission(submission, itemIndex, 'correct', bonus) }} onIncorrect={() => { void reviewRoundSubmission(submission, itemIndex, 'incorrect', bonus) }} />
+                    </div>
+                  </div>
+                ))}
+                <button type="button" disabled={busy} onClick={() => {
+                  if (window.confirm(`${pendingRoundItems.length} answer${pendingRoundItems.length === 1 ? ' is' : 's are'} still awaiting review. Mark all pending answers incorrect and finalize this round?`)) void finalizeRound(true)
+                }} style={{ color: '#FCA5A5' }} className="cursor-pointer text-xs font-bold hover:underline disabled:cursor-not-allowed disabled:opacity-50">
+                  Mark all pending incorrect &amp; finalize
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
         <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="mb-7 overflow-hidden rounded-2xl text-center shadow-2xl">
           <div style={{ borderBottom: `1px solid ${C.liveLine}`, color: '#C4B5FD' }} className="px-4 py-2 text-[11px] font-extrabold uppercase tracking-[0.18em]">
             Players are seeing
@@ -7349,17 +7686,17 @@ function EndOfRound({ go }: { go: Go }) {
               <p style={{ color: C.liveDim }} className="text-sm">Round {roundNumber} complete</p>
               <h2 style={{ color: C.liveText }} className="mt-2 text-3xl font-extrabold">Intermission</h2>
               <p style={{ color: C.liveDim }} className="mt-2 text-sm">The next round will begin shortly.</p>
-              <p style={{ color: '#C4B5FD' }} className="mt-5 text-xs font-bold">Each team can still see its own score.</p>
+              <p style={{ color: '#C4B5FD' }} className="mt-5 text-xs font-bold">{playerScoresAtCheckpoint ? 'Each team can see its official score.' : 'Scores remain hidden from players.'}</p>
             </div>
           ) : playersSeeRoundLeaderboard ? (
             <div className="px-8 py-8">
               <h2 style={{ color: C.liveText }} className="text-3xl font-extrabold">Round {roundNumber} Complete</h2>
-              <p style={{ color: '#C4B5FD' }} className="mt-3 text-sm font-bold">The full leaderboard and every team’s score are visible.</p>
+              <p style={{ color: '#C4B5FD' }} className="mt-3 text-sm font-bold">{playerScoresAtCheckpoint ? 'The full leaderboard and official scores are visible.' : 'The leaderboard is visible; point totals remain hidden.'}</p>
             </div>
           ) : (
             <div className="px-8 py-8">
               <h2 style={{ color: C.liveText }} className="text-3xl font-extrabold">Round {roundNumber} Complete</h2>
-              <p style={{ color: '#C4B5FD' }} className="mt-3 text-sm font-bold">Each team sees only its own score.</p>
+              <p style={{ color: '#C4B5FD' }} className="mt-3 text-sm font-bold">{playerScoresAtCheckpoint ? 'Each team sees only its own official score.' : 'Scores remain hidden from players.'}</p>
               <p style={{ color: C.liveDim }} className="mt-1 text-xs">Team names, ranks, and the full standings are hidden.</p>
             </div>
           )}
@@ -7387,18 +7724,18 @@ function EndOfRound({ go }: { go: Go }) {
           <button
             type="button"
             onClick={toggleIntermission}
-            disabled={busy}
+            disabled={busy || (autoRunMode === 'round' && !roundFinalized)}
             style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, color: C.liveText }}
             className="flex-1 cursor-pointer rounded-xl px-5 py-3.5 text-sm font-semibold transition-all hover:brightness-125 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {intermission ? 'Hide Intermission' : 'Take a Break'}
+            {autoRunMode === 'round' && !roundFinalized ? 'Players waiting for finalization' : intermission ? 'Hide Intermission' : 'Take a Break'}
           </button>
           {nextQuestion ? (
             <button
               type="button"
               data-host-navigation="forward"
               onClick={startNextRound}
-              disabled={busy}
+              disabled={busy || (autoRunMode === 'round' && !roundFinalized)}
               style={{ background: C.violet, color: 'white', boxShadow: `0 8px 28px ${C.violet}45` }}
               className="flex-1 cursor-pointer rounded-xl px-6 py-3.5 text-base font-semibold transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -7408,9 +7745,10 @@ function EndOfRound({ go }: { go: Go }) {
             <button
               type="button"
               data-host-navigation="forward"
-              onClick={() => go('final-results')}
+              onClick={viewFinalResults}
+              disabled={busy || (autoRunMode === 'round' && !roundFinalized)}
               style={{ background: C.violet, color: 'white', boxShadow: `0 8px 28px ${C.violet}45` }}
-              className="flex-1 cursor-pointer rounded-xl px-6 py-3.5 text-base font-semibold transition-all hover:opacity-90 active:scale-[0.98]"
+              className="flex-1 cursor-pointer rounded-xl px-6 py-3.5 text-base font-semibold transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
             >
               View Final Results
             </button>

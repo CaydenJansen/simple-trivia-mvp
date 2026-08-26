@@ -422,6 +422,7 @@ export type Database = {
           current_question_key: string | null
           current_content_screen_key: string | null
           current_tiebreaker_attempt_id: string | null
+          round_scores_finalized: boolean
           quiz_id: string | null
           settings: Json
         }
@@ -437,6 +438,7 @@ export type Database = {
           current_question_key?: string | null
           current_content_screen_key?: string | null
           current_tiebreaker_attempt_id?: string | null
+          round_scores_finalized?: boolean
           quiz_id?: string | null
           settings?: Json
         }
@@ -452,6 +454,7 @@ export type Database = {
           current_question_key?: string | null
           current_content_screen_key?: string | null
           current_tiebreaker_attempt_id?: string | null
+          round_scores_finalized?: boolean
           quiz_id?: string | null
           settings?: Json
         }
@@ -942,6 +945,24 @@ export type Database = {
           p_results: Json
           p_bonus_results?: Json
           p_reveal?: boolean
+        }
+        Returns: number
+      }
+      finalize_auto_run_question_scoring: {
+        Args: {
+          p_game_id: string
+          p_question_key: string
+          p_results?: Json
+          p_bonus_results?: Json
+          p_reveal?: boolean
+        }
+        Returns: number
+      }
+      finalize_auto_run_round: {
+        Args: {
+          p_game_id: string
+          p_round_number: number
+          p_mark_pending_incorrect?: boolean
         }
         Returns: number
       }

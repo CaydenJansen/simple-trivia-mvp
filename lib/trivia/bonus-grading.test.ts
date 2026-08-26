@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildBonusGrading,
+  buildConfidentBonusRevealResults,
   buildBonusRevealResults,
   runtimeBonusFromJson,
 } from './bonus-grading'
@@ -63,6 +64,13 @@ describe('bonus grading', () => {
     const runtime = runtimeBonusFromJson(bonus)!
     expect(buildBonusRevealResults(runtime, [
       { id: 'done', answer_text: 'Ottawa', is_correct: true, grading_json: null },
+    ])).toEqual([])
+  })
+
+  it('leaves a reviewable bonus unresolved during Auto-Run', () => {
+    const runtime = runtimeBonusFromJson(bonus)!
+    expect(buildConfidentBonusRevealResults(runtime, [
+      { id: 'review', answer_text: 'Ottowa', is_correct: null, grading_json: null },
     ])).toEqual([])
   })
 })

@@ -24,6 +24,7 @@
 - Auto-Build draws from platform-owned `source_questions` and `source_tiebreakers`, then creates independent quiz snapshots through the same atomic save boundary as manual authoring.
 - Supabase is the source of truth for live game state. Do not replace working database or Realtime behaviour with fake local state.
 - Players follow host progression automatically; players do not advance questions themselves.
+- Auto-Run is a pre-game rule, not a mid-game configuration toggle. MVP Auto-Run advances only the current round and always stops at a host-controlled round checkpoint.
 - On player answer-entry screens, Return submits a valid current answer. Shift+Return remains available for a newline in multi-line text fields.
 - Correct answers must not be exposed to players before reveal.
 - Content authored by a host must remain distinct from live session data.
@@ -89,6 +90,11 @@
 - Do not add post-reveal undo without safely reversing awarded points.
 - Review-required answers sort first, then graded submissions, then waiting teams. Keep ordering stable within each group.
 - Leaderboard visibility rules must not leak prohibited team names, scores, or ranks. A team sees point totals only when the host enables player score visibility; this setting is independent from leaderboard visibility.
+- Player score visibility is fixed before play as `live`, `round`, `final`, or `hidden`. Auto-Run defaults to round-finalized scores. Never expose provisional in-round scores when round-finalized visibility is selected.
+- Auto-Run timing is workload-based: 30 seconds for the first point/ranking item and 15 seconds for each additional point/item; content screens default to 30 seconds and simple reveals to 15 seconds. Compound reveals may be slightly longer.
+- Auto-Run must preserve host intervention: pause/resume preserves remaining time, +15 seconds extends the current state, Close Now closes safely, and manual control stops progression without changing pre-game rules.
+- Ambiguous answers never stop Auto-Run and never silently become incorrect. Leave them pending and neutral to players until the host resolves them or explicitly marks all remaining pending answers incorrect at the round checkpoint.
+- Auto-Run round scores remain provisional until explicit host finalization. The next round and final results must not proceed from an Auto-Run checkpoint before finalization.
 - **After every question** leaderboard mode inserts a dedicated standings screen between scored questions; it must never become a persistent overlay on question or answer screens.
 - Preserve the established visual language: purple brand surfaces, light builder UI, dark host console, rounded cards, Plus Jakarta Sans, and restrained SaaS styling.
 - Every host screen shown while a game is actively running, including round breaks and in-game leaderboards, uses the dark host-console treatment. Light surfaces are reserved for building/setup and post-game results.
@@ -170,6 +176,7 @@ Preserve and verify:
 - Submission locking when answers close.
 - Reopen before reveal.
 - Host review of ambiguous answers.
+- Auto-Run pause/resume, timer extension, close-now, manual takeover, pending-review accumulation, and explicit round finalization.
 - Reveal and points application.
 - Multiple questions and rounds.
 - Intermission and content-screen progression where supported.
@@ -222,6 +229,7 @@ At minimum, grading tests must cover:
 - Host review override.
 - Scoring idempotency: reveal or retries must not award points twice.
 - Prepared tiebreaker numeric validation, optional manual recommendation, and the exact auto-build count of three.
+- Auto-Run timing by points and ranking workload, stable pre-game mode parsing, pending-review exclusion from provisional scoring, and score visibility at round/final checkpoints.
 
 For live-session changes, verify with at least three teams where practical:
 
