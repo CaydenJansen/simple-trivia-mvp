@@ -31,6 +31,19 @@ npm run lint
 npm run build
 ```
 
+Browser regression tests cover Chromium, WebKit/Safari, and mobile layouts:
+
+```bash
+npx playwright install chromium webkit
+npm run test:e2e
+```
+
+The public and prototype regression tests need only the normal local Supabase variables. The authenticated live-game test is skipped unless `E2E_HOST_EMAIL`, `E2E_HOST_PASSWORD`, and `E2E_QUIZ_TITLE` identify a dedicated test host and a disposable ready quiz.
+
+## Production error visibility
+
+Unexpected browser errors and React crashes are reported to the `/api/client-errors` endpoint. The endpoint records sanitized, query-string-free reports in the hosting provider's function logs under `[simple-trivia-client-error]`; it never includes player answers, team names, email addresses, or Supabase credentials. Error reporting is best-effort and never blocks a live game.
+
 ## Question Library imports
 
 Question Library spreadsheets are validated with a no-write dry run before any database import. See [the importer guide](docs/question-library-import.md) for the workbook rules and commands.

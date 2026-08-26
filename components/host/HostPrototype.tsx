@@ -151,39 +151,6 @@ const C = {
 }
 
 // ─── DATA ─────────────────────────────────────────────────────────────────────
-const QUIZZES = [
-  { id: 1, title: 'Friday Night Trivia', rounds: 6, questions: 30, mins: 75, edited: '2 hours ago', status: 'Ready' },
-  { id: 2, title: 'Pub Quiz Classics', rounds: 4, questions: 20, mins: 50, edited: 'Yesterday', status: 'Draft' },
-  { id: 3, title: 'Sports Night Special', rounds: 5, questions: 25, mins: 65, edited: '3 days ago', status: 'Ready' },
-  { id: 4, title: 'Music Through the Decades', rounds: 4, questions: 20, mins: 55, edited: '1 week ago', status: 'Draft' },
-]
-
-
-const LB = [
-  { name: 'Trivia Newton John', score: 48, delta: 3 },
-  { name: 'Quizteama Aguilera', score: 43, delta: 1 },
-  { name: 'Risky Quizness', score: 38, delta: 0 },
-  { name: 'Norfolk & Chance', score: 31, delta: -1 },
-  { name: 'The Know-It-Alls', score: 28, delta: 2 },
-  { name: 'Quiz Khalifa', score: 22, delta: 0 },
-  { name: 'I Am Smarticus', score: 17, delta: -1 },
-]
-
-const ROUNDS = [
-  { id: 1, title: 'General Knowledge', count: 5 },
-  { id: 2, title: 'Movies', count: 5 },
-  { id: 3, title: 'Sport', count: 5 },
-  { id: 4, title: 'Music', count: 5 },
-]
-
-const Qs = [
-  { id: 1, text: 'What is the capital of Canada?', cat: 'Geography', diff: 'Medium', type: 'Single Answer' },
-  { id: 2, text: 'How many bones are in the adult human body?', cat: 'Science', diff: 'Hard', type: 'Single Answer' },
-  { id: 3, text: 'Who painted the Mona Lisa?', cat: 'Art', diff: 'Easy', type: 'Single Answer' },
-  { id: 4, text: 'In what year did the Berlin Wall fall?', cat: 'History', diff: 'Medium', type: 'Single Answer' },
-  { id: 5, text: 'What is the chemical symbol for gold?', cat: 'Science', diff: 'Easy', type: 'Single Answer' },
-]
-
 // ─── BASE COMPONENTS ──────────────────────────────────────────────────────────
 
 function Btn({
@@ -517,15 +484,15 @@ function IBtn({ icon, title, onClick, danger = false }: {
 function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
   return (
     <nav style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }}
-      className="h-14 flex items-center px-6 gap-6 sticky top-0 z-40">
-      <button onClick={() => go('dashboard')} className="flex items-center gap-2.5 mr-3">
+      className="sticky top-0 z-40 flex h-14 items-center gap-2 px-3 sm:gap-6 sm:px-6">
+      <button onClick={() => go('dashboard')} aria-label="Simple Trivia home" className="mr-0 flex shrink-0 items-center gap-2.5 sm:mr-3">
         <div style={{ background: C.violet }} className="w-7 h-7 rounded-lg flex items-center justify-center">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
             <circle cx="7" cy="5" r="2.5" fill="white"/>
             <path d="M2 12c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="white" strokeWidth="1.4" strokeLinecap="round"/>
           </svg>
         </div>
-        <span style={{ color: C.ink }} className="font-bold text-[15px] tracking-tight">Simple Trivia</span>
+        <span style={{ color: C.ink }} className="hidden font-bold text-[15px] tracking-tight sm:inline">Simple Trivia</span>
       </button>
       <div className="flex items-center gap-0.5 flex-1">
         {[
@@ -536,17 +503,17 @@ function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
           <button
             key={label}
             onClick={() => go(screen)}
-            className="relative px-3.5 py-2 text-sm font-medium rounded-lg transition-colors"
+            className="relative rounded-lg px-2 py-2 text-xs font-medium transition-colors sm:px-3.5 sm:text-sm"
             style={{ color: active === label ? C.violet : C.sub }}
           >
             {label}
             {active === label && (
-              <span style={{ background: C.violet }} className="absolute bottom-0 left-3.5 right-3.5 h-0.5 rounded-full" />
+              <span style={{ background: C.violet }} className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full sm:left-3.5 sm:right-3.5" />
             )}
           </button>
         ))}
       </div>
-      <div style={{ background: C.violet }} className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold cursor-pointer hover:opacity-90 transition-opacity">
+      <div style={{ background: C.violet }} className="hidden h-8 w-8 items-center justify-center rounded-full text-xs font-bold text-white transition-opacity hover:opacity-90 sm:flex">
         JH
       </div>
     </nav>
@@ -933,7 +900,7 @@ function Dashboard({ go }: { go: Go }) {
     <div style={{ background: C.ground }} className="min-h-screen">
       <Nav go={go} active="My Quizzes" />
       <main className="max-w-6xl mx-auto px-6 py-10">
-        <div className="flex items-center gap-4 mb-8">
+        <div className="mb-8 flex flex-wrap items-center gap-3 sm:gap-4">
           {[
             { label: 'Quizzes', value: String(quizzes.length) },
             { label: 'Games hosted', value: String(gamesHosted) },
@@ -944,8 +911,8 @@ function Dashboard({ go }: { go: Go }) {
               <span style={{ color: C.sub }} className="text-sm">{s.label}</span>
             </div>
           ))}
-          <div className="flex-1" />
-          <Btn onClick={() => go('create-quiz')} sz="sm">
+          <div className="hidden flex-1 sm:block" />
+          <Btn onClick={() => go('create-quiz')} sz="sm" cls="ml-auto sm:ml-0">
             <I.plus /> Create Quiz
           </Btn>
         </div>
@@ -6227,6 +6194,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
             {question?.image_url && (
               <div style={{ background: '#fff', borderRadius: 16 }} className="h-36 mb-5 flex items-center justify-center overflow-hidden">
+                {/* eslint-disable-next-line @next/next/no-img-element -- Host-authored URLs cannot use a fixed remote-image allowlist. */}
                 <img src={question.image_url} alt="Question image" className="max-h-28 max-w-[80%] object-contain" />
               </div>
             )}
@@ -6929,7 +6897,6 @@ function EndOfRound({ go }: { go: Go }) {
   const [roundQuestions, setRoundQuestions] = useState<LiveQuestionDefinition[]>([])
   const [currentSubmissions, setCurrentSubmissions] = useState<Pick<LiveSubmission, 'is_correct'>[]>([])
   const [currentBonusSubmissions, setCurrentBonusSubmissions] = useState<Pick<LiveBonusSubmission, 'is_correct'>[]>([])
-  const [totalRounds, setTotalRounds] = useState(1)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -6979,7 +6946,6 @@ function EndOfRound({ go }: { go: Go }) {
       setCurrentQuestion(current)
       setNextQuestion(next)
       setRoundQuestions(current ? questions.filter(item => item.round_number === current.round_number) : [])
-      setTotalRounds(Math.max(1, ...questions.map(item => item.round_number)))
       setTeams((teamRows ?? []) as LiveTeam[])
       setError(null)
 

@@ -1031,13 +1031,6 @@ const SCREENS: { id: PlayerScreen; label: string }[] = [
   { id: 'game-ended',     label: '22 · Game Ended' },
 ]
 
-// Demo flow — primary interactive path through the prototype
-const DEMO_FLOW: PlayerScreen[] = [
-  'join', 'team-setup', 'waiting', 'round-start',
-  'single-answer', 'submitted', 'correct',
-  'single-answer', 'round-results', 'intermission', 'final-result',
-]
-
 // ─── SHARED COMPONENTS ────────────────────────────────────────────────────────
 
 function TopBar({
@@ -1803,7 +1796,10 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-5">
         <div style={{ borderRadius: 16, overflow: 'hidden', background: C.ground, border: `1px solid ${C.line}`, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', height: 180 }}>
-          {question?.image_url ? <img src={question.image_url} alt="Question image" style={{ maxHeight: 140, maxWidth: '80%', objectFit: 'contain' }} /> : <span style={{ color: C.sub }}>Loading image…</span>}
+          {question?.image_url ? <>
+            {/* eslint-disable-next-line @next/next/no-img-element -- Host-authored URLs cannot use a fixed remote-image allowlist. */}
+            <img src={question.image_url} alt="Question image" style={{ maxHeight: 140, maxWidth: '80%', objectFit: 'contain' }} />
+          </> : <span style={{ color: C.sub }}>Loading image…</span>}
         </div>
         <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
@@ -2197,7 +2193,7 @@ function BonusSubmitted() {
 }
 
 // ─── SCREEN 11 — SUBMITTED ────────────────────────────────────────────────────
-function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
+function Submitted() {
   const snapshot = usePlayerSnapshot()
   const question = useLiveQuestionDefinition()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
@@ -2234,7 +2230,7 @@ function Submitted({ go }: { go: (s: PlayerScreen) => void }) {
 }
 
 // ─── SCREEN 12 — NO ANSWER ────────────────────────────────────────────────────
-function NoAnswer({ go }: { go: (s: PlayerScreen) => void }) {
+function NoAnswer() {
   const snapshot = usePlayerSnapshot()
   if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
@@ -2253,7 +2249,7 @@ function NoAnswer({ go }: { go: (s: PlayerScreen) => void }) {
 }
 
 // ─── SCREEN 13 — CORRECT ──────────────────────────────────────────────────────
-function Correct({ go }: { go: (s: PlayerScreen) => void }) {
+function Correct() {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   if (!snapshot.loaded) return <PlayerSnapshotLoading />
@@ -2275,7 +2271,7 @@ function Correct({ go }: { go: (s: PlayerScreen) => void }) {
 }
 
 // ─── SCREEN 14 — INCORRECT ────────────────────────────────────────────────────
-function Incorrect({ go }: { go: (s: PlayerScreen) => void }) {
+function Incorrect() {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   if (!snapshot.loaded) return <PlayerSnapshotLoading />
@@ -2324,7 +2320,7 @@ function ContentScreen() {
 }
 
 // ─── SCREEN 16 — INTERMISSION ─────────────────────────────────────────────────
-function Intermission({ go }: { go: (s: PlayerScreen) => void }) {
+function Intermission() {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   if (!snapshot.loaded) return <PlayerSnapshotLoading />
@@ -2388,7 +2384,7 @@ function RoundResults() {
 }
 
 // ─── SCREEN 18 — DELAYED REVEAL ───────────────────────────────────────────────
-function DelayedReveal({ go }: { go: (s: PlayerScreen) => void }) {
+function DelayedReveal() {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   if (!snapshot.loaded) return <PlayerSnapshotLoading />
@@ -2427,7 +2423,7 @@ const FINAL_LB = [
   { name: 'Norfolk & Chance', score: 31 },
 ]
 
-function Winner({ go }: { go: (s: PlayerScreen) => void }) {
+function Winner() {
   const MY = 'Trivia Newton John'
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2471,7 +2467,7 @@ function Winner({ go }: { go: (s: PlayerScreen) => void }) {
 }
 
 // ─── SCREEN 20 — FINAL RESULT ─────────────────────────────────────────────────
-function FinalResult({ go }: { go: (s: PlayerScreen) => void }) {
+function FinalResult() {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   const visibility = useLeaderboardVisibility()
@@ -2732,7 +2728,7 @@ function GameEnded({ go }: { go: (s: PlayerScreen) => void }) {
 }
 
 // ─── SCREEN 13b — PARTIAL CREDIT ──────────────────────────────────────────────
-function PartialCorrect({ go }: { go: (s: PlayerScreen) => void }) {
+function PartialCorrect() {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   if (!snapshot.loaded) return <PlayerSnapshotLoading />
@@ -2815,19 +2811,19 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
     case 'ranking':        return <Ranking go={go} />
     case 'bonus-answer':   return <BonusAnswer go={go} />
     case 'bonus-submitted':return <BonusSubmitted />
-    case 'submitted':      return <Submitted go={go} />
-    case 'no-answer':      return <NoAnswer go={go} />
-    case 'correct':        return <Correct go={go} />
-    case 'incorrect':            return <Incorrect go={go} />
-    case 'partial-correct':      return <PartialCorrect go={go} />
+    case 'submitted':      return <Submitted />
+    case 'no-answer':      return <NoAnswer />
+    case 'correct':        return <Correct />
+    case 'incorrect':            return <Incorrect />
+    case 'partial-correct':      return <PartialCorrect />
     case 'content-screen':       return <ContentScreen />
-    case 'intermission':   return <Intermission go={go} />
+    case 'intermission':   return <Intermission />
     case 'question-results':      return <QuestionResults />
     case 'round-results':         return <RoundResults />
     case 'round-results-hidden':  return <RoundResultsHidden go={go} />
-    case 'delayed-reveal': return <DelayedReveal go={go} />
-    case 'winner':         return <Winner go={go} />
-    case 'final-result':   return <FinalResult go={go} />
+    case 'delayed-reveal': return <DelayedReveal />
+    case 'winner':         return <Winner />
+    case 'final-result':   return <FinalResult />
     case 'tiebreaker-pending': return <TiebreakerPending />
     case 'tiebreaker':     return <LiveTiebreaker />
     case 'tiebreaker-result': return <LiveTiebreaker />
