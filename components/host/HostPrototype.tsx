@@ -326,6 +326,159 @@ function downloadGameQr(dataUrl: string, gameCode: string) {
   link.click()
 }
 
+type TeamJoinRequest = {
+  id: string
+  requested_name: string
+  created_at: string
+}
+
+function useTeamJoinRequests(gameCode: string) {
+  const [requests, setRequests] = useState<TeamJoinRequest[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [decidingId, setDecidingId] = useState<string | null>(null)
+
+  const loadRequests = useCallback(async (activeGameId: string) => {
+    const { data, error: requestError } = await supabase
+      .from('team_join_requests')
+      .select('id, requested_name, created_at')
+      .eq('game_id', activeGameId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: true })
+
+    if (requestError) {
+      console.error('Could not load team join requests:', requestError)
+      setError('Could not load team requests.')
+      return
+    }
+
+    setRequests(data ?? [])
+    setError(null)
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    let channel: ReturnType<typeof supabase.channel> | null = null
+
+    async function setup() {
+      const { data: game, error: gameError } = await supabase
+        .from('games')
+        .select('id')
+        .eq('code', gameCode)
+        .maybeSingle()
+
+      if (!active) return
+      if (gameError || !game) {
+        setError('Could not load team requests.')
+        return
+      }
+
+      await loadRequests(game.id)
+      if (!active) return
+
+      channel = supabase
+        .channel(`host-team-requests-${game.id}-${crypto.randomUUID()}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'team_join_requests', filter: `game_id=eq.${game.id}` },
+          () => { void loadRequests(game.id) },
+        )
+        .subscribe()
+    }
+
+    void setup()
+    return () => {
+      active = false
+      if (channel) void supabase.removeChannel(channel)
+    }
+  }, [gameCode, loadRequests])
+
+  async function decide(requestId: string, decision: 'approved' | 'denied') {
+    if (decidingId) return
+    setDecidingId(requestId)
+    setError(null)
+
+    const { error: decisionError } = await supabase.rpc('decide_team_join_request', {
+      p_request_id: requestId,
+      p_decision: decision,
+    })
+
+    if (decisionError) {
+      console.error('Could not decide team join request:', decisionError)
+      setError('Could not update that request. Please try again.')
+    } else {
+      setRequests(current => current.filter(request => request.id !== requestId))
+    }
+
+    setDecidingId(null)
+  }
+
+  return { requests, error, decidingId, decide }
+}
+
+function TeamAdmissionList({ gameCode, dark = false }: { gameCode: string; dark?: boolean }) {
+  const { requests, error, decidingId, decide } = useTeamJoinRequests(gameCode)
+
+  return (
+    <section
+      style={{
+        background: dark ? C.liveSurface : C.panel,
+        border: `1px solid ${dark ? C.liveLine : requests.length > 0 ? C.caution : C.line}`,
+      }}
+      className="rounded-2xl p-4 text-left"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p style={{ color: dark ? C.liveText : C.ink }} className="text-sm font-extrabold">Team approval</p>
+          <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-0.5 text-xs">Approve a team name before it enters the game.</p>
+        </div>
+        {requests.length > 0 && (
+          <span style={{ background: C.caution, color: '#18171F' }} className="rounded-full px-2.5 py-1 text-xs font-black">
+            {requests.length} waiting
+          </span>
+        )}
+      </div>
+
+      {error && <p role="alert" style={{ color: C.stop }} className="mt-3 text-xs font-semibold">{error}</p>}
+      {requests.length === 0 && !error && (
+        <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-4 rounded-xl border border-dashed border-current px-3 py-3 text-center text-xs">
+          No teams are waiting for approval.
+        </p>
+      )}
+      {requests.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {requests.map(request => (
+            <div
+              key={request.id}
+              style={{ background: dark ? C.livePanel : C.ground, border: `1px solid ${dark ? C.liveLine : C.line}` }}
+              className="flex items-center gap-3 rounded-xl p-3"
+            >
+              <span style={{ color: dark ? C.liveText : C.ink }} className="min-w-0 flex-1 truncate text-sm font-bold">{request.requested_name}</span>
+              <button
+                type="button"
+                onClick={() => { void decide(request.id, 'denied') }}
+                disabled={decidingId === request.id}
+                style={{ color: C.stop, border: `1px solid ${C.stop}55` }}
+                className="cursor-pointer rounded-lg px-3 py-2 text-xs font-bold hover:bg-red-500/10 disabled:cursor-wait disabled:opacity-50"
+              >
+                Deny
+              </button>
+              <button
+                type="button"
+                onClick={() => { void decide(request.id, 'approved') }}
+                disabled={decidingId === request.id}
+                style={{ background: C.go, color: '#FFFFFF' }}
+                className="cursor-pointer rounded-lg px-3 py-2 text-xs font-bold hover:opacity-90 disabled:cursor-wait disabled:opacity-50"
+              >
+                Approve
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function JoinCodeButton({
   dark = false,
   label,
@@ -338,6 +491,7 @@ function JoinCodeButton({
   const gameCode = getHostGameCode()
   const [open, setOpen] = useState(false)
   const { dataUrl, joinUrl } = useGameJoinQr(gameCode)
+  const { requests } = useTeamJoinRequests(gameCode)
 
   return (
     <>
@@ -348,6 +502,11 @@ function JoinCodeButton({
         className={`rounded-lg px-3 py-2 text-xs font-bold transition-colors hover:border-violet hover:text-violet ${className}`}
       >
         {label ?? `Join code ${gameCode}`}
+        {requests.length > 0 && (
+          <span style={{ background: C.caution, color: '#18171F' }} className="ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-black">
+            {requests.length}
+          </span>
+        )}
       </button>
 
       {open && (
@@ -368,6 +527,9 @@ function JoinCodeButton({
             <p style={{ color: C.ink, letterSpacing: '0.16em' }} className="mt-1 text-5xl font-black tabular-nums">{gameCode}</p>
             <p style={{ color: C.sub }} className="mt-4 break-all text-xs">{joinUrl}</p>
             <p style={{ color: C.caution }} className="mt-4 text-xs font-semibold">New teams can join while the game is running.</p>
+            <div className="mt-6">
+              <TeamAdmissionList gameCode={gameCode} />
+            </div>
             <div className="mt-6 flex justify-center gap-3">
               <Btn v="secondary" onClick={() => downloadGameQr(dataUrl, gameCode)} disabled={!dataUrl}>Download QR</Btn>
               <Btn onClick={() => setOpen(false)}>Done</Btn>
@@ -5093,6 +5255,9 @@ function Lobby({ go }: { go: Go }) {
 
           {/* Teams */}
           <div>
+            <div className="mb-5">
+              <TeamAdmissionList gameCode={lobbyCode} />
+            </div>
             <div className="flex items-center justify-between mb-4">
               <h2 style={{ color: C.ink }} className="font-extrabold">Teams Joined</h2>
               <div className="flex items-center gap-2">

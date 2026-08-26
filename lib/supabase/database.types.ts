@@ -603,6 +603,34 @@ export type Database = {
         Update: Partial<Database['public']['Tables']['team_profiles']['Insert']>
         Relationships: []
       }
+      team_join_requests: {
+        Row: {
+          id: string
+          request_token: string
+          game_id: string
+          team_profile_id: string | null
+          requested_name: string
+          name_key: string
+          status: 'pending' | 'approved' | 'denied'
+          team_id: string | null
+          created_at: string
+          decided_at: string | null
+        }
+        Insert: {
+          id?: string
+          request_token?: string
+          game_id: string
+          team_profile_id?: string | null
+          requested_name: string
+          name_key: string
+          status?: 'pending' | 'approved' | 'denied'
+          team_id?: string | null
+          created_at?: string
+          decided_at?: string | null
+        }
+        Update: Partial<Database['public']['Tables']['team_join_requests']['Insert']>
+        Relationships: []
+      }
       teams: {
         Row: {
           id: string
@@ -827,9 +855,34 @@ export type Database = {
           p_pin_mode?: 'none' | 'have' | 'create'
         }
         Returns: {
-          id: string
+          request_id: string
+          request_token: string
           name: string
-          score: number
+          admission_status: 'pending' | 'approved' | 'denied'
+        }[]
+      }
+      get_team_join_request: {
+        Args: {
+          p_request_id: string
+          p_request_token: string
+        }
+        Returns: {
+          admission_status: 'pending' | 'approved' | 'denied'
+          team_id: string | null
+          name: string
+          game_status: string
+        }[]
+      }
+      decide_team_join_request: {
+        Args: {
+          p_request_id: string
+          p_decision: 'approved' | 'denied'
+        }
+        Returns: {
+          request_id: string
+          admission_status: 'approved' | 'denied'
+          team_id: string | null
+          name: string
         }[]
       }
       submit_player_answer: {

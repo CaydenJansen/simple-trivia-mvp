@@ -29,10 +29,11 @@ import {
   teamPinErrorMessage,
   type TeamPinMode,
 } from "@/lib/trivia/team-pin";
+import { teamAdmissionTransition } from "@/lib/trivia/team-admission";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
-  | 'join' | 'team-setup' | 'waiting' | 'round-start'
+  | 'join' | 'team-setup' | 'approval-pending' | 'waiting' | 'round-start'
   | 'single-answer' | 'image-question' | 'multiple-choice'
   | 'multi-answer' | 'multi-part' | 'ranking'
   | 'bonus-answer' | 'bonus-submitted'
@@ -231,7 +232,7 @@ function useLivePlayerSync(
   setScreen: React.Dispatch<React.SetStateAction<PlayerScreen>>,
   enabled = true,
 ) {
-  const joined = enabled && screen !== 'join' && screen !== 'team-setup'
+  const joined = enabled && screen !== 'join' && screen !== 'team-setup' && screen !== 'approval-pending'
 
   useEffect(() => {
     if (!joined) return
@@ -1388,7 +1389,7 @@ async function handleJoin() {
     return;
   }
 
-  const { data: team, error } = await supabase
+  const { data: request, error } = await supabase
     .rpc("join_live_game", {
       p_game_id: gameId,
       p_team_name: name.trim(),
@@ -1404,7 +1405,7 @@ async function handleJoin() {
 
     if (friendlyPinError) {
       setPinError(friendlyPinError)
-    } else if (error.code === "23505") {
+    } else if (error.code === "23505" || error.message.includes('TEAM_NAME_TAKEN')) {
       setTaken(true);
     } else {
       setJoinError('We couldn’t join the game. Check your details and try again.')
@@ -1414,10 +1415,11 @@ async function handleJoin() {
     return;
   }
 
-  localStorage.setItem("simple-trivia-team-id", team.id);
-  localStorage.setItem("simple-trivia-team-name", team.name);
+  localStorage.setItem("simple-trivia-join-request-id", request.request_id);
+  localStorage.setItem("simple-trivia-join-request-token", request.request_token);
+  localStorage.setItem("simple-trivia-team-name", request.name);
 
-  go("waiting");
+  go("approval-pending");
 }
 
   return (
@@ -1483,7 +1485,7 @@ async function handleJoin() {
         {pinMode === 'none' && (
           <div style={{ marginTop: 14 }}>
             <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || joining}>
-              {joining ? 'Joining…' : 'Join Game'}
+              {joining ? 'Sending request…' : 'Ask to join'}
             </Btn>
             <p style={{ color: C.sub, fontSize: 12, marginTop: 7 }} className="text-center">
               One phone per team. You can also press Go on your keyboard.
@@ -1599,7 +1601,7 @@ async function handleJoin() {
               {pinError && <p role="alert" style={{ color: C.stop, fontSize: 13, fontWeight: 600, marginTop: 9 }}>{pinError}</p>}
               <div style={{ marginTop: 12 }}>
                 <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || !isValidTeamPin(pin) || joining}>
-                  {joining ? 'Joining…' : 'Link Team & Join'}
+                  {joining ? 'Sending request…' : 'Link Team & Ask to Join'}
                 </Btn>
               </div>
               <button
@@ -1653,7 +1655,7 @@ async function handleJoin() {
               {pinError && <p role="alert" style={{ color: C.stop, fontSize: 13, fontWeight: 600, marginTop: 9 }}>{pinError}</p>}
               <div style={{ marginTop: 12 }}>
                 <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || !isValidTeamPin(pin) || joining}>
-                  {joining ? 'Joining…' : 'Create PIN & Join'}
+                  {joining ? 'Sending request…' : 'Create PIN & Ask to Join'}
                 </Btn>
               </div>
               <button
@@ -1666,6 +1668,120 @@ async function handleJoin() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── TEAM APPROVAL ───────────────────────────────────────────────────────────
+function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
+  const [teamName, setTeamName] = useState('Your team')
+  const [denied, setDenied] = useState(false)
+  const [statusError, setStatusError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const requestId = localStorage.getItem('simple-trivia-join-request-id')
+    const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+    const storedName = localStorage.getItem('simple-trivia-team-name')
+    // Restore the browser-owned pending team name after hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (storedName) setTeamName(storedName)
+
+    if (!requestId || !requestToken) {
+      go('team-setup')
+      return
+    }
+
+    let active = true
+
+    async function checkApproval() {
+      const { data, error } = await supabase
+        .rpc('get_team_join_request', {
+          p_request_id: requestId!,
+          p_request_token: requestToken!,
+        })
+        .maybeSingle()
+
+      if (!active) return
+
+      if (error) {
+        console.error('Could not check team approval:', error)
+        setStatusError('We’re having trouble checking with the host. We’ll keep trying.')
+        return
+      }
+
+      setStatusError(null)
+
+      const transition = teamAdmissionTransition(data)
+
+      if (transition.kind === 'game-ended') {
+        localStorage.removeItem('simple-trivia-join-request-id')
+        localStorage.removeItem('simple-trivia-join-request-token')
+        go('game-ended')
+        return
+      }
+
+      if (transition.kind === 'denied') {
+        localStorage.removeItem('simple-trivia-join-request-id')
+        localStorage.removeItem('simple-trivia-join-request-token')
+        setDenied(true)
+        return
+      }
+
+      if (transition.kind === 'approved') {
+        localStorage.setItem('simple-trivia-team-id', transition.teamId)
+        localStorage.setItem('simple-trivia-team-name', transition.name)
+        localStorage.removeItem('simple-trivia-join-request-id')
+        localStorage.removeItem('simple-trivia-join-request-token')
+        go('waiting')
+      }
+    }
+
+    void checkApproval()
+    const timer = window.setInterval(() => { void checkApproval() }, 1500)
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [go])
+
+  function tryAnotherName() {
+    localStorage.removeItem('simple-trivia-team-name')
+    setDenied(false)
+    go('team-setup')
+  }
+
+  return (
+    <div className="flex flex-col items-center justify-center px-6 py-14 text-center" style={{ minHeight: '100%' }}>
+      <div
+        style={{
+          background: denied ? C.stopMist : C.violetPale,
+          border: `2px solid ${denied ? C.stopBorder : C.violet}33`,
+          borderRadius: 999,
+          width: 64,
+          height: 64,
+        }}
+        className="flex items-center justify-center mb-6 shrink-0"
+      >
+        <span style={{ fontSize: 28, color: denied ? C.stop : C.violet }}>{denied ? '×' : '…'}</span>
+      </div>
+
+      <h1 style={{ color: C.ink, fontSize: 30 }} className="font-black mb-2">
+        {denied ? 'Your team wasn’t approved' : 'Waiting for host approval'}
+      </h1>
+      <p style={{ color: C.sub, fontSize: 15, lineHeight: 1.6 }} className="max-w-xs">
+        {denied
+          ? 'Check with the host before trying again.'
+          : 'The host will approve your team before you enter the game.'}
+      </p>
+
+      <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="my-7 w-full max-w-xs rounded-2xl px-5 py-4">
+        <p style={{ color: C.sub }} className="text-xs font-bold uppercase tracking-widest">Team name</p>
+        <p style={{ color: C.ink }} className="mt-1 text-xl font-black">{teamName}</p>
+      </div>
+
+      {statusError && <p role="alert" style={{ color: C.stop }} className="mb-5 max-w-xs text-sm font-semibold">{statusError}</p>}
+      {denied ? <Btn onClick={tryAnotherName}>Try again</Btn> : <WaitMsg msg="Waiting for the host…" />}
     </div>
   )
 }
@@ -2852,6 +2968,7 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
   switch (screen) {
     case 'join':           return <JoinGame go={go} />
     case 'team-setup':     return <TeamSetup go={go} />
+    case 'approval-pending': return <ApprovalPending go={go} />
     case 'waiting':        return <Waiting go={go} />
     case 'round-start':    return <RoundStart />
     case 'single-answer':  return <SingleAnswer go={go} />
@@ -2942,6 +3059,8 @@ export function PlayerFlow() {
 
       const gameId = localStorage.getItem('simple-trivia-game-id')
       const teamId = localStorage.getItem('simple-trivia-team-id')
+      const joinRequestId = localStorage.getItem('simple-trivia-join-request-id')
+      const joinRequestToken = localStorage.getItem('simple-trivia-join-request-token')
 
       if (!gameId) {
         if (active) {
@@ -2979,6 +3098,12 @@ export function PlayerFlow() {
       if (!game) {
         clearStoredSession()
         setScreen('game-ended')
+        setRestoringSession(false)
+        return
+      }
+
+      if (!teamId && joinRequestId && joinRequestToken && gameAcceptsNewTeams(game.status)) {
+        setScreen('approval-pending')
         setRestoringSession(false)
         return
       }

@@ -28,6 +28,8 @@ export const PLAYER_SESSION_KEYS = [
   'simple-trivia-game-title',
   'simple-trivia-team-id',
   'simple-trivia-team-name',
+  'simple-trivia-join-request-id',
+  'simple-trivia-join-request-token',
   'simple-trivia-last-answer',
 ] as const
 

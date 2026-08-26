@@ -62,7 +62,9 @@
 - Multi-part Parts and Bonuses inherit parent category, difficulty, audience, and locality when their override is absent. Part tags are additive. Blank Bonus tags inherit; populated Bonus tags replace, and replacement intent must survive even while every supplied tag is unresolved.
 - Effective package Adult Content is true when any content shown to players is adult. Any country-specific child makes the package not fully international-friendly.
 - Prevent duplicate team names within a game.
-- Games accept new zero-score teams while they are in the lobby or actively running. Finished and cancelled games are never joinable.
+- Every fresh team join requires an explicit host approval or denial before a real game team is created. Keep pending/denied requests out of teams, scoring, submissions, leaderboards, and joined-team counts.
+- Player-facing denial copy stays neutral and does not assume why the host denied entry; the host handles any explanation in the room.
+- Games accept new zero-score teams, after host approval, while they are in the lobby or actively running. Finished and cancelled games are never joinable.
 - Host live controls and question content must remain usable on small laptop screens.
 - Player live screens use a compact two-line mobile header: brand with Leave Game, then round/question with team/score. Present question prompts as clear, prominent reading surfaces without centering long question text.
 - Quiz readiness is derived automatically when saving: complete quizzes become Ready, incomplete quizzes remain Draft with specific blockers. Do not reintroduce a manual readiness step or preparation progress wizard.
@@ -159,6 +161,7 @@ Preserve and verify:
 
 - Supabase game-code lookup.
 - Fresh six-digit game creation.
+- Host approval/denial before team creation, including neutral denied-player recovery and live-game late joins.
 - Team creation and duplicate-name prevention.
 - Realtime teams appearing in the host lobby.
 - Host start automatically advancing player screens.
