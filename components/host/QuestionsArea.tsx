@@ -16,6 +16,7 @@ import type {
 } from "@/lib/supabase/database.types";
 import { TRIVIA_DIFFICULTIES } from "@/lib/trivia/difficulty";
 import QuestionUsageIndicator from "@/components/host/QuestionUsageIndicator";
+import SourceQuestionAnswerPreview from "@/components/host/SourceQuestionAnswerPreview";
 import {
   groupQuestionQuizUsage,
   questionQuizUsageRowsFromDatabase,
@@ -237,20 +238,6 @@ function validateDraft(draft: QuestionDraft) {
     if (missingClue) return "Add a clue for every multi-part answer.";
   }
   return null;
-}
-
-function answerSummary(question: SourceQuestion) {
-  if (question.question_type === "multiple-choice" && Array.isArray(question.options)) {
-    const correctKey = String(question.correct_answer);
-    const match = question.options.find((option) => (
-      option && typeof option === "object" && !Array.isArray(option) && option.key === correctKey
-    ));
-    if (match && typeof match === "object" && !Array.isArray(match)) return String(match.label ?? correctKey);
-    return correctKey;
-  }
-  return Array.isArray(question.correct_answer)
-    ? question.correct_answer.map(String).join(" · ")
-    : String(question.correct_answer ?? "");
 }
 
 function questionTypeLabel(type: QuestionType | QuestionMechanic) {
@@ -575,8 +562,7 @@ function QuestionCard({
             {editable ? <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${statusColors[question.status]}`}>{question.status.replace("_", " ")}</span> : null}
           </div>
           <h2 className="text-[15px] font-bold leading-6 text-zinc-900">{question.prompt}</h2>
-          <p className="mt-2 truncate text-sm text-zinc-500"><span className="font-medium text-zinc-700">Answer:</span> {answerSummary(question)}</p>
-          {bonus.enabled ? <p className="mt-1 truncate text-sm text-violet-700"><span className="font-medium">Bonus:</span> {bonus.prompt}</p> : null}
+          <SourceQuestionAnswerPreview question={question} />
           <QuestionUsageIndicator usages={usages} />
           {question.tag_names.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-1.5">

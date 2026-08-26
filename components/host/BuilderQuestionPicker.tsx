@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
 import QuestionUsageIndicator from "@/components/host/QuestionUsageIndicator";
+import SourceQuestionAnswerPreview from "@/components/host/SourceQuestionAnswerPreview";
 import type { Database, QuestionMechanic } from "@/lib/supabase/database.types";
 import { TRIVIA_DIFFICULTIES } from "@/lib/trivia/difficulty";
 import {
@@ -176,6 +177,7 @@ export default function BuilderQuestionPicker({
                       {question.editorial_difficulty ? <span>· {TRIVIA_DIFFICULTIES[question.editorial_difficulty - 1]}</span> : null}
                     </div>
                     <h3 className="text-sm font-bold leading-6 text-zinc-900">{question.prompt}</h3>
+                    <SourceQuestionAnswerPreview question={question} />
                     <QuestionUsageIndicator usages={usageByQuestion ? usageByQuestion[question.id] ?? [] : null} />
                     {question.tag_names.length > 0 ? <p className="mt-2 text-xs text-zinc-500">{question.tag_names.join(" · ")}</p> : null}
                   </div>

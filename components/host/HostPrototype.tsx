@@ -2792,7 +2792,7 @@ function BuilderQuestionAnswerPreview({ question }: { question: BuilderQuestionD
                     <span style={{ color: C.violet }} className="shrink-0 font-bold">{part?.label || String.fromCharCode(65 + index)}</span>
                     <div className="min-w-0">
                       {part?.clue && <p style={{ color: C.sub }}>{part.clue}</p>}
-                      <p style={{ color: C.ink }} className="font-bold">Answer: {answer || '—'}</p>
+                      <p><span style={{ color: C.go }} className="font-bold">Answer:</span> <span style={{ color: C.ink }} className="font-bold">{answer || '—'}</span></p>
                       {aliases.length > 0 && <p style={{ color: C.sub }}>Also accept: {aliases.join(' · ')}</p>}
                     </div>
                   </div>
@@ -2833,7 +2833,7 @@ function BuilderQuestionAnswerPreview({ question }: { question: BuilderQuestionD
         <div style={{ border: `1px solid ${C.violet}35`, background: C.violetMist }} className="rounded-lg px-3 py-2.5 text-xs">
           <p style={{ color: C.violet }} className="font-bold">Bonus · {bonus.points} {bonus.points === 1 ? 'point' : 'points'}</p>
           <p style={{ color: C.ink }} className="mt-1 font-semibold">{bonus.prompt || '—'}</p>
-          <p style={{ color: C.sub }} className="mt-0.5"><span className="font-bold">Answer:</span> {bonus.answer || '—'}</p>
+          <p style={{ color: C.sub }} className="mt-0.5"><span style={{ color: C.go }} className="font-bold">Answer:</span> {bonus.answer || '—'}</p>
         </div>
       )}
     </div>
