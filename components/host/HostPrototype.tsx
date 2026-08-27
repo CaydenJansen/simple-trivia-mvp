@@ -3666,12 +3666,12 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacem
               style={{ transform: itemDragTransform(itemKey) }}
               className={`relative rounded-xl will-change-transform ${dragged ? 'z-20 cursor-grabbing opacity-90 shadow-xl ring-2 ring-violet/25 transition-[opacity,box-shadow] duration-150' : isSettlingAfterDrop ? 'transition-none' : 'transition-transform duration-150 ease-out'}`}
             >
-              <div className="group absolute -top-3 left-3 right-3 z-30 flex h-4 items-center justify-center">
-                <div className="flex items-center gap-1 rounded-full bg-white px-2 shadow-sm opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                  <span style={{ color: C.violet }} className="text-xs font-black">＋</span>
-                  <button type="button" onClick={() => onAddQuestion(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2 py-0.5 text-[10px] font-bold hover:text-violet">Question</button>
-                  <button type="button" onClick={() => onAddContentScreen(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2 py-0.5 text-[10px] font-bold hover:text-violet">Content</button>
-                  <button type="button" onClick={() => onAddShowGame(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2 py-0.5 text-[10px] font-bold hover:text-violet">Game</button>
+              <div className="group absolute -top-4 left-3 right-3 z-30 flex h-8 items-center justify-center">
+                <div className="flex items-center gap-1.5 rounded-full border border-violet/15 bg-white px-3 py-1 shadow-md opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                  <span style={{ color: C.violet }} className="text-sm font-black leading-none">＋</span>
+                  <button type="button" onClick={() => onAddQuestion(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Question</button>
+                  <button type="button" onClick={() => onAddContentScreen(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Content</button>
+                  <button type="button" onClick={() => onAddShowGame(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Game</button>
                 </div>
               </div>
               {item.kind === 'question' ? (
