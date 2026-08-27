@@ -31,10 +31,10 @@ describe('prepared tiebreaker authoring semantics', () => {
     expect(needsMoreManualTiebreakers(2)).toBe(false)
   })
 
-  it('requires exactly three prepared tiebreakers for auto-build', () => {
-    expect(AUTO_BUILD_TIEBREAKER_COUNT).toBe(3)
-    expect(hasRequiredAutoBuildTiebreakers(3)).toBe(true)
-    expect(hasRequiredAutoBuildTiebreakers(2)).toBe(false)
+  it('requires exactly two prepared tiebreakers for auto-build', () => {
+    expect(AUTO_BUILD_TIEBREAKER_COUNT).toBe(2)
+    expect(hasRequiredAutoBuildTiebreakers(2)).toBe(true)
+    expect(hasRequiredAutoBuildTiebreakers(1)).toBe(false)
     expect(hasRequiredAutoBuildTiebreakers(4)).toBe(false)
   })
 

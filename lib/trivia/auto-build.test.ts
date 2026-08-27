@@ -242,7 +242,7 @@ describe('Auto-Build selection semantics', () => {
     expect(plan.rounds.every(round => round.questions.every(question => question.category === round.title))).toBe(true)
   })
 
-  it('always includes exactly three prepared tiebreakers', () => {
+  it('always includes exactly two prepared tiebreakers', () => {
     const plan = buildAutoQuizPlan({
       questions,
       tiebreakers,
@@ -252,7 +252,7 @@ describe('Auto-Build selection semantics', () => {
       random: noShuffle,
     })
 
-    expect(plan.tiebreakers).toHaveLength(3)
+    expect(plan.tiebreakers).toHaveLength(2)
   })
 
   it('explains when a topic or the tiebreaker pool is too small', () => {
@@ -267,11 +267,11 @@ describe('Auto-Build selection semantics', () => {
 
     expect(() => buildAutoQuizPlan({
       questions,
-      tiebreakers: tiebreakers.slice(0, 2),
+      tiebreakers: tiebreakers.slice(0, 1),
       questionCount: 1,
       roundTopics: [null],
       difficulties: ['Easy'],
       random: noShuffle,
-    })).toThrow('Auto-Build needs at least 3 active prepared tiebreakers.')
+    })).toThrow('Auto-Build needs at least 2 active prepared tiebreakers.')
   })
 })

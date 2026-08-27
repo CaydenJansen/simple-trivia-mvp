@@ -15,7 +15,7 @@ import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { PLAYER_SESSION_KEYS, shouldResetPlayerSessionForJoinCode } from "@/lib/trivia/session-recovery";
 import { gameCodeFromSearch } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
-import type { Json } from "@/lib/supabase/database.types";
+import type { Database, Json } from "@/lib/supabase/database.types";
 import { multiAnswerInputCount, playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
 import { playersSeeScoresOnScreen } from "@/lib/trivia/score-visibility";
 import { gameAcceptsNewTeams, JOINABLE_GAME_STATUSES } from "@/lib/trivia/game-joining";
@@ -48,6 +48,7 @@ import {
   type EliminationShowGameType,
   type ShowGameType,
 } from "@/lib/trivia/elimination-show-games";
+import { audienceQuestionFromSettings } from "@/lib/trivia/audience-question";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -2723,6 +2724,8 @@ type PlayerShowGame = {
   winner_team_id: string | null
 }
 
+type DatabaseAudienceResponse = Database['public']['Tables']['game_show_game_responses']['Row']
+
 function ShowGame() {
   const snapshot = usePlayerSnapshot()
   const { teams: liveTeams } = useLiveLeaderboard()
@@ -2734,6 +2737,9 @@ function ShowGame() {
   const [pressing, setPressing] = useState(false)
   const [ownChoice, setOwnChoice] = useState<string | null>(null)
   const [choiceBusy, setChoiceBusy] = useState(false)
+  const [audienceResponse, setAudienceResponse] = useState('')
+  const [audienceResponseRow, setAudienceResponseRow] = useState<DatabaseAudienceResponse | null>(null)
+  const [audienceSubmitting, setAudienceSubmitting] = useState(false)
   const [showGameNow, setShowGameNow] = useState(() => Date.now())
   const [error, setError] = useState<string | null>(null)
 
@@ -2765,6 +2771,18 @@ function ShowGame() {
         .eq('game_show_game_id', activeShowGame.id).eq('team_id', teamId).eq('round_number', state.roundNumber).maybeSingle()
       setOwnChoice(choice?.choice ?? (activeShowGame.game_type === 'dodge-the-rock' ? String(state.positions[teamId] ?? 1) : null))
     }
+    if (activeShowGame?.game_type === 'audience-question') {
+      const requestId = localStorage.getItem('simple-trivia-join-request-id')
+      const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+      if (requestId && requestToken) {
+        const { data: response } = await supabase.rpc('get_own_audience_question_response', {
+          p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken,
+        })
+        const row = response && typeof response === 'object' && !Array.isArray(response) ? response as DatabaseAudienceResponse : null
+        setAudienceResponseRow(row?.id ? row : null)
+        if (row?.response_text) setAudienceResponse(row.response_text)
+      }
+    } else { setAudienceResponseRow(null); setAudienceResponse('') }
   }, [])
 
   useEffect(() => {
@@ -2777,6 +2795,7 @@ function ShowGame() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_games', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_presses', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_choices', filter: `game_id=eq.${gameId}` }, () => { void load() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_responses', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
   }, [load])
@@ -2819,12 +2838,30 @@ function ShowGame() {
     void load()
   }
 
+  async function submitAudienceResponse() {
+    if (!showGame || showGame.game_type !== 'audience-question' || audienceSubmitting || audienceResponseRow || !audienceResponse.trim()) return
+    const requestId = localStorage.getItem('simple-trivia-join-request-id')
+    const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+    if (!requestId || !requestToken) return
+    setAudienceSubmitting(true)
+    setError(null)
+    const { data, error: responseError } = await supabase.rpc('submit_audience_question_response', {
+      p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken, p_response: audienceResponse.trim(),
+    })
+    if (responseError) setError(responseError.message.includes('NUMBER_REQUIRED') ? 'Enter a number for this Closest Guess.' : 'That response did not go through. Try again.')
+    else setAudienceResponseRow(data as DatabaseAudienceResponse)
+    setAudienceSubmitting(false)
+    void load()
+  }
+
   const teamId = typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id')
   const exploded = showGame?.status === 'exploded'
   const won = exploded && showGame?.winner_team_id === teamId
   const reward = showGameRewardFromSettings(showGame?.settings)
   const isWheel = showGame?.game_type === 'spin-the-wheel'
   const isElimination = isEliminationShowGame(showGame?.game_type)
+  const isAudienceQuestion = showGame?.game_type === 'audience-question'
+  const audienceQuestion = audienceQuestionFromSettings(showGame?.settings)
   const eliminationState = eliminationShowGameState(showGame?.settings)
   const showingInstructions = showGame?.status === 'ready'
   const eligibleIds = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings)
@@ -2832,6 +2869,7 @@ function ShowGame() {
     : null
   const wheelTeamIds = Array.isArray(eligibleIds) ? eligibleIds.filter((id): id is string => typeof id === 'string') : []
   const wheelTeams = liveTeams.filter(team => wheelTeamIds.length === 0 || wheelTeamIds.includes(team.id))
+  const teamIsEligible = Boolean(teamId && (wheelTeamIds.length === 0 || wheelTeamIds.includes(teamId)))
   const wheelWinner = liveTeams.find(team => team.id === showGame?.winner_team_id) ?? null
   const showWheelOutcome = exploded && (!isWheel || wheelSettled)
   const eliminationSecondsRemaining = Math.max(0, Math.ceil(((showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow) - showGameNow) / 1000))
@@ -2851,7 +2889,33 @@ function ShowGame() {
             <div className="mt-5"><WaitMsg msg="The host will start the game…" /></div>
           </div>
         ) : <>
-        {isElimination && showGame ? <EliminationShowGame
+        {isAudienceQuestion ? <div className="mt-7 w-full max-w-sm">
+          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl px-5 py-5 text-left">
+            <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-widest">{audienceQuestion.mode === 'favourite' ? 'Favourite Answer' : 'Closest Guess'}</p>
+            <p style={{ color: C.ink }} className="mt-3 text-xl font-black leading-7">{audienceQuestion.prompt}</p>
+          </div>
+          {!teamIsEligible ? <div className="mt-6"><h2 style={{ color: C.ink }} className="text-2xl font-black">Watch the tied teams</h2><p style={{ color: C.sub }} className="mt-2">Only the teams in this final tie are answering.</p></div> : exploded ? <div className="mt-6">
+            <h2 style={{ color: audienceResponseRow?.is_winner ? C.go : C.ink }} className="text-3xl font-black">{audienceResponseRow?.is_winner ? showGameWinnerMessage(reward) : 'Another response won'}</h2>
+            {audienceResponseRow && <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-5 rounded-2xl px-5 py-4 text-left">
+              <p style={{ color: C.sub }} className="text-xs font-bold uppercase tracking-wider">Your response</p><p style={{ color: C.ink }} className="mt-2 text-lg font-bold">{audienceResponseRow.response_text}</p>
+              {audienceResponseRow.distance_from_correct !== null && <p style={{ color: C.sub }} className="mt-2 text-sm">Distance from correct: {audienceResponseRow.distance_from_correct}</p>}
+            </div>}
+            {audienceQuestion.mode === 'closest-number' && audienceQuestion.correctNumber !== null && <p style={{ color: C.go }} className="mt-4 font-bold">Correct number: {audienceQuestion.correctNumber}</p>}
+            <div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div>
+          </div> : audienceResponseRow ? <div className="mt-6">
+            <div style={{ background: C.violetPale, color: C.violet }} className="mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl">✓</div>
+            <h2 style={{ color: C.ink }} className="mt-4 text-2xl font-black">Response locked in</h2>
+            <p style={{ color: C.sub }} className="mt-2">{audienceResponseRow.response_text}</p>
+            <div className="mt-5"><WaitMsg msg="The host is reading the responses…" /></div>
+          </div> : <div className="mt-6">
+            <label htmlFor="audience-response" style={{ color: C.sub }} className="mb-2 block text-left text-xs font-black uppercase tracking-wider">Your response</label>
+            <input id="audience-response" type={audienceQuestion.mode === 'closest-number' ? 'number' : 'text'} value={audienceResponse} onChange={event => setAudienceResponse(event.target.value)}
+              onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(audienceResponse.trim()), () => { void submitAudienceResponse() })}
+              placeholder={audienceQuestion.mode === 'closest-number' ? 'Enter your best guess' : 'Write something brilliant…'}
+              style={{ border: `2px solid ${C.violet}`, color: C.ink }} className="w-full rounded-2xl bg-white px-4 py-4 text-lg focus:outline-none" />
+            <button onClick={() => { void submitAudienceResponse() }} disabled={audienceSubmitting || !audienceResponse.trim()} style={{ background: C.violet }} className="mt-4 w-full rounded-2xl px-6 py-4 text-lg font-black text-white disabled:opacity-40">{audienceSubmitting ? 'Submitting…' : 'Submit response'}</button>
+          </div>}
+        </div> : isElimination && showGame ? <EliminationShowGame
           type={showGame.game_type as EliminationShowGameType}
           teams={wheelTeams}
           state={eliminationState}
@@ -2863,7 +2927,7 @@ function ShowGame() {
           onChoose={choice => { void chooseEliminationOption(choice) }}
         /> : isWheel ? <div className="mt-7"><TeamWheel teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
           : <div className={`mt-7 text-8xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
-        {isElimination && !exploded ? (
+        {!isAudienceQuestion && (isElimination && !exploded ? (
           <div className="mt-5">
             <h2 style={{ color: teamIsAlive ? C.go : C.sub }} className="text-xl font-black">{teamIsAlive ? `You’re still in · Round ${eliminationState.roundNumber}` : 'You’re out—watch the survivors'}</h2>
             {eliminationState.roundPhase === 'reveal' && eliminationState.roundEliminatedTeamIds.length === 0 && <p style={{ color: C.sub }} className="mt-2">Nobody was knocked out. Another round is coming.</p>}
@@ -2876,6 +2940,8 @@ function ShowGame() {
           </div>
         ) : isWheel ? (
           <div className="mt-7"><h2 style={{ color: C.ink }} className="text-2xl font-black">{exploded ? 'The wheel is slowing down…' : 'The wheel is spinning…'}</h2><p style={{ color: C.sub }} className="mt-2">Watch the team names under the pointer.</p></div>
+        ) : !teamIsEligible ? (
+          <div className="mt-7"><h2 style={{ color: C.ink }} className="text-2xl font-black">Watch the tied teams</h2><p style={{ color: C.sub }} className="mt-2">Only the teams in this final tie can press.</p></div>
         ) : hasPressed ? (
           <div className="mt-7">
             <div style={{ background: C.violetPale, color: C.violet }} className="mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl">✓</div>
@@ -2887,7 +2953,7 @@ function ShowGame() {
             <p style={{ color: C.sub }} className="mb-5 text-base leading-6">Press once. Be the last team to press before the bomb explodes.</p>
             <button onClick={() => void press()} disabled={pressing || !showGame || showGame.status !== 'open'} style={{ background: C.violet, boxShadow: '0 12px 30px rgba(124,58,237,.35)' }} className="w-full rounded-3xl px-8 py-7 text-2xl font-black text-white active:scale-95 disabled:opacity-50">{pressing ? 'PRESSING…' : 'PRESS ME'}</button>
           </div>
-        )}</>}
+        ))}</>}
         {error && <p style={{ color: C.stop }} className="mt-5 text-sm font-bold">{error}</p>}
       </div>
     </div>

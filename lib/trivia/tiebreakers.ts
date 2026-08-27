@@ -1,5 +1,5 @@
 export const MANUAL_TIEBREAKER_RECOMMENDATION = 2
-export const AUTO_BUILD_TIEBREAKER_COUNT = 3
+export const AUTO_BUILD_TIEBREAKER_COUNT = 2
 
 const DECIMAL_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/
 

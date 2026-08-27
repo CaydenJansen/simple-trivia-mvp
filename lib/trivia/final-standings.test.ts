@@ -49,4 +49,12 @@ describe('final standings resolution', () => {
       ['d', 4],
     ])
   })
+
+  it('uses a score-neutral show-game result as a placement order', () => {
+    const standings = buildFinalStandings(teams, [{ score: 48, method: 'show_game', orderedTeamIds: ['b', 'a'] }])
+    expect(standings.slice(0, 2).map(team => [team.id, team.score, team.placement])).toEqual([
+      ['b', 48, 1],
+      ['a', 48, 2],
+    ])
+  })
 })

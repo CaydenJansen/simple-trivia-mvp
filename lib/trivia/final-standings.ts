@@ -13,7 +13,7 @@ export type ConsequentialTie = {
 
 export type TieResolution = {
   score: number
-  method: 'tiebreaker' | 'allowed_tie' | 'manual'
+  method: 'tiebreaker' | 'allowed_tie' | 'manual' | 'show_game'
   orderedTeamIds?: string[] | null
 }
 

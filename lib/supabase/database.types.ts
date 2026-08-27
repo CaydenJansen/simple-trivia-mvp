@@ -541,6 +541,18 @@ export type Database = {
         Update: Partial<{ id: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2'; submitted_at: string }>
         Relationships: []
       }
+      game_show_game_audience_private: {
+        Row: { game_show_game_id: string; correct_number: number | null }
+        Insert: { game_show_game_id: string; correct_number?: number | null }
+        Update: Partial<{ game_show_game_id: string; correct_number: number | null }>
+        Relationships: []
+      }
+      game_show_game_responses: {
+        Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; response_text: string; numeric_response: number | null; distance_from_correct: number | null; is_winner: boolean; submitted_at: string }
+        Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; response_text: string; numeric_response?: number | null; distance_from_correct?: number | null; is_winner?: boolean; submitted_at?: string }
+        Update: Partial<{ id: string; game_show_game_id: string; game_id: string; team_id: string; response_text: string; numeric_response: number | null; distance_from_correct: number | null; is_winner: boolean; submitted_at: string }>
+        Relationships: []
+      }
       game_tiebreakers: {
         Row: TiebreakerRow & { game_id: string }
         Insert: TiebreakerInsert & { game_id: string }
@@ -560,7 +572,7 @@ export type Database = {
           tied_score: number
           team_ids: string[]
           status: 'pending' | 'resolved'
-          resolution_method: 'tiebreaker' | 'allowed_tie' | 'manual' | null
+          resolution_method: 'tiebreaker' | 'allowed_tie' | 'manual' | 'show_game' | null
           ordered_team_ids: string[] | null
           created_at: string
           resolved_at: string | null
@@ -571,7 +583,7 @@ export type Database = {
           tied_score: number
           team_ids: string[]
           status?: 'pending' | 'resolved'
-          resolution_method?: 'tiebreaker' | 'allowed_tie' | 'manual' | null
+          resolution_method?: 'tiebreaker' | 'allowed_tie' | 'manual' | 'show_game' | null
           ordered_team_ids?: string[] | null
           created_at?: string
           resolved_at?: string | null
@@ -908,6 +920,34 @@ export type Database = {
       }
     }
     Functions: {
+      prepare_tie_show_game: {
+        Args: { p_resolution_id: string; p_game_type: string; p_prompt?: string | null; p_correct_number?: number | null }
+        Returns: Database['public']['Tables']['game_show_games']['Row']
+      }
+      start_tie_show_game: {
+        Args: { p_game_show_game_id: string }
+        Returns: Database['public']['Tables']['game_show_games']['Row']
+      }
+      complete_tie_show_game: {
+        Args: { p_game_show_game_id: string }
+        Returns: Database['public']['Tables']['game_tie_resolutions']['Row']
+      }
+      start_audience_question: {
+        Args: { p_game_show_game_id: string }
+        Returns: Database['public']['Tables']['game_show_games']['Row']
+      }
+      submit_audience_question_response: {
+        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_response: string }
+        Returns: Database['public']['Tables']['game_show_game_responses']['Row']
+      }
+      get_own_audience_question_response: {
+        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }
+        Returns: Database['public']['Tables']['game_show_game_responses']['Row']
+      }
+      resolve_audience_question: {
+        Args: { p_game_show_game_id: string; p_winner_team_ids?: string[] | null }
+        Returns: Database['public']['Tables']['game_show_games']['Row']
+      }
       cancel_host_game: {
         Args: {
           p_game_code: string
@@ -1331,7 +1371,7 @@ type ShowGameRow = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'audience-question'
   title: string
   settings: Json
   created_at: string
@@ -1343,7 +1383,7 @@ type ShowGameInsert = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'audience-question'
   title: string
   settings?: Json
   created_at?: string
