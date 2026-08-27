@@ -14,7 +14,7 @@ export default function BrandWordmark({ dark = false, compact = false, className
       <span style={{ color: '#7C3AED' }}>Good</span>
       <span>&nbsp;Trivia</span>
       <span
-        className="ml-0.5 uppercase"
+        className="ml-1 uppercase"
         style={{
           color: dark ? '#A9A4BF' : '#77738C',
           fontSize: compact ? '0.54em' : '0.48em',
