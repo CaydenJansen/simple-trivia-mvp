@@ -213,6 +213,7 @@ create table if not exists public.games (
   current_screen text not null default 'lobby',
   created_at timestamptz not null default now(),
   answer_phase text not null default 'open',
+  answer_editing_allowed boolean not null default false,
   current_question_key text,
   current_content_screen_key text,
   quiz_id uuid references public.quizzes(id) on delete set null,
@@ -448,7 +449,7 @@ create or replace function public.join_live_game(
   p_team_pin text default null,
   p_pin_mode text default 'none'
 )
-returns table (request_id uuid, request_token uuid, name text, admission_status text)
+returns table (request_id uuid, request_token uuid, name text, admission_status text, team_id uuid)
 language plpgsql
 security definer
 set search_path = ''
@@ -460,12 +461,16 @@ declare
   requested_pin_mode text := coalesce(p_pin_mode, 'none');
   requested_pin_digest text;
   linked_profile_id uuid;
+  created_team_id uuid;
+  approval_required boolean := true;
 begin
   if normalized_name = '' then raise exception 'Team name is required'; end if;
   if requested_pin_mode not in ('none', 'have', 'create') then raise exception 'TEAM_PIN_INVALID'; end if;
-  if not exists (select 1 from public.games where games.id = p_game_id and games.status in ('lobby', 'live')) then
-    raise exception 'Game is not accepting new teams';
-  end if;
+  select coalesce(games.settings ->> 'team_approval_required', 'true') <> 'false'
+  into approval_required
+  from public.games
+  where games.id = p_game_id and games.status in ('lobby', 'live');
+  if not found then raise exception 'Game is not accepting new teams'; end if;
 
   normalized_name_key := lower(regexp_replace(normalized_name, '\s+', ' ', 'g'));
   if exists (
@@ -526,11 +531,22 @@ begin
     end if;
   end if;
 
+  if not approval_required then
+    insert into public.teams (game_id, name, score, team_profile_id)
+    values (p_game_id, normalized_name, 0, linked_profile_id)
+    returning teams.id into created_team_id;
+  end if;
+
   return query
-  insert into public.team_join_requests (game_id, team_profile_id, requested_name, name_key)
-  values (p_game_id, linked_profile_id, normalized_name, normalized_name_key)
+  insert into public.team_join_requests (game_id, team_profile_id, requested_name, name_key, status, team_id, decided_at)
+  values (
+    p_game_id, linked_profile_id, normalized_name, normalized_name_key,
+    case when approval_required then 'pending' else 'approved' end,
+    created_team_id,
+    case when approval_required then null else now() end
+  )
   returning team_join_requests.id, team_join_requests.request_token,
-    team_join_requests.requested_name, team_join_requests.status;
+    team_join_requests.requested_name, team_join_requests.status, team_join_requests.team_id;
 end;
 $$;
 

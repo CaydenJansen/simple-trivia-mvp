@@ -16,16 +16,21 @@ describe('live bonus stage flow', () => {
     expect(playerQuestionStageScreen(base)).toBe('single-answer')
   })
 
-  it('returns a submitted team to the editable main form whenever answers are open', () => {
-    expect(playerQuestionStageScreen({ ...base, coreSubmission: { points_awarded: 0 } })).toBe('single-answer')
+  it('keeps a normal submitted answer locked while the question remains open', () => {
+    expect(playerQuestionStageScreen({ ...base, coreSubmission: { points_awarded: 0 } })).toBe('submitted')
+  })
+
+  it('returns a submitted team to the form only when the host deliberately reopens answers', () => {
+    expect(playerQuestionStageScreen({ ...base, answerEditingAllowed: true, coreSubmission: { points_awarded: 0 } })).toBe('single-answer')
   })
 
   it('moves every team to the separately opened bonus stage', () => {
     expect(playerQuestionStageScreen({ ...base, questionStage: 'bonus' })).toBe('bonus-answer')
   })
 
-  it('keeps the bonus form editable after submission while bonus answers are open', () => {
-    expect(playerQuestionStageScreen({ ...base, questionStage: 'bonus', bonusSubmission: { points_awarded: 0 } })).toBe('bonus-answer')
+  it('locks a submitted bonus unless the host deliberately reopens it', () => {
+    expect(playerQuestionStageScreen({ ...base, questionStage: 'bonus', bonusSubmission: { points_awarded: 0 } })).toBe('bonus-submitted')
+    expect(playerQuestionStageScreen({ ...base, questionStage: 'bonus', answerEditingAllowed: true, bonusSubmission: { points_awarded: 0 } })).toBe('bonus-answer')
   })
 
   it('locks submitted answers when the host closes the question', () => {

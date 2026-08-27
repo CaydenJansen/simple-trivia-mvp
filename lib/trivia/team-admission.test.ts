@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { teamAdmissionTransition } from './team-admission'
+import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from './team-admission'
 
 describe('team admission transitions', () => {
+  it('requires host approval by default and only disables it explicitly', () => {
+    expect(teamApprovalRequiredFromSettings(null)).toBe(true)
+    expect(teamApprovalRequiredFromSettings({})).toBe(true)
+    expect(teamApprovalRequiredFromSettings({ team_approval_required: true })).toBe(true)
+    expect(teamApprovalRequiredFromSettings({ team_approval_required: false })).toBe(false)
+  })
+
   it('keeps a pending team outside the game while the lobby is joinable', () => {
     expect(teamAdmissionTransition({
       admission_status: 'pending',

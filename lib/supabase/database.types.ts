@@ -418,6 +418,7 @@ export type Database = {
           current_screen: string
           created_at: string
           answer_phase: string
+          answer_editing_allowed: boolean
           question_stage: string
           current_question_key: string | null
           current_content_screen_key: string | null
@@ -434,6 +435,7 @@ export type Database = {
           current_screen?: string
           created_at?: string
           answer_phase?: string
+          answer_editing_allowed?: boolean
           question_stage?: string
           current_question_key?: string | null
           current_content_screen_key?: string | null
@@ -450,6 +452,7 @@ export type Database = {
           current_screen?: string
           created_at?: string
           answer_phase?: string
+          answer_editing_allowed?: boolean
           question_stage?: string
           current_question_key?: string | null
           current_content_screen_key?: string | null
@@ -862,6 +865,7 @@ export type Database = {
           request_token: string
           name: string
           admission_status: 'pending' | 'approved' | 'denied'
+          team_id: string | null
         }[]
       }
       get_team_join_request: {

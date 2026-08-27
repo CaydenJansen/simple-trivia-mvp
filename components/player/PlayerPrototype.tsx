@@ -29,7 +29,7 @@ import {
   teamPinErrorMessage,
   type TeamPinMode,
 } from "@/lib/trivia/team-pin";
-import { teamAdmissionTransition } from "@/lib/trivia/team-admission";
+import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { autoRunClockColor, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -81,6 +81,7 @@ const QUESTION_SCREENS = new Set<PlayerScreen>([
 type RemoteGameState = {
   current_screen: string | null
   answer_phase: string | null
+  answer_editing_allowed: boolean | null
   question_stage: string | null
   current_question_key: string | null
   current_content_screen_key: string | null
@@ -217,6 +218,7 @@ async function resolveLivePlayerScreen(gameId: string, teamId: string, gameState
 
     return playerQuestionStageScreen({
       answerPhase: gameState.answer_phase,
+      answerEditingAllowed: gameState.answer_editing_allowed,
       questionStage: gameState.question_stage,
       baseScreen: remoteScreen,
       coreSubmission: submission,
@@ -258,7 +260,7 @@ function useLivePlayerSync(
       }
       const { data, error } = await supabase
         .from('games')
-        .select('current_screen, answer_phase, question_stage, current_question_key, current_content_screen_key')
+        .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key')
         .eq('id', activeGameId)
         .maybeSingle()
       if (error) {
@@ -1099,7 +1101,7 @@ function TopBar({
   const clockLabel = autoRunClock?.label.startsWith('Answers') ? 'Answers' : 'Next'
 
   return (
-    <header style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="shrink-0 px-4 py-2.5">
+    <header style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="sticky top-11 z-20 shrink-0 px-4 py-2.5 shadow-sm">
       {(round || question || team) && (
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
@@ -1132,7 +1134,7 @@ function TopBar({
 
 function PlayerPrimaryHeader({ onLeave }: { onLeave: () => void }) {
   return (
-    <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="flex shrink-0 items-center justify-between px-4 py-2">
+    <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="sticky top-0 z-30 flex shrink-0 items-center justify-between px-4 py-2">
       <div className="flex items-center gap-2">
         <div style={{ background: C.violet, borderRadius: 8 }} className="flex h-7 w-7 shrink-0 items-center justify-center">
           <span className="font-black text-white" style={{ fontSize: 11 }}>ST</span>
@@ -1417,12 +1419,20 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   const [joinError, setJoinError] = useState<string | null>(null)
   const [joining, setJoining] = useState(false)
   const [gameTitle, setGameTitle] = useState('Trivia game')
+  const [approvalRequired, setApprovalRequired] = useState(true)
 
   useEffect(() => {
     const storedTitle = localStorage.getItem('simple-trivia-game-title')
     // Restore the selected game's real title after hydration.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (storedTitle) setGameTitle(storedTitle)
+
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    if (gameId) {
+      void supabase.from('games').select('settings').eq('id', gameId).maybeSingle().then(({ data }) => {
+        setApprovalRequired(teamApprovalRequiredFromSettings(data?.settings))
+      })
+    }
   }, [])
 
 async function handleJoin() {
@@ -1475,6 +1485,21 @@ async function handleJoin() {
   localStorage.setItem("simple-trivia-join-request-id", request.request_id);
   localStorage.setItem("simple-trivia-join-request-token", request.request_token);
   localStorage.setItem("simple-trivia-team-name", request.name);
+
+  if (request.admission_status === 'approved' && request.team_id) {
+    localStorage.setItem('simple-trivia-team-id', request.team_id)
+    localStorage.removeItem('simple-trivia-join-request-id')
+    localStorage.removeItem('simple-trivia-join-request-token')
+    const { data: game } = await supabase
+      .from('games')
+      .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key')
+      .eq('id', gameId)
+      .maybeSingle()
+    const nextScreen = game ? await resolveLivePlayerScreen(gameId, request.team_id, game as RemoteGameState) : null
+    setJoining(false)
+    go(nextScreen ?? 'waiting')
+    return
+  }
 
   go("approval-pending");
 }
@@ -1542,7 +1567,7 @@ async function handleJoin() {
         {pinMode === 'none' && (
           <div style={{ marginTop: 14 }}>
             <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || joining}>
-              {joining ? 'Sending request…' : 'Ask to join'}
+              {joining ? 'Joining…' : approvalRequired ? 'Ask to join' : 'Join game'}
             </Btn>
             <p style={{ color: C.sub, fontSize: 12, marginTop: 7 }} className="text-center">
               One phone per team. You can also press Go on your keyboard.
@@ -1658,7 +1683,7 @@ async function handleJoin() {
               {pinError && <p role="alert" style={{ color: C.stop, fontSize: 13, fontWeight: 600, marginTop: 9 }}>{pinError}</p>}
               <div style={{ marginTop: 12 }}>
                 <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || !isValidTeamPin(pin) || joining}>
-                  {joining ? 'Sending request…' : 'Link Team & Ask to Join'}
+                  {joining ? 'Joining…' : approvalRequired ? 'Link Team & Ask to Join' : 'Link Team & Join Game'}
                 </Btn>
               </div>
               <button
@@ -1712,7 +1737,7 @@ async function handleJoin() {
               {pinError && <p role="alert" style={{ color: C.stop, fontSize: 13, fontWeight: 600, marginTop: 9 }}>{pinError}</p>}
               <div style={{ marginTop: 12 }}>
                 <Btn onClick={() => { void handleJoin() }} disabled={!name.trim() || !isValidTeamPin(pin) || joining}>
-                  {joining ? 'Sending request…' : 'Create PIN & Ask to Join'}
+                  {joining ? 'Joining…' : approvalRequired ? 'Create PIN & Ask to Join' : 'Create PIN & Join Game'}
                 </Btn>
               </div>
               <button
@@ -3174,7 +3199,7 @@ export function PlayerFlow() {
       const [{ data: game, error: gameError }, { data: team, error: teamError }] = await Promise.all([
         supabase
           .from('games')
-          .select('status, current_screen, answer_phase, question_stage, current_question_key, current_content_screen_key')
+          .select('status, current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key')
           .eq('id', gameId)
           .maybeSingle(),
         teamId

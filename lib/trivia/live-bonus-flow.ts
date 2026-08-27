@@ -5,6 +5,7 @@ type ScoredSubmission = { points_awarded?: number | null; is_correct?: boolean |
 
 export function playerQuestionStageScreen(input: {
   answerPhase: string | null
+  answerEditingAllowed?: boolean | null
   questionStage: string | null
   baseScreen: string
   coreSubmission: ScoredSubmission
@@ -14,6 +15,7 @@ export function playerQuestionStageScreen(input: {
 }) {
   const {
     answerPhase,
+    answerEditingAllowed,
     questionStage,
     baseScreen,
     coreSubmission,
@@ -33,7 +35,11 @@ export function playerQuestionStageScreen(input: {
   }
 
   if (answerPhase === 'closed') return coreSubmission || bonusSubmission ? 'submitted' : 'no-answer'
-  if (questionStage === 'bonus') return 'bonus-answer'
+  if (questionStage === 'bonus') {
+    if (bonusSubmission && !answerEditingAllowed) return 'bonus-submitted'
+    return 'bonus-answer'
+  }
+  if (coreSubmission && !answerEditingAllowed) return 'submitted'
   return baseScreen
 }
 

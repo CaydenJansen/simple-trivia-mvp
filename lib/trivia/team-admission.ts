@@ -2,6 +2,11 @@ import { gameAcceptsNewTeams } from './game-joining'
 
 export type TeamAdmissionStatus = 'pending' | 'approved' | 'denied'
 
+export function teamApprovalRequiredFromSettings(settings: unknown) {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return true
+  return (settings as Record<string, unknown>).team_approval_required !== false
+}
+
 export type TeamAdmissionResult = {
   admission_status: TeamAdmissionStatus
   team_id: string | null

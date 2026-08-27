@@ -90,6 +90,7 @@ import {
   type AutoRunMode,
 } from "@/lib/trivia/auto-run";
 import { playerScoreVisibilityFromSettings, type PlayerScoreVisibility } from "@/lib/trivia/score-visibility";
+import { teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -121,6 +122,7 @@ async function updateLiveGame(values: {
   status?: 'lobby' | 'live' | 'finished'
   current_screen?: string
   answer_phase?: 'open' | 'closed' | 'revealed'
+  answer_editing_allowed?: boolean
   question_stage?: 'core' | 'bonus'
   current_question_key?: string | null
   current_content_screen_key?: string | null
@@ -436,16 +438,23 @@ function TeamAdmissionList({
   compact = false,
   hideWhenEmpty = false,
   className = '',
+  approvalRequired,
+  approvalBusy = false,
+  onApprovalRequiredChange,
 }: {
   gameCode: string
   dark?: boolean
   compact?: boolean
   hideWhenEmpty?: boolean
   className?: string
+  approvalRequired?: boolean
+  approvalBusy?: boolean
+  onApprovalRequiredChange?: (required: boolean) => void
 }) {
   const { requests, error, decidingId, decide } = useTeamJoinRequests(gameCode)
+  const showsApprovalToggle = approvalRequired !== undefined && onApprovalRequiredChange !== undefined
 
-  if (hideWhenEmpty && requests.length === 0 && !error) return null
+  if (!showsApprovalToggle && hideWhenEmpty && requests.length === 0 && !error) return null
 
   return (
     <section
@@ -457,23 +466,41 @@ function TeamAdmissionList({
     >
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p style={{ color: dark ? C.liveText : C.ink }} className={`${compact ? 'text-xs' : 'text-sm'} font-extrabold`}>Pending approval</p>
-          {!compact && <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-0.5 text-xs">Approve a team name before it enters the game.</p>}
+          <p style={{ color: dark ? C.liveText : C.ink }} className={`${compact ? 'text-xs' : 'text-sm'} font-extrabold`}>{showsApprovalToggle ? 'Approve teams before they join' : 'Pending approval'}</p>
+          {!compact && <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-0.5 text-xs">{showsApprovalToggle ? 'Review each team name before it appears in the game.' : 'Approve a team name before it enters the game.'}</p>}
         </div>
-        {requests.length > 0 && (
+        {showsApprovalToggle ? (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={approvalRequired}
+            aria-label="Approve teams before they join"
+            disabled={approvalBusy}
+            onClick={() => onApprovalRequiredChange(!approvalRequired)}
+            style={{ background: approvalRequired ? C.violet : C.line }}
+            className="relative h-7 w-12 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
+          >
+            <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-all ${approvalRequired ? 'left-6' : 'left-1'}`} />
+          </button>
+        ) : requests.length > 0 && (
           <span style={{ background: C.caution, color: '#18171F' }} className={`rounded-full font-black ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-xs'}`}>
             {compact ? requests.length : `${requests.length} waiting`}
           </span>
         )}
       </div>
 
-      {error && <p role="alert" style={{ color: C.stop }} className="mt-3 text-xs font-semibold">{error}</p>}
-      {requests.length === 0 && !error && (
+      {approvalRequired === false && (
+        <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-3 rounded-xl border border-dashed border-current px-3 py-2.5 text-center text-xs">
+          Teams will enter automatically.
+        </p>
+      )}
+      {approvalRequired !== false && error && <p role="alert" style={{ color: C.stop }} className="mt-3 text-xs font-semibold">{error}</p>}
+      {approvalRequired !== false && requests.length === 0 && !error && (
         <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-4 rounded-xl border border-dashed border-current px-3 py-3 text-center text-xs">
           No teams are waiting for approval.
         </p>
       )}
-      {requests.length > 0 && (
+      {approvalRequired !== false && requests.length > 0 && (
         <div className={compact ? 'mt-2 space-y-1' : 'mt-4 space-y-2'}>
           {requests.map(request => (
             <div
@@ -4909,6 +4936,7 @@ function HostSetup({ go }: { go: Go }) {
             answer_reveal: reveal,
             leaderboard_visibility: lb,
             auto_run_mode: autoRunMode,
+            team_approval_required: true,
             player_score_visibility: scoreVisibility,
             scores_visible_to_players: scoreVisibility === 'live',
             top_prizes: topPrizes,
@@ -5145,6 +5173,55 @@ function Lobby({ go }: { go: Go }) {
   const [lobbyError, setLobbyError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
+  const [lobbyGameId, setLobbyGameId] = useState<string | null>(null)
+  const [lobbySettings, setLobbySettings] = useState<Record<string, Json>>({})
+  const [approvalRequired, setApprovalRequired] = useState(true)
+  const [approvalBusy, setApprovalBusy] = useState(false)
+
+  async function handleApprovalRequiredChange(required: boolean) {
+    if (!lobbyGameId || approvalBusy) return
+    setApprovalBusy(true)
+    setLobbyError(null)
+    const settings: Record<string, Json> = { ...lobbySettings, team_approval_required: required }
+
+    const { error: updateError } = await supabase.from('games').update({ settings }).eq('id', lobbyGameId)
+    if (updateError) {
+      console.error('Could not update team approval setting:', updateError)
+      setLobbyError('Could not update team approval. Please try again.')
+      setApprovalBusy(false)
+      return
+    }
+
+    setLobbySettings(settings)
+    setApprovalRequired(required)
+
+    if (!required) {
+      const { data: pending, error: pendingError } = await supabase
+        .from('team_join_requests')
+        .select('id')
+        .eq('game_id', lobbyGameId)
+        .eq('status', 'pending')
+
+      if (pendingError) {
+        console.error('Could not load waiting teams for automatic approval:', pendingError)
+        setLobbyError('Automatic entry is on, but waiting teams could not be admitted. Please try again.')
+      } else {
+        for (const request of pending ?? []) {
+          const { error: decisionError } = await supabase.rpc('decide_team_join_request', {
+            p_request_id: request.id,
+            p_decision: 'approved',
+          })
+          if (decisionError) {
+            console.error('Could not automatically approve a waiting team:', decisionError)
+            setLobbyError('Automatic entry is on, but one waiting team could not be admitted.')
+            break
+          }
+        }
+      }
+    }
+
+    setApprovalBusy(false)
+  }
 
   async function handleStartQuiz() {
     if (starting) return
@@ -5193,6 +5270,7 @@ function Lobby({ go }: { go: Go }) {
         status: 'live',
         current_screen: 'round-start',
         answer_phase: 'open',
+        answer_editing_allowed: false,
         current_question_key: firstQuestion.question_key,
         current_content_screen_key: null,
       })
@@ -5214,7 +5292,7 @@ function Lobby({ go }: { go: Go }) {
 
       const { data: game, error: gameError } = await supabase
         .from("games")
-        .select("id")
+        .select("id, settings")
         .eq("code", lobbyCode)
         .maybeSingle()
 
@@ -5225,6 +5303,13 @@ function Lobby({ go }: { go: Go }) {
         setLobbyError("Could not load this lobby.")
         return
       }
+
+      const settings = game.settings && typeof game.settings === 'object' && !Array.isArray(game.settings)
+        ? game.settings as Record<string, Json>
+        : {}
+      setLobbyGameId(game.id)
+      setLobbySettings(settings)
+      setApprovalRequired(teamApprovalRequiredFromSettings(settings))
 
       const { data, error } = await supabase
         .from("teams")
@@ -5326,7 +5411,12 @@ function Lobby({ go }: { go: Go }) {
           {/* Teams */}
           <div>
             <div className="mb-5">
-              <TeamAdmissionList gameCode={lobbyCode} />
+              <TeamAdmissionList
+                gameCode={lobbyCode}
+                approvalRequired={approvalRequired}
+                approvalBusy={approvalBusy}
+                onApprovalRequiredChange={required => { void handleApprovalRequiredChange(required) }}
+              />
             </div>
             <div className="flex items-center justify-between mb-4">
               <h2 style={{ color: C.ink }} className="font-extrabold">Teams Joined</h2>
@@ -5765,6 +5855,7 @@ function LiveQuestion({ go }: { go: Go }) {
         status: 'live',
         current_screen: openingQuestion.question_type,
         answer_phase: 'open',
+        answer_editing_allowed: false,
         question_stage: 'core',
         current_question_key: openingQuestion.question_key,
         current_content_screen_key: null,
@@ -5808,7 +5899,7 @@ function LiveQuestion({ go }: { go: Go }) {
 
     const { error } = await supabase
       .from('games')
-      .update({ question_stage: 'bonus', answer_phase: 'open' })
+      .update({ question_stage: 'bonus', answer_phase: 'open', answer_editing_allowed: false })
       .eq('id', liveGameId)
 
     if (error) {
@@ -5829,7 +5920,7 @@ function LiveQuestion({ go }: { go: Go }) {
 
     const { error } = await supabase
       .from('games')
-      .update({ answer_phase: 'open' })
+      .update({ answer_phase: 'open', answer_editing_allowed: true })
       .eq('id', liveGameId)
 
     if (error) {
@@ -6054,6 +6145,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
         answer_phase: 'open',
+        answer_editing_allowed: false,
         question_stage: 'core',
         current_question_key: nextItem.question.question_key,
         current_content_screen_key: null,
@@ -6135,6 +6227,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
         answer_phase: 'open',
+        answer_editing_allowed: false,
         question_stage: 'core',
         current_question_key: nextItem.question.question_key,
         current_content_screen_key: null,
@@ -6219,6 +6312,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
         answer_phase: 'open',
+        answer_editing_allowed: false,
         question_stage: 'core',
         current_question_key: nextItem.question.question_key,
         current_content_screen_key: null,
@@ -7469,6 +7563,7 @@ function EndOfRound({ go }: { go: Go }) {
         current_content_screen_key: null,
         current_screen: 'round-start',
         answer_phase: 'open',
+        answer_editing_allowed: false,
         question_stage: 'core',
         round_scores_finalized: false,
       })

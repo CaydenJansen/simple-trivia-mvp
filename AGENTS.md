@@ -63,10 +63,10 @@
 - Multi-part Parts and Bonuses inherit parent category, difficulty, audience, and locality when their override is absent. Part tags are additive. Blank Bonus tags inherit; populated Bonus tags replace, and replacement intent must survive even while every supplied tag is unresolved.
 - Effective package Adult Content is true when any content shown to players is adult. Any country-specific child makes the package not fully international-friendly.
 - Prevent duplicate team names within a game.
-- Every fresh team join requires an explicit host approval or denial before a real game team is created. Keep pending/denied requests out of teams, scoring, submissions, leaderboards, and joined-team counts.
+- Team-name approval is enabled by default for every new game. The host may disable it from the lobby; then new and already-waiting teams enter automatically. When approval is enabled, keep pending/denied requests out of teams, scoring, submissions, leaderboards, and joined-team counts.
 - During live play, pending team requests appear in a separate approval panel beside the host leaderboard. Keep approval controls out of the QR/join-code dialog so that dialog remains compact and easy to dismiss on short screens.
 - Player-facing denial copy stays neutral and does not assume why the host denied entry; the host handles any explanation in the room.
-- Games accept new zero-score teams, after host approval, while they are in the lobby or actively running. Finished and cancelled games are never joinable.
+- Games accept new zero-score teams while they are in the lobby or actively running, subject to the game’s approval setting. Finished and cancelled games are never joinable.
 - Host live controls and question content must remain usable on small laptop screens.
 - Player live screens use a compact two-line mobile header: brand with Leave Game, then round/question with team/score. Present question prompts as clear, prominent reading surfaces without centering long question text.
 - Quiz readiness is derived automatically when saving: complete quizzes become Ready, incomplete quizzes remain Draft with specific blockers. Do not reintroduce a manual readiness step or preparation progress wizard.
@@ -169,13 +169,13 @@ Preserve and verify:
 
 - Supabase game-code lookup.
 - Fresh six-digit game creation.
-- Host approval/denial before team creation, including neutral denied-player recovery and live-game late joins.
+- Default-on host approval/denial before team creation, optional automatic entry, neutral denied-player recovery, and live-game late joins.
 - Team creation and duplicate-name prevention.
 - Realtime teams appearing in the host lobby.
 - Host start automatically advancing player screens.
 - Realtime submissions and answer counts.
-- Submission locking when answers close.
-- Reopen before reveal.
+- A submitted answer locks immediately even while the question remains open. It becomes editable only after an explicit host reopen action.
+- Reopen before reveal restores the submitted response for editing.
 - Host review of ambiguous answers.
 - Auto-Run pause/resume, timer extension, close-now, manual takeover, pending-review accumulation, and explicit round finalization.
 - Reveal and points application.
