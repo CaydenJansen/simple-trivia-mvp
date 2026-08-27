@@ -20,6 +20,16 @@ $$;
 
 revoke all on function public.beat_the_bomb_reward_points(jsonb) from public;
 
+-- Existing reusable games predate reward controls. Give them the new, visible
+-- one-point default so the player copy and eventual score award stay aligned.
+update public.quiz_show_games
+set settings = settings || '{"reward_type":"points","reward_points":1}'::jsonb
+where not (settings ? 'reward_type');
+
+update public.game_show_games
+set settings = settings || '{"reward_type":"points","reward_points":1}'::jsonb
+where status in ('ready', 'open') and not (settings ? 'reward_type');
+
 create or replace function public.start_beat_the_bomb(p_game_show_game_id uuid)
 returns public.game_show_games
 language plpgsql
