@@ -8,8 +8,8 @@ const jakarta = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Simple Trivia",
-  description: "Simple Trivia MVP",
+  title: "Good Trivia Company",
+  description: "Live trivia from Good Trivia Company",
 };
 
 export default function RootLayout({

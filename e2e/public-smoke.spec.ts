@@ -9,7 +9,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 test('landing page reaches the host and player entry points', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { name: 'Simple Trivia' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Good Trivia Company' })).toBeVisible()
   await expect(page.locator('a[href="/host"]')).toBeVisible()
   await expect(page.locator('a[href="/play"]')).toBeVisible()
   await expectNoHorizontalOverflow(page)
@@ -93,7 +93,7 @@ test('mobile join controls remain reachable when the team-name field is focused'
   }))
 
   await page.goto('/play')
-  const teamName = page.getByPlaceholder('Trivia Newton John')
+  const teamName = page.getByLabel('Team name')
   await teamName.fill('Pocket Rockets')
   await teamName.focus()
 
@@ -138,7 +138,7 @@ test('players can create an optional team PIN when joining', async ({ page }) =>
   })
 
   await page.goto('/play')
-  await page.getByPlaceholder('Trivia Newton John').fill('Pocket Rockets')
+  await page.getByLabel('Team name').fill('Pocket Rockets')
   await page.getByRole('button', { name: 'Create a team PIN' }).click()
   await page.getByLabel('New team PIN').fill('48-21')
   await expect(page.getByLabel('New team PIN')).toHaveValue('4821')
@@ -177,7 +177,7 @@ test('an unmatched existing team PIN gives useful guidance', async ({ page }) =>
   }))
 
   await page.goto('/play')
-  await page.getByPlaceholder('Trivia Newton John').fill('Pocket Rockets')
+  await page.getByLabel('Team name').fill('Pocket Rockets')
   await page.getByRole('button', { name: 'I already have a team PIN' }).click()
   await page.getByLabel('Existing team PIN').fill('4821')
   await page.getByRole('button', { name: 'Link Team & Join' }).click()

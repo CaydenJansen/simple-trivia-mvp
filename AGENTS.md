@@ -1,4 +1,4 @@
-# Simple Trivia Engineering Guide
+# Good Trivia Company Engineering Guide
 
 ## Repository Safety
 
@@ -32,6 +32,9 @@
 - Keep browser-only code and Supabase publishable credentials client-safe. Never expose a service-role key.
 
 ## Product Invariants
+
+- The visible platform name is **Good Trivia Company**. Present it as the shared typographic wordmark; do not reintroduce **Simple Trivia** or an `ST` monogram in customer-facing branding.
+- Display placements as ordinals (`1st`, `2nd`, `3rd`) rather than bare numbers. The host post-game screen remains in the dark console style and uses the time-neutral heading **What a game!**.
 
 - The primary flow is:
   - Builder saves a reusable quiz.

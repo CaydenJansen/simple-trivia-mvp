@@ -1,16 +1,13 @@
 import Link from "next/link";
+import BrandWordmark from "@/components/BrandWordmark";
 
 export default function Home() {
   return (
     <main className="min-h-screen bg-[#f7f6ff] flex items-center justify-center px-6">
       <div className="w-full max-w-3xl">
         <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-violet-600 text-white font-bold text-xl mb-5">
-            ST
-          </div>
-
-          <h1 className="text-4xl font-bold text-zinc-900">
-            Simple Trivia
+          <h1 className="mb-1 text-4xl">
+            <BrandWordmark />
           </h1>
 
           <p className="mt-3 text-zinc-500">
@@ -63,7 +60,7 @@ export default function Home() {
         </div>
 
         <p className="mt-8 text-center text-xs text-zinc-400">
-          Simple Trivia MVP
+          Good Trivia Company
         </p>
       </div>
     </main>

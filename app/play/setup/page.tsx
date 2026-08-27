@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { TEAM_NAME_SUGGESTIONS } from "@/lib/trivia/team-name-suggestions";
 
 export default function TeamSetupPage() {
   if (process.env.NODE_ENV === "production") notFound();
@@ -28,7 +29,7 @@ export default function TeamSetupPage() {
 
           <input
             type="text"
-            placeholder="Trivia Newton John"
+            placeholder={TEAM_NAME_SUGGESTIONS[0]}
             className="mt-5 w-full rounded-xl border border-zinc-200 bg-white px-4 py-4 text-base outline-none focus:border-violet-500"
           />
 

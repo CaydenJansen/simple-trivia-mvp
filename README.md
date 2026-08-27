@@ -1,4 +1,4 @@
-# Simple Trivia
+# Good Trivia Company
 
 A Next.js and Supabase application for building and hosting live trivia games.
 

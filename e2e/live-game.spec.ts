@@ -36,7 +36,7 @@ test('dedicated test host can open a lobby and a player can reach team setup', a
     await expect(player.getByRole('heading', { name: "What’s your team name?" })).toBeVisible()
 
     const teamName = `Browser Test ${Date.now()}`
-    await player.getByPlaceholder('Trivia Newton John').fill(teamName)
+    await player.getByLabel('Team name').fill(teamName)
     await player.getByRole('button', { name: 'Join Game' }).click()
     await expect(player.getByRole('heading', { name: 'You’re in!' })).toBeVisible()
     await expect(host.getByText(teamName, { exact: true })).toBeVisible()

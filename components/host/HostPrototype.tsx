@@ -13,6 +13,7 @@ import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase/client";
 import QuestionsArea from "@/components/host/QuestionsArea";
 import BuilderQuestionPicker, { type PickerSourceQuestion } from "@/components/host/BuilderQuestionPicker";
+import BrandWordmark from "@/components/BrandWordmark";
 import type { Database, Json, QuestionType } from "@/lib/supabase/database.types";
 import {
   asStringArray,
@@ -67,7 +68,7 @@ import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reord
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib/trivia/question-metadata";
 import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
-import { competitionPlacements } from "@/lib/trivia/leaderboard-ranking";
+import { competitionPlacements, ordinalPlacement } from "@/lib/trivia/leaderboard-ranking";
 import { loadAllSourceRows } from "@/lib/trivia/paginated-source-load";
 import { nextQuizCopyTitle } from "@/lib/trivia/quiz-copy";
 import { quizPreviewIndexForKey } from "@/lib/trivia/quiz-preview-navigation";
@@ -107,8 +108,8 @@ function getHostGameCode() {
 }
 
 function getHostGameTitle() {
-  if (typeof window === 'undefined') return 'Simple Trivia'
-  return localStorage.getItem('simple-trivia-host-game-title') || 'Simple Trivia'
+  if (typeof window === 'undefined') return 'Good Trivia Company'
+  return localStorage.getItem('simple-trivia-host-game-title') || 'Good Trivia Company'
 }
 
 function exitHostSession(go: Go) {
@@ -708,14 +709,8 @@ function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
   return (
     <nav style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }}
       className="sticky top-0 z-40 flex h-14 items-center gap-2 px-3 sm:gap-6 sm:px-6">
-      <button onClick={() => go('dashboard')} aria-label="Simple Trivia home" className="mr-0 flex shrink-0 items-center gap-2.5 sm:mr-3">
-        <div style={{ background: C.violet }} className="w-7 h-7 rounded-lg flex items-center justify-center">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <circle cx="7" cy="5" r="2.5" fill="white"/>
-            <path d="M2 12c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="white" strokeWidth="1.4" strokeLinecap="round"/>
-          </svg>
-        </div>
-        <span style={{ color: C.ink }} className="hidden font-bold text-[15px] tracking-tight sm:inline">Simple Trivia</span>
+      <button onClick={() => go('dashboard')} aria-label="Good Trivia Company home" className="mr-0 flex shrink-0 items-center gap-2.5 sm:mr-3">
+        <BrandWordmark compact className="text-[12px] sm:text-[15px]" />
       </button>
       <div className="flex items-center gap-0.5 flex-1">
         {[
@@ -5367,13 +5362,7 @@ function Lobby({ go }: { go: Go }) {
       <header style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }}
         className="h-14 flex items-center px-6 gap-4">
         <div className="flex items-center gap-2.5">
-          <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-              <circle cx="7" cy="5" r="2.5" fill="white"/>
-              <path d="M2 12c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="white" strokeWidth="1.4" strokeLinecap="round"/>
-            </svg>
-          </div>
-          <span style={{ color: C.ink }} className="font-bold text-sm">Simple Trivia</span>
+          <BrandWordmark compact className="text-sm" />
         </div>
         <div className="flex-1" />
         <Chip color="ready">
@@ -6543,7 +6532,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     return (
       <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
         <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }} className="sticky top-0 z-40 flex items-center px-6 gap-4 shrink-0">
-          <span className="font-bold text-sm" style={{ color: C.liveDim }}>Simple Trivia</span>
+          <BrandWordmark dark compact className="text-sm" />
           <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>
             Round {contentScreen?.round_number ?? question?.round_number ?? 1} · {contentScreen?.round_title ?? question?.round_title ?? 'Content Screen'}
           </div>
@@ -6586,13 +6575,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }}
         className="flex items-center px-6 gap-4 shrink-0 sticky top-0 z-40">
         <div className="flex items-center gap-2 shrink-0">
-          <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-              <circle cx="7" cy="5" r="2.5" fill="white"/>
-              <path d="M2 12c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="white" strokeWidth="1.4" strokeLinecap="round"/>
-            </svg>
-          </div>
-          <span style={{ color: C.liveDim }} className="font-bold text-sm">Simple Trivia</span>
+          <BrandWordmark dark compact className="text-sm" />
         </div>
         <div className="flex-1 flex items-center justify-center gap-4 text-sm">
           {gameScreen === 'round-start' ? (
@@ -7411,7 +7394,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
 function EndOfRound({ go }: { go: Go }) {
   const [gameId, setGameId] = useState('')
-  const [gameTitle, setGameTitle] = useState('Simple Trivia')
+  const [gameTitle, setGameTitle] = useState('Good Trivia Company')
   const [intermission, setIntermission] = useState(false)
   const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
   const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
@@ -7450,7 +7433,7 @@ function EndOfRound({ go }: { go: Go }) {
 
       setIntermission(game.current_screen === 'intermission')
       setGameId(game.id)
-      setGameTitle(game.title || 'Simple Trivia')
+      setGameTitle(game.title || 'Good Trivia Company')
       setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
       setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
       setScoreVisibility(playerScoreVisibilityFromSettings(game.settings))
@@ -7728,7 +7711,7 @@ function EndOfRound({ go }: { go: Go }) {
     return (
       <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-screen flex flex-col">
         <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}` }} className="h-12 flex items-center px-6 shrink-0">
-          <span style={{ color: C.liveDim }} className="font-bold text-sm">Simple Trivia</span>
+          <BrandWordmark dark compact className="text-sm" />
           <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>
             Round {currentQuestion.round_number} answers · {revealIndex + 1} of {orderedRoundQuestions.length}
           </div>
@@ -7782,8 +7765,7 @@ function EndOfRound({ go }: { go: Go }) {
     <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-screen flex flex-col">
       <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}` }} className="h-12 flex items-center px-6 shrink-0">
         <div className="flex items-center gap-2.5">
-          <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold">ST</div>
-          <span style={{ color: C.liveDim }} className="font-bold text-sm">Simple Trivia</span>
+          <BrandWordmark dark compact className="text-sm" />
         </div>
         <div className="flex-1 text-center"><span style={{ color: C.liveDim }} className="text-sm">{gameTitle}</span></div>
         <div className="flex items-center gap-3">
@@ -8277,13 +8259,12 @@ function FinalResults({ go }: { go: Go }) {
   }
 
   return (
-    <div style={{ background: C.ground }} className="min-h-screen flex flex-col">
+    <div style={{ background: resolvingTie ? C.ground : C.liveBg }} className="min-h-screen flex flex-col">
       <header style={{ background: C.ink }} className="h-12 flex items-center px-6 shrink-0">
         <div className="flex items-center gap-2.5">
-          <div style={{ background: C.violet }} className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold">ST</div>
-          <span style={{ color: '#ffffff80' }} className="font-bold text-sm">Simple Trivia</span>
+          <BrandWordmark dark compact className="text-sm" />
         </div>
-        <div className="flex-1 text-center"><span style={{ color: '#ffffff50' }} className="text-sm">{game?.title ?? 'Simple Trivia'}</span></div>
+        <div className="flex-1 text-center"><span style={{ color: '#ffffff50' }} className="text-sm">{game?.title ?? 'Good Trivia Company'}</span></div>
         <div style={{ width: 80 }} />
       </header>
 
@@ -8384,15 +8365,15 @@ function FinalResults({ go }: { go: Go }) {
         ) : (
         <>
         <div className="text-center mb-10">
-          <div style={{ background: C.violetPale, color: C.violet }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-4">★ Game Complete</div>
-          <h1 style={{ color: C.ink }} className="text-5xl font-extrabold">What a night!</h1>
+          <div style={{ background: `${C.violet}22`, color: C.liveViolet, border: `1px solid ${C.violet}55` }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-4">★ Game Complete</div>
+          <h1 style={{ color: C.liveText }} className="text-5xl font-extrabold">What a game!</h1>
         </div>
 
         <div
           style={{
-            background: playersSeeFinalLeaderboard(leaderboardVisibility) ? '#F0FDF4' : '#FFFBEB',
-            border: `1px solid ${playersSeeFinalLeaderboard(leaderboardVisibility) ? '#BBF7D0' : '#FDE68A'}`,
-            color: playersSeeFinalLeaderboard(leaderboardVisibility) ? '#166534' : '#92400E',
+            background: playersSeeFinalLeaderboard(leaderboardVisibility) ? `${C.go}16` : `${C.caution}16`,
+            border: `1px solid ${playersSeeFinalLeaderboard(leaderboardVisibility) ? `${C.go}55` : `${C.caution}55`}`,
+            color: playersSeeFinalLeaderboard(leaderboardVisibility) ? '#6EE7B7' : '#FCD34D',
           }}
           className="mb-7 rounded-2xl px-5 py-4 text-center"
         >
@@ -8415,15 +8396,15 @@ function FinalResults({ go }: { go: Go }) {
         )}
 
         {prizeWinners.length > 0 && (
-          <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }} className="rounded-2xl p-5 mb-8">
-            <p style={{ color: '#92400E' }} className="text-[11px] font-bold uppercase tracking-wider mb-3">Prize Winners</p>
+          <div style={{ background: `${C.caution}14`, border: `1px solid ${C.caution}55` }} className="rounded-2xl p-5 mb-8">
+            <p style={{ color: '#FCD34D' }} className="text-[11px] font-bold uppercase tracking-wider mb-3">Prize Winners</p>
             <div className="space-y-3">
               {prizeWinners.map(({ team, award }) => (
                 <div key={`${team.id}-${award.placement}`} className="flex items-start gap-3">
-                  <span style={{ color: '#92400E' }} className="w-20 shrink-0 text-sm font-extrabold">{award.placement}</span>
+                  <span style={{ color: '#FCD34D' }} className="w-20 shrink-0 text-sm font-extrabold">{award.placement}</span>
                   <div>
-                    <p style={{ color: C.ink }} className="text-sm font-bold">{team.name}</p>
-                    <p style={{ color: C.sub }} className="text-sm">{award.message}</p>
+                    <p style={{ color: C.liveText }} className="text-sm font-bold">{team.name}</p>
+                    <p style={{ color: C.liveDim }} className="text-sm">{award.message}</p>
                   </div>
                 </div>
               ))}
@@ -8431,16 +8412,16 @@ function FinalResults({ go }: { go: Go }) {
           </div>
         )}
 
-        <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5 mb-8">
-          <p style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-wider mb-3">
+        <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-5 mb-8">
+          <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-wider mb-3">
             Final Standings · {playersSeeFinalLeaderboard(leaderboardVisibility) ? 'Also visible to players' : 'Host only'}
           </p>
-          <div style={{ borderTop: `1px solid ${C.line}` }}>
+          <div style={{ borderTop: `1px solid ${C.liveLine}` }}>
             {leaderboard.map((team, i) => (
-              <div key={team.id} style={{ borderBottom: `1px solid ${C.line}` }} className="flex items-center gap-3 py-3 last:border-0">
-                <span style={{ color: (team.final_placement ?? i + 1) <= 3 ? C.ink : C.sub }} className="w-5 text-center text-sm shrink-0 font-extrabold">{team.final_placement ?? i + 1}</span>
-                <span style={{ color: C.ink }} className="flex-1 text-sm font-semibold">{team.name}</span>
-                <span style={{ color: C.ink }} className="font-extrabold tabular-nums">{team.score}</span>
+              <div key={team.id} style={{ borderBottom: `1px solid ${C.liveLine}` }} className="flex items-center gap-3 py-3 last:border-0">
+                <span style={{ color: (team.final_placement ?? i + 1) <= 3 ? C.liveText : C.liveDim }} className="w-9 text-center text-sm shrink-0 font-extrabold">{ordinalPlacement(team.final_placement ?? i + 1)}</span>
+                <span style={{ color: C.liveText }} className="flex-1 text-sm font-semibold">{team.name}</span>
+                <span style={{ color: C.liveText }} className="font-extrabold tabular-nums">{team.score}</span>
                 {prizeAwardsFromJson(team.prize_awards).length > 0 && (
                   <span style={{ background: '#FEF3C7', color: '#92400E' }} className="rounded-full px-2 py-1 text-[10px] font-extrabold">PRIZE</span>
                 )}
@@ -8450,8 +8431,8 @@ function FinalResults({ go }: { go: Go }) {
         </div>
 
         <div className="flex gap-3">
-          <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={() => go('recent-games')}>View Game Summary</Btn>
-          <Btn sz="lg" cls="flex-1 justify-center" onClick={finishAndReturn}>Finish &amp; Return to My Quizzes</Btn>
+          <button type="button" onClick={() => go('recent-games')} style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="flex-1 cursor-pointer rounded-xl px-5 py-3.5 text-sm font-bold transition-colors hover:bg-white/5">View Game Summary</button>
+          <Btn v="live" sz="lg" cls="flex-1 justify-center" onClick={finishAndReturn}>Finish &amp; Return to My Quizzes</Btn>
         </div>
         </>
         )}

@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 
 import { validateHostCredentials } from "@/lib/auth/credentials";
 import { supabase } from "@/lib/supabase/client";
+import BrandWordmark from "@/components/BrandWordmark";
 
 import HostPrototype from "./HostPrototype";
 
@@ -136,9 +137,7 @@ export default function HostAuthGate({ showDevNavigator = false }: { showDevNavi
     <main className="flex min-h-screen items-center justify-center bg-[#f7f6ff] px-6 py-12">
       <section className="w-full max-w-md rounded-3xl border border-zinc-200 bg-white p-8 shadow-sm">
         <div className="mb-7 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-600 text-lg font-bold text-white">
-            ST
-          </div>
+          <BrandWordmark className="mb-4 text-xl" />
           <h1 className="text-2xl font-bold text-zinc-900">
             {mode === "sign-in" ? "Host sign in" : "Create a host account"}
           </h1>

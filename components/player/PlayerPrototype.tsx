@@ -31,6 +31,8 @@ import {
 } from "@/lib/trivia/team-pin";
 import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { autoRunClockColor, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
+import { suggestedTeamName } from "@/lib/trivia/team-name-suggestions";
+import BrandWordmark from "@/components/BrandWordmark";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -1135,12 +1137,7 @@ function TopBar({
 function PlayerPrimaryHeader({ onLeave }: { onLeave: () => void }) {
   return (
     <div style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="sticky top-0 z-30 flex shrink-0 items-center justify-between px-4 py-2">
-      <div className="flex items-center gap-2">
-        <div style={{ background: C.violet, borderRadius: 8 }} className="flex h-7 w-7 shrink-0 items-center justify-center">
-          <span className="font-black text-white" style={{ fontSize: 11 }}>ST</span>
-        </div>
-        <span style={{ color: C.sub, fontSize: 14 }} className="font-semibold">Simple Trivia</span>
-      </div>
+      <BrandWordmark compact className="text-sm" />
       <button
         type="button"
         onClick={onLeave}
@@ -1341,10 +1338,7 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <div className="flex-1 flex flex-col items-center justify-center px-7 py-14">
-        <div style={{ background: C.violet, borderRadius: 20, width: 64, height: 64 }}
-          className="flex items-center justify-center mb-8 shrink-0">
-          <span className="text-white font-black text-2xl">ST</span>
-        </div>
+        <BrandWordmark className="mb-8 text-2xl" />
 
         <h1 style={{ color: C.ink, fontSize: 30 }} className="font-black text-center mb-2">
           Join a Game
@@ -1526,6 +1520,7 @@ async function handleJoin() {
 
         <input
           type="text"
+          aria-label="Team name"
           enterKeyHint="go"
           value={name}
           onChange={e => { setName(e.target.value); setTaken(false); setPinError(null); setJoinError(null) }}
@@ -1534,7 +1529,7 @@ async function handleJoin() {
             event.preventDefault()
             void handleJoin()
           }}
-          placeholder="Trivia Newton John"
+          placeholder={suggestedTeamName(gameTitle)}
           style={{
             border: `2px solid ${taken ? C.stop : name ? C.violet : C.line}`,
             borderRadius: 14,
@@ -1871,7 +1866,7 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
 // ─── SCREEN 3 — WAITING ───────────────────────────────────────────────────────
 function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
   const [teamName, setTeamName] = useState('Your team')
-  const [gameTitle, setGameTitle] = useState('Simple Trivia')
+  const [gameTitle, setGameTitle] = useState('Good Trivia Company')
   const [gameCode, setGameCode] = useState('')
   const [teamCount, setTeamCount] = useState<number | null>(null)
 
@@ -2699,14 +2694,14 @@ function DelayedReveal() {
 
 // ─── SCREEN 19 — WINNER ───────────────────────────────────────────────────────
 const FINAL_LB = [
-  { name: 'Trivia Newton John', score: 48 },
+  { name: 'Olivia Newton Trivia', score: 48 },
   { name: 'Quizteama Aguilera', score: 43 },
   { name: 'Risky Quizness', score: 38 },
   { name: 'Norfolk & Chance', score: 31 },
 ]
 
 function Winner() {
-  const MY = 'Trivia Newton John'
+  const MY = 'Olivia Newton Trivia'
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <div style={{ background: C.violet, padding: '28px 24px 32px', textAlign: 'center', flexShrink: 0 }}>
@@ -2715,7 +2710,7 @@ function Winner() {
         <div style={{ background: 'rgba(255,255,255,0.15)', borderRadius: 16, display: 'inline-block', padding: '8px 20px', marginBottom: 14 }}>
           <span style={{ color: '#fff', fontSize: 28, fontWeight: 900 }}>🏆 1st Place</span>
         </div>
-        <h1 style={{ color: '#fff', fontSize: 22, fontWeight: 900, marginBottom: 10 }}>Trivia Newton John</h1>
+        <h1 style={{ color: '#fff', fontSize: 22, fontWeight: 900, marginBottom: 10 }}>Olivia Newton Trivia</h1>
         <p style={{ color: '#fff', fontSize: 52, fontWeight: 900, lineHeight: 1 }}>48</p>
         <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: 13, marginTop: 4, marginBottom: 16 }}>Final score</p>
         <div style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 16, padding: '12px 20px' }}>
@@ -2757,6 +2752,7 @@ function FinalResult() {
   const { teams, teamId } = useLiveLeaderboard(showFinalLeaderboard)
   const myIndex = teams.findIndex(team => team.id === teamId)
   const me = teams.find(team => team.id === teamId)
+  const finalPlacement = me?.final_placement ?? (myIndex >= 0 ? myIndex + 1 : null)
   if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2765,7 +2761,7 @@ function FinalResult() {
         <h1 style={{ color: C.ink, fontSize: 24 }} className="font-black mb-4">{snapshot.teamName || me?.name || 'Your Team'}</h1>
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 18, padding: '18px 20px', display: 'inline-block', minWidth: 180, marginBottom: 24 }}>
           <p style={{ color: C.sub, fontSize: 11, fontWeight: 800 }}>{showFinalLeaderboard ? 'YOU FINISHED' : scoresVisible ? 'YOUR FINAL SCORE' : 'GAME COMPLETE'}</p>
-          {(showFinalLeaderboard || scoresVisible) && <p style={{ color: C.ink, fontSize: 48, fontWeight: 900 }}>{showFinalLeaderboard ? (me?.final_placement ?? (myIndex >= 0 ? myIndex + 1 : '—')) : snapshot.score}</p>}
+          {(showFinalLeaderboard || scoresVisible) && <p style={{ color: C.ink, fontSize: 48, fontWeight: 900 }}>{showFinalLeaderboard ? (finalPlacement ? ordinalPlacement(finalPlacement) : '—') : snapshot.score}</p>}
           <p style={{ color: C.sub, fontSize: 13 }}>{showFinalLeaderboard && scoresVisible ? `Final score: ${me?.score ?? snapshot.score}` : 'Thanks for playing!'}</p>
         </div>
         {snapshot.prizeAwards.length > 0 && (
@@ -2785,7 +2781,7 @@ function FinalResult() {
             <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textAlign: 'left', marginBottom: 10 }}>FINAL STANDINGS</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {teams.map((team, i) => <div key={team.id} style={{ background: team.id === teamId ? C.violetMist : C.panel, border: `1px solid ${team.id === teamId ? C.violet : C.line}`, borderRadius: 13, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
-                <span style={{ color: C.sub, width: 20, fontWeight: 800 }}>{team.final_placement ?? i + 1}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.violet, fontWeight: 800 }}>{team.score}</span>}
+                <span style={{ color: C.sub, width: 36, fontWeight: 800 }}>{ordinalPlacement(team.final_placement ?? i + 1)}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.violet, fontWeight: 800 }}>{team.score}</span>}
               </div>)}
             </div>
             <p style={{ color: C.sub, fontSize: 13, marginTop: 24 }}>Thanks for playing!</p>
@@ -3001,7 +2997,7 @@ function GameEnded({ go }: { go: (s: PlayerScreen) => void }) {
         <span style={{ fontSize: 28 }}>🎤</span>
       </div>
       <h1 style={{ color: C.ink, fontSize: 26 }} className="font-black mb-3">This game has ended.</h1>
-      <p style={{ color: C.sub, fontSize: 15, marginBottom: 32 }}>Thanks for playing Simple Trivia.</p>
+      <p style={{ color: C.sub, fontSize: 15, marginBottom: 32 }}>Thanks for playing with Good Trivia Company.</p>
       <div style={{ width: '100%', maxWidth: 280 }}>
         <Btn onClick={() => go('join')}>Join Another Game</Btn>
       </div>
@@ -3351,10 +3347,7 @@ export default function App() {
         {/* Brand */}
         <div style={{ padding: '20px 16px 16px', borderBottom: '1px solid #2A2848' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <div style={{ background: C.violet, borderRadius: 8, width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <span style={{ color: '#fff', fontWeight: 900, fontSize: 10 }}>ST</span>
-            </div>
-            <span style={{ color: '#EEE9FF', fontSize: 13, fontWeight: 700 }}>Simple Trivia</span>
+            <BrandWordmark dark compact className="text-[13px]" />
           </div>
           <p style={{ color: '#7E7AA0', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
             Player UI · Prototype
