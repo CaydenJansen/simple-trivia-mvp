@@ -8733,6 +8733,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             </div>
             {sleepingTeamCount > 0 && <p style={{ color: C.liveDim }} className="mt-2 text-[10px] leading-4">Sleeping teams do not hold up Auto-Run. They wake automatically when they reconnect.</p>}
             <TeamAdmissionList gameCode={getHostGameCode()} dark compact hideWhenEmpty className="mt-5" />
+            <LiveReactions gameId={liveGameId} dark hostPlacement inlineHostPlacement />
           </div>
 
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="p-5 shrink-0">
@@ -8863,7 +8864,6 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           </div>
         </div>
       </div>
-      <LiveReactions gameId={liveGameId} dark hostPlacement />
     </div>
   )
 }

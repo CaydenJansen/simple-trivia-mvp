@@ -18,11 +18,13 @@ export default function LiveReactions({
   canReact = false,
   dark = false,
   hostPlacement = false,
+  inlineHostPlacement = false,
 }: {
   gameId: string | null
   canReact?: boolean
   dark?: boolean
   hostPlacement?: boolean
+  inlineHostPlacement?: boolean
 }) {
   const [events, setEvents] = useState<(ReactionEvent & { localKey: string })[]>([])
   const [sending, setSending] = useState(false)
@@ -72,14 +74,18 @@ export default function LiveReactions({
 
   return (
     <>
-      <div aria-live="polite" className={`pointer-events-none fixed right-4 z-[70] flex w-64 flex-col items-end gap-2 sm:right-5 ${hostPlacement ? 'top-20' : 'top-24'}`}>
-        {events.map(event => (
-          <div key={event.localKey} className="live-reaction-float flex max-w-full items-center gap-2 rounded-full px-3 py-2 shadow-xl" style={{ background: dark ? '#211D39EE' : '#FFFFFFF2', border: `1px solid ${dark ? '#3A345B' : '#E8E5F4'}` }}>
-            <span className="text-2xl" aria-hidden="true">{event.reaction}</span>
-            <span className="truncate text-xs font-extrabold" style={{ color: dark ? '#F4F1FF' : '#18171F' }}>{event.team_name}</span>
-          </div>
-        ))}
-      </div>
+      {events.length > 0 && (
+        <div aria-live="polite" className={inlineHostPlacement
+          ? 'pointer-events-none sticky bottom-0 z-20 ml-auto mt-3 flex w-full flex-col items-end gap-2'
+          : `pointer-events-none fixed right-4 z-[70] flex w-64 flex-col items-end gap-2 sm:right-5 ${hostPlacement ? 'top-20' : 'top-24'}`}>
+          {events.map(event => (
+            <div key={event.localKey} className="live-reaction-float flex max-w-full items-center gap-2 rounded-full px-3 py-2 shadow-xl" style={{ background: dark ? '#211D39EE' : '#FFFFFFF2', border: `1px solid ${dark ? '#3A345B' : '#E8E5F4'}` }}>
+              <span className="text-2xl" aria-hidden="true">{event.reaction}</span>
+              <span className="truncate text-xs font-extrabold" style={{ color: dark ? '#F4F1FF' : '#18171F' }}>{event.team_name}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {canReact && (
         <div className="fixed bottom-24 right-4 z-40 flex flex-col items-end gap-2 sm:right-5 md:bottom-4">

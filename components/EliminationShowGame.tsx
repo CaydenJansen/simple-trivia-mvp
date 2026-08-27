@@ -39,9 +39,11 @@ export default function EliminationShowGame({
     return (
       <div className="mx-auto mt-6 w-full max-w-2xl">
         <div className="text-center">
-          <div className={`mx-auto flex h-28 w-28 items-center justify-center rounded-full border-8 text-5xl font-black shadow-xl ${revealed ? 'coin-reveal' : 'coin-waiting'}`}
-            style={{ background: '#FBBF24', borderColor: '#FDE68A', color: '#713F12' }}>
-            {revealed ? (state.roundOutcome === 'heads' ? 'H' : 'T') : '🪙'}
+          <div className="coin-stage mx-auto h-28 w-28" aria-label={revealed ? `${state.roundOutcome === 'heads' ? 'Heads' : 'Tails'} coin` : 'Coin waiting to flip'}>
+            <div className={`coin-flip h-full w-full ${revealed ? (state.roundOutcome === 'heads' ? 'coin-reveal-heads' : 'coin-reveal-tails') : 'coin-waiting'}`}>
+              <span className="coin-face coin-heads">H</span>
+              <span className="coin-face coin-tails">T</span>
+            </div>
           </div>
           <p style={{ color: dim }} className="mt-3 text-sm font-bold">
             {revealed ? `${state.roundOutcome === 'heads' ? 'Heads' : 'Tails'} wins this flip` : `Choices lock in ${secondsRemaining}s`}
