@@ -7351,16 +7351,30 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }
 
   async function setLiveSubmittedAnswersEditable(enabled: boolean) {
-    if (!await updateLiveSettings({ submitted_answers_editable: enabled })) return
-    setSubmittedAnswersEditableDefault(enabled)
-    if (!liveGameId || phase !== 'open') return
-    const { error } = await supabase.from('games').update({ answer_editing_allowed: enabled }).eq('id', liveGameId)
+    if (!liveGameId || settingsBusy) return
+    setSettingsBusy(true)
+    setLiveError(null)
+    const settings: Record<string, Json> = { ...liveGameSettingsRef.current, submitted_answers_editable: enabled }
+    const gameUpdate = phase === 'open'
+      ? { settings, answer_editing_allowed: enabled }
+      : { settings }
+    const { error } = await supabase.from('games').update(gameUpdate).eq('id', liveGameId)
     if (error) {
-      console.error('Could not update current answer editing:', error)
-      setLiveError('The default changed, but the current question could not be updated.')
+      console.error('Could not update submitted answer editing:', error)
+      setLiveError('Could not update answer editing. Please try again.')
+      setSettingsBusy(false)
       return
     }
-    setAnswerEditingAllowed(enabled)
+    liveGameSettingsRef.current = settings
+    setSubmittedAnswersEditableDefault(enabled)
+    if (phase === 'open') setAnswerEditingAllowed(enabled)
+    try {
+      await saveHostDefaultGameSettings(settings)
+    } catch (preferenceError) {
+      console.error('Could not save answer editing as a default:', preferenceError)
+      setLiveError('Answer editing changed for this game, but the default could not be saved.')
+    }
+    setSettingsBusy(false)
   }
 
   async function saveLivePrizes() {
@@ -7432,25 +7446,25 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           {autoRunMode === 'round' && playerScoreVisibility === 'live' && <p style={{ color: C.caution }} className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold">Auto-Run holds points until the round review. We recommend “After each round” for player scores.</p>}
           <details style={{ borderTop: `1px solid ${C.liveLine}` }} className="group pt-3">
             <summary style={{ color: C.liveText }} className="cursor-pointer text-sm font-bold">Prize places & messages</summary>
-            <div className="mt-3 space-y-3">
+            <div className="mt-2 space-y-2">
               {[
                 { title: 'Top places', labels: ['1st', '2nd', '3rd'], values: topPrizes, setValues: setTopPrizes },
                 { title: 'Bottom places', labels: ['Last', '2nd Last', '3rd Last'], values: botPrizes, setValues: setBotPrizes },
               ].map(group => (
-                <div key={group.title} className="space-y-2">
+                <div key={group.title} className="space-y-1">
                   <p style={{ color: C.liveDim }} className="text-[10px] font-black uppercase tracking-wider">{group.title}</p>
                   {group.labels.map((label, index) => (
-                    <div key={label} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-lg p-2">
-                      <label style={{ color: C.liveText }} className="flex cursor-pointer items-center gap-2 text-xs font-bold">
+                    <div key={label} className="grid grid-cols-[76px_minmax(0,1fr)] items-center gap-1.5">
+                      <label style={{ color: C.liveText }} className="flex cursor-pointer items-center gap-1.5 text-[11px] font-bold">
                         <input type="checkbox" checked={group.values[index].enabled} onChange={event => group.setValues(current => current.map((place, placeIndex) => placeIndex === index ? { ...place, enabled: event.target.checked } : place))} className="accent-violet-600" />
                         {label}
                       </label>
-                      {group.values[index].enabled && <input value={group.values[index].msg} onChange={event => group.setValues(current => current.map((place, placeIndex) => placeIndex === index ? { ...place, msg: event.target.value } : place))} placeholder="Prize message…" style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-2 w-full rounded-md px-2 py-1.5 text-xs placeholder:text-[#7E7AA0]" />}
+                      <input value={group.values[index].msg} disabled={!group.values[index].enabled} onChange={event => group.setValues(current => current.map((place, placeIndex) => placeIndex === index ? { ...place, msg: event.target.value } : place))} placeholder={group.values[index].enabled ? 'Prize message…' : 'No prize'} style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="min-w-0 rounded-md px-2 py-1 text-[11px] placeholder:text-[#7E7AA0] disabled:opacity-35" />
                     </div>
                   ))}
                 </div>
               ))}
-              <button type="button" onClick={() => { void saveLivePrizes() }} disabled={settingsBusy} style={{ background: C.violet, color: 'white' }} className="w-full cursor-pointer rounded-lg px-3 py-2 text-xs font-black disabled:opacity-50">Save prize settings</button>
+              <button type="button" onClick={() => { void saveLivePrizes() }} disabled={settingsBusy} style={{ background: C.violet, color: 'white' }} className="w-full cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-black disabled:opacity-50">Save prize settings</button>
             </div>
           </details>
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="pt-2">
@@ -7540,7 +7554,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   : 'Each team can press once. Be the last team to press before the randomly timed bomb explodes.'}</p>
               </div>
             ) : isWheel ? (
-              <div className="mt-7"><TeamWheel dark teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} onSettled={handleWheelSettled} /></div>
+              <div className="mt-7"><TeamWheel dark teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
             ) : (
               <><div className={`mt-7 text-9xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
               <div style={{ background: C.liveLine }} className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full"><div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" /></div></>
@@ -7562,7 +7576,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             </button>
           </section>
         </main>
-        <LiveReactions gameId={liveGameId} dark />
+        <LiveReactions gameId={liveGameId} dark hostPlacement />
       </div>
     )
   }
@@ -7616,7 +7630,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             </div>
           </section>
         </main>
-        <LiveReactions gameId={liveGameId} dark />
+        <LiveReactions gameId={liveGameId} dark hostPlacement />
       </div>
     )
   }
@@ -8329,18 +8343,33 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="p-5 shrink-0">
             <div className="space-y-3">
-              <button
-                data-host-navigation="back"
-                onClick={handleReopenAnswers}
-                disabled={actionBusy || phase !== 'closed' || gameScreen === 'round-start' || gameScreen === 'question-results'}
-                title={phase === 'revealed' ? 'Revealed scores cannot be safely undone' : undefined}
-                style={{ background: 'transparent', color: C.liveText, border: `1px solid ${C.liveLine}` }}
-                className="w-full rounded-xl py-3 text-sm font-bold transition-all hover:bg-white/5 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-35"
-              >
-                {phase === 'closed' && gameScreen !== 'round-start' && gameScreen !== 'question-results'
-                  ? '← Reopen Answers'
-                  : '← Previous'}
-              </button>
+              <div className="relative">
+                <button
+                  data-host-navigation="back"
+                  onClick={handleReopenAnswers}
+                  disabled={actionBusy || phase !== 'closed' || gameScreen === 'round-start' || gameScreen === 'question-results'}
+                  title={phase === 'revealed' ? 'Revealed scores cannot be safely undone' : undefined}
+                  style={{ background: 'transparent', color: C.liveText, border: `1px solid ${C.liveLine}` }}
+                  className={`w-full rounded-xl py-3 text-sm font-bold transition-all hover:bg-white/5 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-35 ${phase === 'open' ? 'pr-12' : ''}`}
+                >
+                  {phase === 'closed' && gameScreen !== 'round-start' && gameScreen !== 'question-results'
+                    ? '← Reopen Answers'
+                    : '← Previous'}
+                </button>
+                {phase === 'open' && gameScreen !== 'round-start' && gameScreen !== 'question-results' && (
+                  <button
+                    type="button"
+                    onClick={() => { void handleAnswerEditingChange(!answerEditingAllowed) }}
+                    disabled={actionBusy}
+                    title={answerEditingAllowed ? 'Lock submitted answers' : 'Unlock submitted answers so teams can edit them'}
+                    aria-label={answerEditingAllowed ? 'Lock submitted answers' : 'Unlock submitted answers so teams can edit them'}
+                    style={{ background: answerEditingAllowed ? `${C.violet}35` : C.livePanel, color: answerEditingAllowed ? C.liveViolet : C.liveDim, border: `1px solid ${answerEditingAllowed ? `${C.violet}80` : C.liveLine}` }}
+                    className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 cursor-pointer items-center justify-center rounded-lg text-sm transition-colors hover:text-white disabled:opacity-40"
+                  >
+                    {answerEditingAllowed ? '🔓' : '🔒'}
+                  </button>
+                )}
+              </div>
 
               {gameScreen === 'round-start' ? (
                 <button data-host-navigation="forward" onClick={handleOpenQuestion} disabled={actionBusy || !question}
@@ -8361,24 +8390,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   {actionBusy ? 'Advancing…' : nextLiveItem?.kind === 'content' ? 'Show Content Screen →' : nextLiveItem?.kind === 'show-game' ? `Show ${nextLiveItem.showGame.title} →` : 'Next Question →'}
                 </button>
               ) : phase === 'open' ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => { void handleAnswerEditingChange(!answerEditingAllowed) }}
-                    disabled={actionBusy}
-                    style={{
-                      background: answerEditingAllowed ? `${C.violet}24` : 'transparent',
-                      color: answerEditingAllowed ? C.liveViolet : C.liveText,
-                      border: `1px solid ${answerEditingAllowed ? `${C.violet}80` : C.liveLine}`,
-                    }}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm font-bold transition-all hover:bg-white/5 disabled:opacity-50"
-                  >
-                    {answerEditingAllowed ? 'Lock Submitted Answers' : 'Allow Answer Changes'}
-                    <span style={{ color: C.liveDim }} className="mt-0.5 block text-[10px] font-medium">
-                      {answerEditingAllowed ? 'Teams can currently update submitted answers' : 'Submitted answers are currently locked'}
-                    </span>
-                  </button>
-                  <button
+                <button
                     data-host-navigation="forward"
                     onClick={handleCloseAnswers}
                     disabled={actionBusy}
@@ -8394,7 +8406,6 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                       ? 'Closing…'
                       : activeBonus && questionStage === 'core' ? 'Close Main Answers →' : activeBonus ? 'Close Bonus Answers →' : 'Close Answers →'}
                   </button>
-                </>
               ) : phase === 'closed' ? (
                 <>
                   {activeBonus && questionStage === 'core' ? (
@@ -8458,7 +8469,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           </div>
         </div>
       </div>
-      <LiveReactions gameId={liveGameId} dark />
+      <LiveReactions gameId={liveGameId} dark hostPlacement />
     </div>
   )
 }
@@ -9517,7 +9528,7 @@ function FinalResults({ go }: { go: Go }) {
         </>
         )}
       </main>
-      <LiveReactions gameId={game?.id ?? null} dark />
+      <LiveReactions gameId={game?.id ?? null} dark hostPlacement />
     </div>
   )
 }

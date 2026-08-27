@@ -6,13 +6,25 @@ type TeamWheelProps = {
   teamNames: string[]
   spinning?: boolean
   winnerName?: string | null
+  landingKey?: string | null
   dark?: boolean
   onSettled?: () => void
 }
 
 const WHEEL_COLORS = ['#7C3AED', '#F59E0B', '#10B981', '#EC4899', '#2563EB', '#F97316']
 
-export default function TeamWheel({ teamNames, spinning = false, winnerName = null, dark = false, onSettled }: TeamWheelProps) {
+export function wheelLandingFraction(key: string) {
+  let hash = 2166136261
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  // Keep the pointer just inside a slice so tiny cross-browser rounding
+  // differences can never make two devices display different winners.
+  return 0.04 + ((hash >>> 0) / 4294967295) * 0.92
+}
+
+export default function TeamWheel({ teamNames, spinning = false, winnerName = null, landingKey = null, dark = false, onSettled }: TeamWheelProps) {
   // Every device derives the same slice order, independent of Realtime row order.
   const names = teamNames.length > 0
     ? [...teamNames].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
@@ -20,7 +32,8 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
   const namesKey = names.join('\u0000')
   const slice = 360 / names.length
   const winnerIndex = winnerName ? names.indexOf(winnerName) : -1
-  const restingRotation = winnerIndex >= 0 ? -((winnerIndex * slice) + (slice / 2)) : 0
+  const landingFraction = wheelLandingFraction(landingKey || winnerName || namesKey)
+  const restingRotation = winnerIndex >= 0 ? -((winnerIndex * slice) + (slice * landingFraction)) : 0
   const wheelRef = useRef<HTMLDivElement>(null)
   const rotationRef = useRef(0)
   const wasSpinningRef = useRef(false)

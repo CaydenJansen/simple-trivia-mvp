@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 
-const REACTIONS = ['👍', '👎', '❤️', '😂', '😢', '😡'] as const
+// Facebook's familiar left-to-right reaction order: Like, Love, Care, Haha, Wow, Sad, Angry.
+const REACTIONS = ['👍', '❤️', '🥰', '😂', '😮', '😢', '😡'] as const
 
 type ReactionEvent = {
   id: string
@@ -16,13 +17,16 @@ export default function LiveReactions({
   gameId,
   canReact = false,
   dark = false,
+  hostPlacement = false,
 }: {
   gameId: string | null
   canReact?: boolean
   dark?: boolean
+  hostPlacement?: boolean
 }) {
   const [events, setEvents] = useState<(ReactionEvent & { localKey: string })[]>([])
   const [sending, setSending] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const cleanupTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
 
   useEffect(() => {
@@ -60,6 +64,7 @@ export default function LiveReactions({
       p_reaction: reaction,
     })
     if (error) console.error('Could not send reaction:', error)
+    else setPickerOpen(false)
     window.setTimeout(() => setSending(false), 450)
   }
 
@@ -67,7 +72,7 @@ export default function LiveReactions({
 
   return (
     <>
-      <div aria-live="polite" className="pointer-events-none fixed bottom-36 right-4 z-[70] flex w-52 flex-col items-end gap-2 sm:right-6">
+      <div aria-live="polite" className={`pointer-events-none fixed right-4 z-[70] flex w-64 flex-col items-end gap-2 sm:right-5 ${hostPlacement ? 'top-20' : 'top-24'}`}>
         {events.map(event => (
           <div key={event.localKey} className="live-reaction-float flex max-w-full items-center gap-2 rounded-full px-3 py-2 shadow-xl" style={{ background: dark ? '#211D39EE' : '#FFFFFFF2', border: `1px solid ${dark ? '#3A345B' : '#E8E5F4'}` }}>
             <span className="text-2xl" aria-hidden="true">{event.reaction}</span>
@@ -77,12 +82,25 @@ export default function LiveReactions({
       </div>
 
       {canReact && (
-        <div aria-label="Send a reaction" className="fixed bottom-20 left-1/2 z-40 flex -translate-x-1/2 gap-1 rounded-2xl border border-[#E8E5F4] bg-white/95 p-1.5 shadow-xl backdrop-blur">
-          {REACTIONS.map(reaction => (
-            <button key={reaction} type="button" disabled={sending} onClick={() => { void sendReaction(reaction) }} className="h-10 w-11 cursor-pointer rounded-xl text-xl transition hover:-translate-y-0.5 hover:bg-violet-50 active:scale-95 disabled:cursor-wait disabled:opacity-60" aria-label={`React ${reaction}`}>
-              {reaction}
-            </button>
-          ))}
+        <div className="fixed bottom-4 right-4 z-40 flex flex-col items-end gap-2 sm:right-5">
+          {pickerOpen && (
+            <div aria-label="Send a reaction" className="flex gap-0.5 rounded-2xl border border-[#E8E5F4] bg-white/95 p-1.5 shadow-xl backdrop-blur">
+              {REACTIONS.map(reaction => (
+                <button key={reaction} type="button" disabled={sending} onClick={() => { void sendReaction(reaction) }} className="h-10 w-10 cursor-pointer rounded-xl text-xl transition hover:-translate-y-0.5 hover:bg-violet-50 active:scale-95 disabled:cursor-wait disabled:opacity-60" aria-label={`React ${reaction}`}>
+                  {reaction}
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            aria-label={pickerOpen ? 'Close reactions' : 'Open reactions'}
+            aria-expanded={pickerOpen}
+            onClick={() => setPickerOpen(open => !open)}
+            className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-full border border-[#DDD7F1] bg-white/95 text-xl shadow-lg transition hover:-translate-y-0.5 hover:bg-violet-50 active:scale-95"
+          >
+            {pickerOpen ? '×' : '😊'}
+          </button>
         </div>
       )}
     </>

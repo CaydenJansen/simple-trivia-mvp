@@ -318,7 +318,7 @@ create table if not exists public.game_reactions (
   game_id uuid not null references public.games(id) on delete cascade,
   team_id uuid not null references public.teams(id) on delete cascade,
   team_name text not null check (length(btrim(team_name)) > 0),
-  reaction text not null check (reaction in ('👍', '👎', '❤️', '😂', '😢', '😡')),
+  reaction text not null check (reaction in ('👍', '❤️', '🥰', '😂', '😮', '😢', '😡')),
   created_at timestamptz not null default now()
 );
 
@@ -1291,7 +1291,7 @@ declare
   team_row public.teams%rowtype;
   created public.game_reactions%rowtype;
 begin
-  if p_reaction not in ('👍', '👎', '❤️', '😂', '😢', '😡') then raise exception 'REACTION_INVALID'; end if;
+  if p_reaction not in ('👍', '❤️', '🥰', '😂', '😮', '😢', '😡') then raise exception 'REACTION_INVALID'; end if;
   select teams.* into team_row
   from public.team_join_requests
   join public.teams on teams.id = team_join_requests.team_id

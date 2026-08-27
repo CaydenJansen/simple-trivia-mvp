@@ -256,10 +256,12 @@ function useLivePlayerSync(
     const activeTeamId = teamId
 
     let active = true
+    let stateApplyVersion = 0
 
     async function applyGameState(gameState: RemoteGameState) {
+      const version = ++stateApplyVersion
       const next = await resolveLivePlayerScreen(activeGameId, activeTeamId, gameState)
-      if (active && next) setScreen(next)
+      if (active && version === stateApplyVersion && next) setScreen(next)
     }
 
     async function loadGameState() {
@@ -1040,7 +1042,11 @@ function useLeaderboardVisibility() {
     }
 
     void load()
-    return () => { active = false }
+    const channel = supabase
+      .channel(`player-leaderboard-visibility-${activeGameId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, () => { void load() })
+      .subscribe()
+    return () => { active = false; void supabase.removeChannel(channel) }
   }, [])
 
   return visibility
@@ -1061,7 +1067,11 @@ function useAnswerRevealMode() {
     }
 
     void load()
-    return () => { active = false }
+    const channel = supabase
+      .channel(`player-answer-reveal-${activeGameId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, () => { void load() })
+      .subscribe()
+    return () => { active = false; void supabase.removeChannel(channel) }
   }, [])
 
   return mode
@@ -2696,6 +2706,7 @@ type PlayerShowGame = {
   title: string
   settings: Json
   status: 'ready' | 'open' | 'exploded' | 'cancelled'
+  started_at: string | null
   winner_team_id: string | null
 }
 
@@ -2718,7 +2729,7 @@ function ShowGame() {
     if (!game?.current_show_game_key) return
     const { data: activeShowGame, error: showGameError } = await supabase
       .from('game_show_games')
-      .select('id, show_game_key, round_number, round_title, game_type, title, settings, status, winner_team_id')
+      .select('id, show_game_key, round_number, round_title, game_type, title, settings, status, started_at, winner_team_id')
       .eq('game_id', gameId)
       .eq('show_game_key', game.current_show_game_key)
       .maybeSingle()
@@ -2790,7 +2801,7 @@ function ShowGame() {
             <div className="mt-5"><WaitMsg msg="The host will start the game…" /></div>
           </div>
         ) : <>
-        {isWheel && <div className="mt-7"><TeamWheel teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} onSettled={handleWheelSettled} /></div>}
+        {isWheel && <div className="mt-7"><TeamWheel teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>}
         {!isWheel && <div className={`mt-7 text-8xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
         {showWheelOutcome ? (
           <div className="mt-7">
