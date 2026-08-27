@@ -36,6 +36,7 @@ import { showGameRewardDescription, showGameRewardFromSettings, showGameWinnerMe
 import { correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
 import { playersSeeCorrectnessPercentage } from "@/lib/trivia/correctness-visibility";
 import BrandWordmark from "@/components/BrandWordmark";
+import TeamWheel from "@/components/TeamWheel";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -1441,7 +1442,7 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   const [joinError, setJoinError] = useState<string | null>(null)
   const [joining, setJoining] = useState(false)
   const [gameTitle, setGameTitle] = useState('Trivia game')
-  const [approvalRequired, setApprovalRequired] = useState(true)
+  const [approvalRequired, setApprovalRequired] = useState(false)
 
   useEffect(() => {
     const storedTitle = localStorage.getItem('simple-trivia-game-title')
@@ -2629,15 +2630,16 @@ type PlayerShowGame = {
   show_game_key: string
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel'
   title: string
   settings: Json
   status: 'ready' | 'open' | 'exploded' | 'cancelled'
   winner_team_id: string | null
 }
 
-function BeatTheBomb() {
+function ShowGame() {
   const snapshot = usePlayerSnapshot()
+  const { teams: liveTeams } = useLiveLeaderboard()
   const [showGame, setShowGame] = useState<PlayerShowGame | null>(null)
   const [hasPressed, setHasPressed] = useState(false)
   const [pressing, setPressing] = useState(false)
@@ -2657,7 +2659,7 @@ function BeatTheBomb() {
       .maybeSingle()
     if (showGameError) { setError('Could not load the game.'); return }
     setShowGame(activeShowGame as PlayerShowGame | null)
-    if (activeShowGame) {
+    if (activeShowGame?.game_type === 'beat-the-bomb') {
       const { data: press } = await supabase.from('game_show_game_presses').select('id').eq('game_show_game_id', activeShowGame.id).eq('team_id', teamId).maybeSingle()
       setHasPressed(Boolean(press))
     }
@@ -2693,21 +2695,31 @@ function BeatTheBomb() {
   const exploded = showGame?.status === 'exploded'
   const won = exploded && showGame?.winner_team_id === teamId
   const reward = showGameRewardFromSettings(showGame?.settings)
+  const isWheel = showGame?.game_type === 'spin-the-wheel'
+  const eligibleIds = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings)
+    ? (showGame.settings as Record<string, Json>).eligible_team_ids
+    : null
+  const wheelTeamIds = Array.isArray(eligibleIds) ? eligibleIds.filter((id): id is string => typeof id === 'string') : []
+  const wheelTeams = liveTeams.filter(team => wheelTeamIds.length === 0 || wheelTeamIds.includes(team.id))
+  const wheelWinner = liveTeams.find(team => team.id === showGame?.winner_team_id) ?? null
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={showGame ? `Round ${showGame.round_number}` : ''} question="Game" />
       <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8 text-center">
-        <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-[0.18em]">Beat the Bomb</p>
-        <h1 style={{ color: C.ink }} className="mt-2 text-3xl font-black">{showGame?.title ?? 'Beat the Bomb'}</h1>
+        <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-[0.18em]">{isWheel ? 'Spin the Wheel' : 'Beat the Bomb'}</p>
+        <h1 style={{ color: C.ink }} className="mt-2 text-3xl font-black">{showGame?.title ?? (isWheel ? 'Spin the Wheel' : 'Beat the Bomb')}</h1>
         <p style={{ color: C.sub }} className="mt-3 max-w-sm text-base font-semibold">{showGameRewardDescription(reward)}</p>
-        <div className={`mt-7 text-8xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>
+        {isWheel && <div className="mt-7"><TeamWheel teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} /></div>}
+        {!isWheel && <div className={`mt-7 text-8xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
         {exploded ? (
           <div className="mt-7">
-            <h2 style={{ color: won ? C.go : C.ink }} className="text-3xl font-black">{won ? showGameWinnerMessage(reward) : 'The bomb exploded!'}</h2>
-            <p style={{ color: C.sub }} className="mt-3 text-base">{won ? 'You were the last team to press.' : 'Another team got the final press this time.'}</p>
+            <h2 style={{ color: won ? C.go : C.ink }} className="text-3xl font-black">{won ? showGameWinnerMessage(reward) : isWheel ? 'Another team was selected' : 'The bomb exploded!'}</h2>
+            <p style={{ color: C.sub }} className="mt-3 text-base">{won ? (isWheel ? 'The wheel landed on your team!' : 'You were the last team to press.') : (isWheel ? 'Better luck on the next spin.' : 'Another team got the final press this time.')}</p>
             <div className="mt-7"><WaitMsg msg="Waiting for the host to continue…" /></div>
           </div>
+        ) : isWheel ? (
+          <div className="mt-7"><h2 style={{ color: C.ink }} className="text-2xl font-black">The wheel is spinning…</h2><p style={{ color: C.sub }} className="mt-2">One team will be selected at random.</p></div>
         ) : hasPressed ? (
           <div className="mt-7">
             <div style={{ background: C.violetPale, color: C.violet }} className="mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl">✓</div>
@@ -3227,7 +3239,7 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
     case 'partial-correct':      return <PartialCorrect />
     case 'pending-review':       return <PendingReview />
     case 'content-screen':       return <ContentScreen />
-    case 'show-game':            return <BeatTheBomb />
+    case 'show-game':            return <ShowGame />
     case 'intermission':   return <Intermission />
     case 'question-results':      return <QuestionResults />
     case 'round-results':         return <RoundResults />

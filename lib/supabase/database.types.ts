@@ -970,6 +970,14 @@ export type Database = {
         Args: { p_game_show_game_id: string }
         Returns: LiveShowGameRow
       }
+      start_spin_the_wheel: {
+        Args: { p_game_show_game_id: string }
+        Returns: LiveShowGameRow
+      }
+      resolve_spin_the_wheel: {
+        Args: { p_game_show_game_id: string }
+        Returns: LiveShowGameRow
+      }
       finalize_question_scoring: {
         Args: {
           p_game_id: string
@@ -1226,7 +1234,7 @@ type ShowGameRow = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel'
   title: string
   settings: Json
   created_at: string
@@ -1238,7 +1246,7 @@ type ShowGameInsert = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel'
   title: string
   settings?: Json
   created_at?: string

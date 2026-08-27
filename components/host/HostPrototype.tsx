@@ -14,6 +14,7 @@ import { supabase } from "@/lib/supabase/client";
 import QuestionsArea from "@/components/host/QuestionsArea";
 import BuilderQuestionPicker, { type PickerSourceQuestion } from "@/components/host/BuilderQuestionPicker";
 import BrandWordmark from "@/components/BrandWordmark";
+import TeamWheel from "@/components/TeamWheel";
 import type { Database, Json, QuestionType } from "@/lib/supabase/database.types";
 import {
   asStringArray,
@@ -475,21 +476,21 @@ function TeamAdmissionList({
     >
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p style={{ color: dark ? C.liveText : C.ink }} className={`${compact ? 'text-xs' : 'text-sm'} font-extrabold`}>{showsApprovalToggle ? 'Approve teams before they join' : 'Pending approval'}</p>
-          {!compact && <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-0.5 text-xs">{showsApprovalToggle ? 'Review each team name before it appears in the game.' : 'Approve a team name before it enters the game.'}</p>}
+          <p style={{ color: dark ? C.liveText : C.ink }} className={`${compact ? 'text-xs' : 'text-sm'} font-extrabold`}>{showsApprovalToggle ? 'Auto-join' : 'Pending approval'}</p>
+          {!compact && <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-0.5 text-xs">{showsApprovalToggle ? (approvalRequired ? 'Review each team before they enter the game.' : 'Teams enter the game immediately.') : 'Review each team before they enter the game.'}</p>}
         </div>
         {showsApprovalToggle ? (
           <button
             type="button"
             role="switch"
-            aria-checked={approvalRequired}
-            aria-label="Approve teams before they join"
+            aria-checked={!approvalRequired}
+            aria-label="Auto-join teams"
             disabled={approvalBusy}
-            onClick={() => onApprovalRequiredChange(!approvalRequired)}
-            style={{ background: approvalRequired ? C.violet : C.line }}
+            onClick={() => onApprovalRequiredChange(approvalRequired)}
+            style={{ background: !approvalRequired ? C.violet : C.line }}
             className="relative h-7 w-12 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
           >
-            <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-all ${approvalRequired ? 'left-6' : 'left-1'}`} />
+            <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-all ${!approvalRequired ? 'left-6' : 'left-1'}`} />
           </button>
         ) : requests.length > 0 && (
           <span style={{ background: C.caution, color: '#18171F' }} className={`rounded-full font-black ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-xs'}`}>
@@ -500,7 +501,7 @@ function TeamAdmissionList({
 
       {approvalRequired === false && (
         <p style={{ color: dark ? C.liveDim : C.sub }} className="mt-3 rounded-xl border border-dashed border-current px-3 py-2.5 text-center text-xs">
-          Teams will enter automatically.
+          Auto-join is on.
         </p>
       )}
       {approvalRequired !== false && error && <p role="alert" style={{ color: C.stop }} className="mt-3 text-xs font-semibold">{error}</p>}
@@ -1418,7 +1419,7 @@ type BuilderShowGameData = {
   id: string
   showGameKey: string
   itemPosition: number
-  gameType: 'beat-the-bomb'
+  gameType: 'beat-the-bomb' | 'spin-the-wheel'
   title: string
   rewardType: ShowGameRewardType
   rewardPoints: number
@@ -1834,7 +1835,7 @@ function QuizBuilder({ go }: { go: Go }) {
           id: row.id,
           showGameKey: row.show_game_key,
           itemPosition: row.item_position,
-          gameType: row.game_type as 'beat-the-bomb',
+          gameType: row.game_type as BuilderShowGameData['gameType'],
           title: row.title,
           rewardType: reward.type,
           rewardPoints: reward.points,
@@ -3274,11 +3275,12 @@ function QuizPreview({ title, rounds, onClose }: {
               </div>
             ) : active.kind === 'show-game' ? (
               <div className="w-full max-w-2xl text-center">
-                <div className="text-8xl" aria-hidden="true">💣</div>
+                {active.showGame.gameType === 'spin-the-wheel'
+                  ? <TeamWheel dark teamNames={['Olivia Newton Trivia', 'The Blim Blams', 'Team Name', 'Dwayne “The Trivia” Johnson']} />
+                  : <div className="text-8xl" aria-hidden="true">💣</div>}
                 <h3 className="mt-5 text-4xl font-black">{active.showGame.title}</h3>
-                <p className="mx-auto mt-4 max-w-lg text-lg text-zinc-300">Press once. Be the last team to press before the bomb explodes.</p>
-                <div className="mx-auto mt-7 max-w-xs rounded-2xl bg-violet-600 px-8 py-4 text-xl font-black">PRESS ME</div>
-                <p className="mt-4 text-sm text-zinc-400">Random 10–30 second fuse</p>
+                <p className="mx-auto mt-4 max-w-lg text-lg text-zinc-300">{active.showGame.gameType === 'spin-the-wheel' ? 'Every team goes on the wheel. One winner is selected at random.' : 'Press once. Be the last team to press before the bomb explodes.'}</p>
+                {active.showGame.gameType === 'beat-the-bomb' && <><div className="mx-auto mt-7 max-w-xs rounded-2xl bg-violet-600 px-8 py-4 text-xl font-black">PRESS ME</div><p className="mt-4 text-sm text-zinc-400">Random 10–30 second fuse</p></>}
                 <p className="mx-auto mt-3 max-w-lg rounded-xl border border-violet-300/20 bg-violet-300/10 px-4 py-3 text-sm font-bold text-violet-100">
                   {showGameRewardDescription({
                     type: active.showGame.rewardType,
@@ -3676,10 +3678,10 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
           <div className="mb-1.5 flex items-center gap-2">
             <span style={{ background: C.violet, color: 'white' }} className="rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest">Game</span>
             <span style={{ color: C.sub }} className="text-[10px]">
-              Random chance · {showGame.rewardType === 'points' ? `${showGame.rewardPoints} bonus ${showGame.rewardPoints === 1 ? 'point' : 'points'}` : 'Custom prize'}
+              {showGame.gameType === 'spin-the-wheel' ? 'Random team draw' : 'Random chance'} · {showGame.rewardType === 'points' ? `${showGame.rewardPoints} bonus ${showGame.rewardPoints === 1 ? 'point' : 'points'}` : 'Custom prize'}
             </span>
           </div>
-          <p style={{ color: C.ink }} className="truncate text-sm font-semibold group-hover:text-violet">💣 {showGame.title}</p>
+          <p style={{ color: C.ink }} className="truncate text-sm font-semibold group-hover:text-violet">{showGame.gameType === 'spin-the-wheel' ? '🎡' : '💣'} {showGame.title}</p>
         </div>
         <div onClick={event => event.stopPropagation()}><IBtn icon={<I.trash />} title="Delete game" onClick={onDelete} danger /></div>
       </div>
@@ -3687,7 +3689,18 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
         <div style={{ borderTop: `1px solid ${C.violet}30` }} className="space-y-3 px-4 pb-4 pt-3">
           <div>
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Game</label>
-            <div style={{ border: `1px solid ${C.line}`, background: C.panel, color: C.ink }} className="rounded-xl px-3 py-2 text-sm font-bold">Beat the Bomb</div>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                { type: 'beat-the-bomb' as const, label: '💣 Beat the Bomb' },
+                { type: 'spin-the-wheel' as const, label: '🎡 Spin the Wheel' },
+              ]).map(option => (
+                <button key={option.type} type="button" onClick={() => onChange({ gameType: option.type, title: option.type === 'spin-the-wheel' ? 'Spin the Wheel' : 'Beat the Bomb' })}
+                  style={{ border: `1px solid ${showGame.gameType === option.type ? C.violet : C.line}`, background: showGame.gameType === option.type ? C.violetMist : 'white', color: showGame.gameType === option.type ? C.violet : C.ink }}
+                  className="cursor-pointer rounded-xl px-3 py-2 text-sm font-bold">
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
           <div>
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Title</label>
@@ -3731,7 +3744,9 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
                 style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full resize-none rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
             </div>
           )}
-          <p style={{ color: C.sub }} className="text-xs leading-5">Each team presses once. The fuse lasts a random 10–30 seconds, and the last team to press before it explodes wins.</p>
+          <p style={{ color: C.sub }} className="text-xs leading-5">{showGame.gameType === 'spin-the-wheel'
+            ? 'Every team in the game is placed on one large wheel. The wheel spins and randomly selects one winner.'
+            : 'Each team presses once. The fuse lasts a random 10–30 seconds, and the last team to press before it explodes wins.'}</p>
           <div className="flex justify-end"><button onClick={() => setExpanded(false)} style={{ color: C.violet }} className="text-xs font-semibold">Done</button></div>
         </div>
       )}
@@ -5184,7 +5199,7 @@ function HostSetup({ go }: { go: Go }) {
             answer_reveal: reveal,
             leaderboard_visibility: lb,
             auto_run_mode: autoRunMode,
-            team_approval_required: true,
+            team_approval_required: false,
             player_score_visibility: scoreVisibility,
             scores_visible_to_players: scoreVisibility === 'live',
             show_correctness_percentage_to_players: showCorrectnessPercentage,
@@ -5440,7 +5455,7 @@ function Lobby({ go }: { go: Go }) {
   const [startError, setStartError] = useState<string | null>(null)
   const [lobbyGameId, setLobbyGameId] = useState<string | null>(null)
   const [lobbySettings, setLobbySettings] = useState<Record<string, Json>>({})
-  const [approvalRequired, setApprovalRequired] = useState(true)
+  const [approvalRequired, setApprovalRequired] = useState(false)
   const [approvalBusy, setApprovalBusy] = useState(false)
 
   async function handleApprovalRequiredChange(required: boolean) {
@@ -5788,7 +5803,7 @@ type LiveShowGameDefinition = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel'
   title: string
   settings: Json
   status: 'ready' | 'open' | 'exploded' | 'cancelled'
@@ -5808,6 +5823,12 @@ function liveSequenceItems(questions: LiveQuestionDefinition[], contentScreens: 
     ...contentScreens.map(content => ({ kind: 'content' as const, itemPosition: content.item_position, roundNumber: content.round_number, content })),
     ...showGames.map(showGame => ({ kind: 'show-game' as const, itemPosition: showGame.item_position, roundNumber: showGame.round_number, showGame })),
   ].sort((a, b) => a.itemPosition - b.itemPosition)
+}
+
+function showGameEligibleTeamIds(settings: Json | undefined) {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return []
+  const value = (settings as Record<string, Json>).eligible_team_ids
+  return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
 }
 
 type HostQuestionDetail = {
@@ -5953,6 +5974,10 @@ function LiveQuestion({ go }: { go: Go }) {
   const [showGamePresses, setShowGamePresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [showGameNow, setShowGameNow] = useState(() => Date.now())
   const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
+  const [playerScoreVisibility, setPlayerScoreVisibility] = useState<PlayerScoreVisibility>('live')
+  const [showCorrectnessPercentage, setShowCorrectnessPercentage] = useState(false)
+  const [approvalRequired, setApprovalRequired] = useState(false)
+  const [settingsBusy, setSettingsBusy] = useState(false)
   const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
   const [autoRunOperating, setAutoRunOperating] = useState(false)
@@ -5990,6 +6015,9 @@ function LiveQuestion({ go }: { go: Go }) {
         : {}
       setGameScreen(game.current_screen ?? '')
       setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
+      setPlayerScoreVisibility(playerScoreVisibilityFromSettings(game.settings))
+      setShowCorrectnessPercentage(liveGameSettingsRef.current.show_correctness_percentage_to_players === true)
+      setApprovalRequired(teamApprovalRequiredFromSettings(game.settings))
       setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
       const configuredAutoRun = autoRunModeFromSettings(game.settings)
       setAutoRunMode(configuredAutoRun)
@@ -6146,11 +6174,12 @@ function LiveQuestion({ go }: { go: Go }) {
     const interval = window.setInterval(() => setShowGameNow(Date.now()), 100)
     const delay = Math.max(0, new Date(activeShowGameExplodeAt).getTime() - Date.now())
     const timeout = window.setTimeout(() => {
-      void supabase.rpc('resolve_beat_the_bomb', { p_game_show_game_id: activeShowGameId })
-        .then(({ error }) => { if (error) console.error('Could not resolve Beat the Bomb:', error) })
+      const rpc = showGame?.game_type === 'spin-the-wheel' ? 'resolve_spin_the_wheel' : 'resolve_beat_the_bomb'
+      void supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId })
+        .then(({ error }) => { if (error) console.error('Could not resolve show game:', error) })
     }, delay + 50)
     return () => { window.clearInterval(interval); window.clearTimeout(timeout) }
-  }, [activeShowGameExplodeAt, activeShowGameId, activeShowGameStatus])
+  }, [activeShowGameExplodeAt, activeShowGameId, activeShowGameStatus, showGame?.game_type])
 
   async function openShowGame(nextShowGame: LiveShowGameDefinition) {
     await updateLiveGame({
@@ -6160,7 +6189,8 @@ function LiveQuestion({ go }: { go: Go }) {
       current_content_screen_key: null,
       current_show_game_key: nextShowGame.show_game_key,
     })
-    const { data, error } = await supabase.rpc('start_beat_the_bomb', { p_game_show_game_id: nextShowGame.id })
+    const rpc = nextShowGame.game_type === 'spin-the-wheel' ? 'start_spin_the_wheel' : 'start_beat_the_bomb'
+    const { data, error } = await supabase.rpc(rpc, { p_game_show_game_id: nextShowGame.id })
     if (error) throw error
     setShowGame(data as LiveShowGameDefinition)
     setShowGamePresses([])
@@ -6901,7 +6931,92 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allActivePlayersLocked, autoRunMode, autoRunOperating])
 
+  async function updateLiveSettings(patch: Record<string, Json>) {
+    if (!liveGameId || settingsBusy) return false
+    setSettingsBusy(true)
+    setLiveError(null)
+    const settings: Record<string, Json> = { ...liveGameSettingsRef.current, ...patch }
+    const { error } = await supabase.from('games').update({ settings }).eq('id', liveGameId)
+    if (error) {
+      console.error('Could not update live settings:', error)
+      setLiveError('Could not update the live settings. Please try again.')
+      setSettingsBusy(false)
+      return false
+    }
+    liveGameSettingsRef.current = settings
+    setSettingsBusy(false)
+    return true
+  }
+
+  async function setLiveAutoJoin(enabled: boolean) {
+    if (!await updateLiveSettings({ team_approval_required: !enabled })) return
+    setApprovalRequired(!enabled)
+    if (!enabled || !liveGameId) return
+    const { data: pending } = await supabase.from('team_join_requests').select('id').eq('game_id', liveGameId).eq('status', 'pending')
+    for (const request of pending ?? []) {
+      const { error } = await supabase.rpc('decide_team_join_request', { p_request_id: request.id, p_decision: 'approved' })
+      if (error) console.error('Could not auto-admit waiting team:', error)
+    }
+  }
+
+  async function setLiveAutoRun(enabled: boolean) {
+    const nextMode: AutoRunMode = enabled ? 'round' : 'off'
+    if (!await updateLiveSettings({ auto_run_mode: nextMode, auto_run_clock: null })) return
+    setAutoRunMode(nextMode)
+    setAutoRunOperating(enabled)
+    setAutoRunPaused(false)
+    setAutoRunRemaining(autoRunTimer.seconds)
+    autoRunPublishedKeyRef.current = ''
+  }
+
   const autoRunClockTone = autoRunClockColor(autoRunRemaining)
+  const liveSettingsMenu = (
+    <div className="relative">
+      <button onClick={() => setEmergency(value => !value)}
+        style={{ border: `1px solid ${C.liveLine}`, color: C.liveDim }}
+        className="flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors hover:border-violet-400 hover:text-white">
+        Settings
+      </button>
+      {emergency && (
+        <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, right: 0, top: '100%', marginTop: 6, width: 340, zIndex: 60 }} className="absolute max-h-[calc(100dvh-72px)] space-y-3 overflow-y-auto rounded-xl p-4 text-left shadow-2xl">
+          <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Live game settings</p>
+          <label className="block text-xs font-bold" style={{ color: C.liveText }}>Player scores
+            <select value={playerScoreVisibility} disabled={settingsBusy} onChange={event => {
+              const value = event.target.value as PlayerScoreVisibility
+              setPlayerScoreVisibility(value)
+              void updateLiveSettings({ player_score_visibility: value, scores_visible_to_players: value === 'live' })
+            }} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-1.5 w-full cursor-pointer rounded-lg px-3 py-2 text-sm">
+              <option value="live">Show live</option><option value="round">After each round</option><option value="final">Final results only</option><option value="hidden">Hide scores</option>
+            </select>
+          </label>
+          <label className="block text-xs font-bold" style={{ color: C.liveText }}>Leaderboards
+            <select value={leaderboardVisibility} disabled={settingsBusy} onChange={event => {
+              const value = event.target.value as LeaderboardVisibility
+              setLeaderboardVisibility(value)
+              void updateLiveSettings({ leaderboard_visibility: value })
+            }} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-1.5 w-full cursor-pointer rounded-lg px-3 py-2 text-sm">
+              <option value="question">After every question</option><option value="round">After each round</option><option value="final">Final results only</option><option value="host">Host only</option>
+            </select>
+          </label>
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-sm font-bold" style={{ color: C.liveText }}>
+            <span>Show % correct to players</span><input type="checkbox" checked={showCorrectnessPercentage} disabled={settingsBusy} onChange={event => { const checked = event.target.checked; setShowCorrectnessPercentage(checked); void updateLiveSettings({ show_correctness_percentage_to_players: checked }) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
+          </label>
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-sm font-bold" style={{ color: C.liveText }}>
+            <span>Auto-join</span><input type="checkbox" checked={!approvalRequired} disabled={settingsBusy} onChange={event => { void setLiveAutoJoin(event.target.checked) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
+          </label>
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-sm font-bold" style={{ color: C.liveText }}>
+            <span>Auto-Run</span><input type="checkbox" checked={autoRunMode === 'round'} disabled={settingsBusy} onChange={event => { void setLiveAutoRun(event.target.checked) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
+          </label>
+          {approvalRequired && <p style={{ color: C.liveDim }} className="text-xs">Review each team before they enter the game.</p>}
+          {autoRunMode === 'round' && playerScoreVisibility === 'live' && <p style={{ color: C.caution }} className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold">Auto-Run holds points until the round review. We recommend “After each round” for player scores.</p>}
+          <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="pt-2">
+            <button onClick={() => exitHostSession(go)} style={{ color: C.liveText }} className="w-full cursor-pointer rounded-lg px-3 py-2 text-left text-sm font-semibold hover:bg-white/5">Exit to My Quizzes<span style={{ color: C.liveDim }} className="mt-0.5 block text-[10px]">Game keeps running</span></button>
+            <CancelGameButton go={go} dark className="w-full" description="Ends the game for everyone" />
+          </div>
+        </div>
+      )}
+    </div>
+  )
   const autoRunControls = autoRunMode === 'round' ? (
     <section style={{ background: C.livePanel, borderBottom: `1px solid ${C.liveLine}` }} className="sticky top-[52px] z-30 flex flex-wrap items-center justify-center gap-3 px-5 py-2.5 shadow-lg">
       <span style={{ color: autoRunOperating && !autoRunPaused ? '#C4B5FD' : C.caution }} className="text-xs font-black uppercase tracking-wider">
@@ -6947,6 +7062,9 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
   if (gameScreen === 'show-game') {
     const winner = teams.find(team => team.id === showGame?.winner_team_id) ?? null
+    const isWheel = showGame?.game_type === 'spin-the-wheel'
+    const eligibleIds = showGameEligibleTeamIds(showGame?.settings)
+    const wheelTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : teams
     const pressedTeamIds = new Set(showGamePresses.map(press => press.team_id))
     const startedAt = showGame?.started_at ? new Date(showGame.started_at).getTime() : showGameNow
     const explodeAt = showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow
@@ -6956,34 +7074,36 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }} className="sticky top-0 z-40 flex items-center gap-4 px-6">
           <BrandWordmark dark compact className="text-sm" />
           <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>Round {showGame?.round_number ?? 1} · Game</div>
-          <JoinCodeButton dark /><CancelGameButton go={go} dark />
+          <JoinCodeButton dark />{liveSettingsMenu}
           <span style={{ background: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">GAME LIVE</span>
         </header>
         <main className="flex flex-1 items-center justify-center px-6 py-10">
           <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-8 text-center shadow-2xl">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300">Beat the Bomb</p>
-            <h1 className="mt-2 text-5xl font-black">{showGame?.title ?? 'Beat the Bomb'}</h1>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{isWheel ? 'Spin the Wheel' : 'Beat the Bomb'}</p>
+            <h1 className="mt-2 text-5xl font-black">{showGame?.title ?? (isWheel ? 'Spin the Wheel' : 'Beat the Bomb')}</h1>
             <p style={{ color: C.liveDim }} className="mx-auto mt-4 max-w-xl text-lg font-semibold">
               {showGameRewardDescription(activeShowGameReward)}
             </p>
-            <div className={`mt-7 text-9xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
-            <div style={{ background: C.liveLine }} className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full">
-              <div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" />
-            </div>
+            {isWheel ? (
+              <div className="mt-7"><TeamWheel dark teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} /></div>
+            ) : (
+              <><div className={`mt-7 text-9xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
+              <div style={{ background: C.liveLine }} className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full"><div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" /></div></>
+            )}
             {showGame?.status === 'exploded' ? (
               <div className="mt-7">
                 <p className="text-sm font-bold uppercase tracking-widest text-violet-300">Winner</p>
                 <p className="mt-2 text-4xl font-black text-emerald-400">{winner?.name ?? '—'}</p>
               </div>
             ) : (
-              <p style={{ color: C.liveDim }} className="mt-6 text-lg">Fuse burning… {showGamePresses.length} of {teams.length} teams have pressed.</p>
+              <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isWheel ? `Spinning across ${wheelTeams.length} teams…` : `Fuse burning… ${showGamePresses.length} of ${teams.length} teams have pressed.`}</p>
             )}
-            <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
+            {!isWheel && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
               {teams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
-            </div>
+            </div>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
             <button data-host-navigation="forward" onClick={handleAdvanceShowGame} disabled={actionBusy || showGame?.status !== 'exploded'} style={{ background: C.violet }} className="mx-auto mt-8 rounded-2xl px-10 py-5 text-xl font-extrabold text-white disabled:opacity-35">
-              {showGame?.status === 'exploded' ? 'Continue →' : 'Waiting for the bomb…'}
+              {showGame?.status === 'exploded' ? 'Continue →' : isWheel ? 'Wheel spinning…' : 'Waiting for the bomb…'}
             </button>
           </section>
         </main>
@@ -7011,7 +7131,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             Round {contentScreen?.round_number ?? question?.round_number ?? 1} · {contentScreen?.round_title ?? question?.round_title ?? 'Content Screen'}
           </div>
           <JoinCodeButton dark />
-          <CancelGameButton go={go} dark />
+          {liveSettingsMenu}
           <span style={{ background: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">CONTENT SCREEN LIVE</span>
         </header>
         {autoRunControls}
@@ -7072,30 +7192,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <JoinCodeButton dark />
-          <div className="relative">
-            <button onClick={() => setEmergency(e => !e)}
-              style={{ border: `1px solid ${C.liveLine}`, color: C.liveDim }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold hover:border-caution hover:text-caution transition-colors">
-              Controls
-            </button>
-            {emergency && (
-              <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, right: 0, top: '100%', marginTop: 6, width: 240, zIndex: 50 }}
-                className="absolute rounded-xl shadow-2xl p-2 space-y-0.5">
-                <div className="pt-1">
-                  <p style={{ color: C.liveDim }} className="px-2 pb-1 pt-1 text-[10px] font-bold uppercase tracking-widest">Leave this session</p>
-                  <button
-                    onClick={() => exitHostSession(go)}
-                    style={{ color: C.liveText }}
-                    className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold hover:bg-live-surface hover:text-white transition-colors text-left"
-                  >
-                    <span className="block">Exit to My Quizzes</span>
-                    <span style={{ color: C.liveDim }} className="mt-0.5 block text-[10px] font-medium">Game keeps running</span>
-                  </button>
-                  <CancelGameButton go={go} dark className="w-full" description="Ends the game for everyone" />
-                </div>
-              </div>
-            )}
-          </div>
+          {liveSettingsMenu}
           <span style={{ background: '#DC2626' }} className="w-2 h-2 rounded-full animate-pulse" />
           <span style={{ color: C.liveDim }} className="text-xs font-semibold">LIVE</span>
         </div>

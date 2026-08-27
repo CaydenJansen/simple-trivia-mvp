@@ -24,7 +24,7 @@
 - Auto-Build draws from platform-owned `source_questions` and `source_tiebreakers`, then creates independent quiz snapshots through the same atomic save boundary as manual authoring.
 - Supabase is the source of truth for live game state. Do not replace working database or Realtime behaviour with fake local state.
 - Players follow host progression automatically; players do not advance questions themselves.
-- Auto-Run is a pre-game rule, not a mid-game configuration toggle. MVP Auto-Run advances only the current round and always stops at a host-controlled round checkpoint.
+- Auto-Run may be enabled or disabled before play or during a live game. It advances only the current round and always stops at a host-controlled round checkpoint; when enabling it live, warn if player scores are set to show provisionally.
 - On player answer-entry screens, Return submits a valid current answer. Shift+Return remains available for a newline in multi-line text fields.
 - Correct answers must not be exposed to players before reveal.
 - Content authored by a host must remain distinct from live session data.
@@ -66,7 +66,7 @@
 - Multi-part Parts and Bonuses inherit parent category, difficulty, audience, and locality when their override is absent. Part tags are additive. Blank Bonus tags inherit; populated Bonus tags replace, and replacement intent must survive even while every supplied tag is unresolved.
 - Effective package Adult Content is true when any content shown to players is adult. Any country-specific child makes the package not fully international-friendly.
 - Prevent duplicate team names within a game.
-- Team-name approval is enabled by default for every new game. The host may disable it from the lobby; then new and already-waiting teams enter automatically. When approval is enabled, keep pending/denied requests out of teams, scoring, submissions, leaderboards, and joined-team counts.
+- Auto-join is enabled by default for every new game. The host may disable it before or during play to review each team before entry; when re-enabled, new and already-waiting teams enter automatically. Keep pending/denied requests out of teams, scoring, submissions, leaderboards, and joined-team counts.
 - During live play, pending team requests appear in a separate approval panel beside the host leaderboard. Keep approval controls out of the QR/join-code dialog so that dialog remains compact and easy to dismiss on short screens.
 - Player-facing denial copy stays neutral and does not assume why the host denied entry; the host handles any explanation in the room.
 - Games accept new zero-score teams while they are in the lobby or actively running, subject to the game’s approval setting. Finished and cancelled games are never joinable.
@@ -84,7 +84,7 @@
 - Explicit round themes discount their own broad category/tag repetition, but not repeated specific subtopics. Check whole-quiz saturation as well as adjacent repetition.
 - Tiebreakers are numeric closest-answer questions used only to resolve a consequential final-placement tie. Normal round and in-game ties are allowed.
 - Show games are ordered, reusable show modules that remain separate from ordinary questions, content screens, bonuses, and tiebreakers. New game types extend the show-game model rather than adding one-off columns to questions.
-- Beat the Bomb is a random-chance interlude: each team can press once, the server chooses a 10–30 second fuse, the bomb cannot resolve before the first press, all teams pressing resolves immediately, and the latest server-timestamped press wins. Its frozen reward is either bonus points applied exactly once to the winner's score or a custom prize that never alters score; show the configured reward before play and custom winner copy only to the winning team.
+- Beat the Bomb is a random-chance interlude: each team can press once, the server chooses a 10–30 second fuse, the bomb cannot resolve before the first press, all teams pressing resolves immediately, and the latest server-timestamped press wins. Spin the Wheel freezes all joined teams when it starts, animates one shared draw, and selects exactly one of those teams at random. Both use the same frozen reward model: either bonus points applied exactly once to the winner's score or a custom prize that never alters score; show the configured reward before play and custom winner copy only to the winning team.
 - Do not include tiebreakers in normal question counts, running-time estimates, or game points. Resolving a tie must never change a team's trivia score.
 - Tiebreaker resolution choices require an explicit host selection and confirmation. Player numeric submissions lock immediately after submission and cannot be edited.
 - Calculate tiebreaker distance as each answer is submitted so the host can see the current closest team live. Keep distances and outcomes hidden from players until reveal; the revealed player screen shows whether they won, lost, or remain tied together with the correct answer, their submitted answer, and its distance from correct.
@@ -96,7 +96,7 @@
 - Review-required answers sort first, then graded submissions, then waiting teams. Keep ordering stable within each group.
 - Leaderboard visibility rules must not leak prohibited team names, scores, or ranks. A team sees point totals only when the host enables player score visibility; this setting is independent from leaderboard visibility.
 - Hosts always see a prominent correct-answer percentage after grading. Player result screens show it only when the host enabled the pre-game setting, and never before answer reveal.
-- Player score visibility is fixed before play as `live`, `round`, `final`, or `hidden`. Auto-Run defaults to round-finalized scores. Never expose provisional in-round scores when round-finalized visibility is selected.
+- Player score visibility can be changed live between `live`, `round`, `final`, or `hidden`. Auto-Run defaults to round-finalized scores. Never expose provisional in-round scores when round-finalized visibility is selected.
 - Auto-Run timing is workload-based: 30 seconds for the first point and 15 seconds for each additional point. Ranking starts at 30 seconds and adds 5 seconds per additional item. When every active team has locked the current answer stage, reduce any longer countdown to 5 seconds. Content screens default to 30 seconds. Answer reveals last 5 seconds plus 2 seconds per additional revealed answer, capped at 10 seconds.
 - Keep the synchronized Auto-Run clock visible to hosts and players. It is purple normally, orange at 10 seconds or less, and red at 5 seconds or less. Host Auto-Run controls remain pinned below the live header while the page scrolls.
 - Auto-Run must preserve host intervention: pause/resume preserves remaining time, +15 seconds extends the current state, Close Now closes safely, and manual control stops progression without changing pre-game rules.
@@ -175,7 +175,7 @@ Preserve and verify:
 
 - Supabase game-code lookup.
 - Fresh six-digit game creation.
-- Default-on host approval/denial before team creation, optional automatic entry, neutral denied-player recovery, and live-game late joins.
+- Default-on Auto-join, optional host approval/denial before team creation, neutral denied-player recovery, and live-game late joins.
 - Team creation and duplicate-name prevention.
 - Realtime teams appearing in the host lobby.
 - Host start automatically advancing player screens.
