@@ -92,6 +92,7 @@
 - Never expose a prepared tiebreaker's correct numeric value to players before the relevant tiebreaker reveal.
 - The host must be able to reopen answers after closing them but before reveal.
 - Reopening answers must return submitted teams to an editable form with their previous response preserved; resubmission replaces the existing response rather than creating a duplicate.
+- Before hosting, the host chooses whether a submission locks immediately or remains editable until answers close. While an answer stage is still open, the host can temporarily allow or stop submitted-answer editing without closing the stage. Enforce this on the server as well as in the player UI.
 - Do not add post-reveal undo without safely reversing awarded points.
 - Review-required answers sort first, then graded submissions, then waiting teams. Keep ordering stable within each group.
 - Leaderboard visibility rules must not leak prohibited team names, scores, or ranks. A team sees point totals only when the host enables player score visibility; this setting is independent from leaderboard visibility.

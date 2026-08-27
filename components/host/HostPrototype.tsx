@@ -101,6 +101,7 @@ import {
 import { playerScoreVisibilityFromSettings, type PlayerScoreVisibility } from "@/lib/trivia/score-visibility";
 import { teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { quizExitPrompt } from "@/lib/trivia/quiz-exit";
+import { submittedAnswersEditableFromSettings } from "@/lib/trivia/answer-editing";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -5175,6 +5176,7 @@ function HostSetup({ go }: { go: Go }) {
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
   const [scoreVisibility, setScoreVisibility] = useState<PlayerScoreVisibility>('live')
   const [showCorrectnessPercentage, setShowCorrectnessPercentage] = useState(false)
+  const [submittedAnswersEditable, setSubmittedAnswersEditable] = useState(false)
   type PrizePlace = { enabled: boolean; msg: string }
   const topPlaces = ['1st', '2nd', '3rd']
   const bottomPlaces = ['Last', '2nd Last', '3rd Last']
@@ -5244,6 +5246,7 @@ function HostSetup({ go }: { go: Go }) {
             player_score_visibility: scoreVisibility,
             scores_visible_to_players: scoreVisibility === 'live',
             show_correctness_percentage_to_players: showCorrectnessPercentage,
+            submitted_answers_editable: submittedAnswersEditable,
             top_prizes: topPrizes,
             bottom_prizes: botPrizes,
           },
@@ -5400,6 +5403,28 @@ function HostSetup({ go }: { go: Go }) {
                 className="h-5 w-5"
               />
             </label>
+          </SCard>
+
+          <SCard title="Submitted Answers">
+            <p style={{ color: C.sub }} className="mb-3 text-xs leading-5">
+              Choose whether submitting locks an answer immediately or teams can keep updating it until you close answers.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { editable: false, label: 'Lock after submission' },
+                { editable: true, label: 'Allow changes until closed' },
+              ].map(option => (
+                <button key={option.label} type="button" onClick={() => setSubmittedAnswersEditable(option.editable)}
+                  style={{
+                    border: `1.5px solid ${submittedAnswersEditable === option.editable ? C.violet : C.line}`,
+                    background: submittedAnswersEditable === option.editable ? C.violetMist : 'white',
+                    color: submittedAnswersEditable === option.editable ? C.violet : C.sub,
+                  }}
+                  className="rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-all">
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </SCard>
 
           {/* Prizes */}
@@ -5591,7 +5616,7 @@ function Lobby({ go }: { go: Go }) {
         status: 'live',
         current_screen: 'round-start',
         answer_phase: 'open',
-        answer_editing_allowed: false,
+        answer_editing_allowed: submittedAnswersEditableFromSettings(lobbySettings),
         current_question_key: firstQuestion.question_key,
         current_content_screen_key: null,
       })
@@ -5999,6 +6024,7 @@ function ReviewBadge({
 }
 function LiveQuestion({ go }: { go: Go }) {
   const [phase, setPhase] = useState<'open' | 'closed' | 'revealed'>('open')
+  const [answerEditingAllowed, setAnswerEditingAllowed] = useState(false)
   const [questionStage, setQuestionStage] = useState<'core' | 'bonus'>('core')
   const [gameScreen, setGameScreen] = useState('round-start')
   const [emergency, setEmergency] = useState(false)
@@ -6040,7 +6066,7 @@ function LiveQuestion({ go }: { go: Go }) {
     async function loadLiveData() {
       const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('id, answer_phase, question_stage, current_question_key, current_content_screen_key, current_show_game_key, current_screen, settings')
+        .select('id, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key, current_screen, settings')
         .eq('code', getHostGameCode())
         .maybeSingle()
 
@@ -6069,6 +6095,7 @@ function LiveQuestion({ go }: { go: Go }) {
         setAutoRunOperating(configuredAutoRun === 'round')
       }
       setQuestionStage(game.question_stage === 'bonus' ? 'bonus' : 'core')
+      setAnswerEditingAllowed(game.answer_editing_allowed)
 
       if (game.answer_phase === 'open' || game.answer_phase === 'closed' || game.answer_phase === 'revealed') {
         setPhase(game.answer_phase)
@@ -6274,7 +6301,7 @@ function LiveQuestion({ go }: { go: Go }) {
         status: 'live',
         current_screen: openingQuestion.question_type,
         answer_phase: 'open',
-        answer_editing_allowed: false,
+        answer_editing_allowed: submittedAnswersEditableFromSettings(liveGameSettingsRef.current),
         question_stage: 'core',
         current_question_key: openingQuestion.question_key,
         current_content_screen_key: null,
@@ -6283,6 +6310,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setQuestion(openingQuestion)
       setGameScreen(openingQuestion.question_type)
       setPhase('open')
+      setAnswerEditingAllowed(submittedAnswersEditableFromSettings(liveGameSettingsRef.current))
       setQuestionStage('core')
     } catch (error) {
       console.error('Could not open question:', error)
@@ -6319,7 +6347,7 @@ function LiveQuestion({ go }: { go: Go }) {
 
     const { error } = await supabase
       .from('games')
-      .update({ question_stage: 'bonus', answer_phase: 'open', answer_editing_allowed: false })
+      .update({ question_stage: 'bonus', answer_phase: 'open', answer_editing_allowed: submittedAnswersEditableFromSettings(liveGameSettingsRef.current) })
       .eq('id', liveGameId)
 
     if (error) {
@@ -6328,6 +6356,7 @@ function LiveQuestion({ go }: { go: Go }) {
     } else {
       setQuestionStage('bonus')
       setPhase('open')
+      setAnswerEditingAllowed(submittedAnswersEditableFromSettings(liveGameSettingsRef.current))
     }
 
     setActionBusy(false)
@@ -6348,6 +6377,27 @@ function LiveQuestion({ go }: { go: Go }) {
       setLiveError('Could not reopen answers. Please try again.')
     } else {
       setPhase('open')
+      setAnswerEditingAllowed(true)
+    }
+
+    setActionBusy(false)
+  }
+
+  async function handleAnswerEditingChange(allowed: boolean) {
+    if (!liveGameId || actionBusy || phase !== 'open') return
+    setActionBusy(true)
+    setLiveError(null)
+
+    const { error } = await supabase
+      .from('games')
+      .update({ answer_editing_allowed: allowed })
+      .eq('id', liveGameId)
+
+    if (error) {
+      console.error('Could not update answer editing:', error)
+      setLiveError('Could not update answer editing. Please try again.')
+    } else {
+      setAnswerEditingAllowed(allowed)
     }
 
     setActionBusy(false)
@@ -6569,13 +6619,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
         answer_phase: 'open',
-        answer_editing_allowed: false,
+        answer_editing_allowed: submittedAnswersEditableFromSettings(liveGameSettingsRef.current),
         question_stage: 'core',
         current_question_key: nextItem.question.question_key,
         current_content_screen_key: null,
       })
       setQuestion(nextItem.question)
       setPhase('open')
+      setAnswerEditingAllowed(submittedAnswersEditableFromSettings(liveGameSettingsRef.current))
       setQuestionStage('core')
       setGameScreen(nextItem.question.question_type)
       setSubmissions([])
@@ -6655,13 +6706,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
         answer_phase: 'open',
-        answer_editing_allowed: false,
+        answer_editing_allowed: submittedAnswersEditableFromSettings(liveGameSettingsRef.current),
         question_stage: 'core',
         current_question_key: nextItem.question.question_key,
         current_content_screen_key: null,
       })
       setQuestion(nextItem.question)
       setPhase('open')
+      setAnswerEditingAllowed(submittedAnswersEditableFromSettings(liveGameSettingsRef.current))
       setQuestionStage('core')
       setGameScreen(nextItem.question.question_type)
       setSubmissions([])
@@ -6744,7 +6796,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
         answer_phase: 'open',
-        answer_editing_allowed: false,
+        answer_editing_allowed: submittedAnswersEditableFromSettings(liveGameSettingsRef.current),
         question_stage: 'core',
         current_question_key: nextItem.question.question_key,
         current_content_screen_key: null,
@@ -6752,6 +6804,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       setQuestion(nextItem.question)
       setContentScreen(null)
       setPhase('open')
+      setAnswerEditingAllowed(submittedAnswersEditableFromSettings(liveGameSettingsRef.current))
       setQuestionStage('core')
       setGameScreen(nextItem.question.question_type)
       setSubmissions([])
@@ -6801,7 +6854,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
         answer_phase: 'open',
-        answer_editing_allowed: false,
+        answer_editing_allowed: submittedAnswersEditableFromSettings(liveGameSettingsRef.current),
         question_stage: 'core',
         current_question_key: nextItem.question.question_key,
         current_content_screen_key: null,
@@ -6810,6 +6863,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       setQuestion(nextItem.question)
       setShowGame(null)
       setPhase('open')
+      setAnswerEditingAllowed(submittedAnswersEditableFromSettings(liveGameSettingsRef.current))
       setQuestionStage('core')
       setGameScreen(nextItem.question.question_type)
       setSubmissions([])
@@ -7940,22 +7994,40 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   {actionBusy ? 'Advancing…' : nextLiveItem?.kind === 'content' ? 'Show Content Screen →' : nextLiveItem?.kind === 'show-game' ? `Start ${nextLiveItem.showGame.title} →` : 'Next Question →'}
                 </button>
               ) : phase === 'open' ? (
-                <button
-                  data-host-navigation="forward"
-                  onClick={handleCloseAnswers}
-                  disabled={actionBusy}
-                  style={{
-                    background: '#F59E0B',
-                    color: '#17130A',
-                    border: '2px solid #FBBF24',
-                    boxShadow: '0 10px 34px rgba(245,158,11,0.32)',
-                  }}
-                  className="w-full rounded-2xl py-6 text-xl font-black transition-all hover:brightness-110 active:scale-[0.98] disabled:opacity-50"
-                >
-                  {actionBusy
-                    ? 'Closing…'
-                    : activeBonus && questionStage === 'core' ? 'Close Main Answers →' : activeBonus ? 'Close Bonus Answers →' : 'Close Answers →'}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => { void handleAnswerEditingChange(!answerEditingAllowed) }}
+                    disabled={actionBusy}
+                    style={{
+                      background: answerEditingAllowed ? `${C.violet}24` : 'transparent',
+                      color: answerEditingAllowed ? C.liveViolet : C.liveText,
+                      border: `1px solid ${answerEditingAllowed ? `${C.violet}80` : C.liveLine}`,
+                    }}
+                    className="w-full rounded-xl px-3 py-2.5 text-sm font-bold transition-all hover:bg-white/5 disabled:opacity-50"
+                  >
+                    {answerEditingAllowed ? 'Lock Submitted Answers' : 'Allow Answer Changes'}
+                    <span style={{ color: C.liveDim }} className="mt-0.5 block text-[10px] font-medium">
+                      {answerEditingAllowed ? 'Teams can currently update submitted answers' : 'Submitted answers are currently locked'}
+                    </span>
+                  </button>
+                  <button
+                    data-host-navigation="forward"
+                    onClick={handleCloseAnswers}
+                    disabled={actionBusy}
+                    style={{
+                      background: '#F59E0B',
+                      color: '#17130A',
+                      border: '2px solid #FBBF24',
+                      boxShadow: '0 10px 34px rgba(245,158,11,0.32)',
+                    }}
+                    className="w-full rounded-2xl py-6 text-xl font-black transition-all hover:brightness-110 active:scale-[0.98] disabled:opacity-50"
+                  >
+                    {actionBusy
+                      ? 'Closing…'
+                      : activeBonus && questionStage === 'core' ? 'Close Main Answers →' : activeBonus ? 'Close Bonus Answers →' : 'Close Answers →'}
+                  </button>
+                </>
               ) : phase === 'closed' ? (
                 <>
                   {activeBonus && questionStage === 'core' ? (
@@ -8034,6 +8106,7 @@ function EndOfRound({ go }: { go: Go }) {
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
   const [roundFinalized, setRoundFinalized] = useState(false)
   const [scoreVisibility, setScoreVisibility] = useState<PlayerScoreVisibility>('live')
+  const [submittedAnswersEditable, setSubmittedAnswersEditable] = useState(false)
   const [revealingAnswers, setRevealingAnswers] = useState(false)
   const [teams, setTeams] = useState<LiveTeam[]>([])
   const [currentQuestion, setCurrentQuestion] = useState<LiveQuestionDefinition | null>(null)
@@ -8070,6 +8143,7 @@ function EndOfRound({ go }: { go: Go }) {
       setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
       setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
       setScoreVisibility(playerScoreVisibilityFromSettings(game.settings))
+      setSubmittedAnswersEditable(submittedAnswersEditableFromSettings(game.settings))
       const configuredAutoRun = autoRunModeFromSettings(game.settings)
       setAutoRunMode(configuredAutoRun)
       const finalizedForDisplay = configuredAutoRun === 'off' ? true : game.round_scores_finalized
@@ -8179,7 +8253,7 @@ function EndOfRound({ go }: { go: Go }) {
         current_content_screen_key: null,
         current_screen: 'round-start',
         answer_phase: 'open',
-        answer_editing_allowed: false,
+        answer_editing_allowed: submittedAnswersEditable,
         question_stage: 'core',
         round_scores_finalized: false,
       })

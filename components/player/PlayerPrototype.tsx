@@ -466,7 +466,7 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
 
     if (error) {
       console.error('Could not submit answer:', error)
-      setSubmitError('Could not submit your answer. Please try again.')
+      setSubmitError(error.message.includes('already locked') ? 'Your answer is locked in.' : 'Could not submit your answer. Please try again.')
       setSubmitting(false)
       return
     }
@@ -512,7 +512,7 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void) {
 
     if (error) {
       console.error('Could not submit bonus answer:', error)
-      setSubmitError('Could not submit your bonus answer. Please try again.')
+      setSubmitError(error.message.includes('already locked') ? 'Your bonus answer is locked in.' : 'Could not submit your bonus answer. Please try again.')
       setSubmitting(false)
       return
     }
