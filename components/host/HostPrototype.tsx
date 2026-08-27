@@ -129,7 +129,7 @@ import {
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
-  | 'dashboard' | 'questions' | 'recent-games' | 'create-quiz' | 'quiz-builder'
+  | 'dashboard' | 'questions' | 'teams' | 'recent-games' | 'create-quiz' | 'quiz-builder'
   | 'auto-build' | 'quiz-review' | 'host-setup'
   | 'lobby' | 'live-question' | 'end-of-round' | 'final-results'
 type Go = (s: Screen) => void
@@ -163,6 +163,47 @@ async function saveHostDefaultGameSettings(settings: Record<string, Json>) {
     updated_at: new Date().toISOString(),
   }, { onConflict: 'user_id' })
   if (error) throw error
+}
+
+const HOST_VERDICT_HINT = 'answer_verdict_override'
+
+function hostUiHintsRecord(value: Json | null | undefined) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return {} as Record<string, Json>
+  return value as Record<string, Json>
+}
+
+async function shouldShowHostVerdictHint() {
+  const { data: authData } = await supabase.auth.getUser()
+  if (!authData.user) return false
+  const localKey = `good-trivia-host-hint-${HOST_VERDICT_HINT}-${authData.user.id}`
+  if (localStorage.getItem(localKey) === 'seen') return false
+
+  const { data, error } = await supabase
+    .from('host_preferences')
+    .select('ui_hints')
+    .eq('user_id', authData.user.id)
+    .maybeSingle()
+  if (error) console.error('Could not load host UI hints:', error)
+  return hostUiHintsRecord(data?.ui_hints)[HOST_VERDICT_HINT] !== true
+}
+
+async function markHostVerdictHintSeen() {
+  const { data: authData } = await supabase.auth.getUser()
+  if (!authData.user) return
+  const localKey = `good-trivia-host-hint-${HOST_VERDICT_HINT}-${authData.user.id}`
+  localStorage.setItem(localKey, 'seen')
+
+  const { data } = await supabase
+    .from('host_preferences')
+    .select('ui_hints')
+    .eq('user_id', authData.user.id)
+    .maybeSingle()
+  const { error } = await supabase.from('host_preferences').upsert({
+    user_id: authData.user.id,
+    ui_hints: { ...hostUiHintsRecord(data?.ui_hints), [HOST_VERDICT_HINT]: true },
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'user_id' })
+  if (error) console.error('Could not save host UI hint:', error)
 }
 
 function getHostGameCode() {
@@ -776,16 +817,17 @@ function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
       <button onClick={() => go('dashboard')} aria-label="Good Trivia Company home" className="mr-0 flex shrink-0 items-center gap-2.5 sm:mr-3">
         <BrandWordmark compact className="text-[12px] sm:text-[15px]" />
       </button>
-      <div className="flex items-center gap-0.5 flex-1">
+      <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
         {[
           { label: 'My Quizzes', screen: 'dashboard' as Screen },
           { label: 'Questions', screen: 'questions' as Screen },
+          { label: 'Teams', screen: 'teams' as Screen },
           { label: 'Recent Games', screen: 'recent-games' as Screen },
         ].map(({ label, screen }) => (
           <button
             key={label}
             onClick={() => go(screen)}
-            className="relative rounded-lg px-2 py-2 text-xs font-medium transition-colors sm:px-3.5 sm:text-sm"
+            className="relative shrink-0 rounded-lg px-2 py-2 text-xs font-medium transition-colors sm:px-3.5 sm:text-sm"
             style={{ color: active === label ? C.violet : C.sub }}
           >
             {label}
@@ -807,6 +849,125 @@ function QuestionsScreen({ go }: { go: Go }) {
     <div style={{ background: C.ground }} className="min-h-screen">
       <Nav go={go} active="Questions" />
       <QuestionsArea />
+    </div>
+  )
+}
+
+type HostTeamStat = Database['public']['Functions']['get_host_team_stats']['Returns'][number]
+
+function TeamsScreen({ go }: { go: Go }) {
+  const [teams, setTeams] = useState<HostTeamStat[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+
+    async function loadTeams() {
+      setLoading(true)
+      setLoadError(null)
+      const { data, error } = await supabase.rpc('get_host_team_stats')
+      if (!active) return
+      if (error) {
+        console.error('Could not load team history:', error)
+        setLoadError('Could not load your teams.')
+        setTeams([])
+      } else {
+        setTeams(data ?? [])
+      }
+      setLoading(false)
+    }
+
+    void loadTeams()
+    return () => { active = false }
+  }, [])
+
+  const totalGames = teams.reduce((sum, team) => sum + team.games_played, 0)
+  const returningTeams = teams.filter(team => team.games_played > 1).length
+  const weightedPossible = teams.reduce((sum, team) => sum + team.possible_points, 0)
+  const weightedCorrect = teams.reduce((sum, team) => sum + team.correct_points, 0)
+  const overallCorrect = weightedPossible > 0 ? Math.round(100 * weightedCorrect / weightedPossible) : null
+
+  return (
+    <div style={{ background: C.ground }} className="min-h-screen">
+      <Nav go={go} active="Teams" />
+      <main className="mx-auto max-w-6xl px-5 py-9 sm:px-6 sm:py-10">
+        <div className="mb-7">
+          <p style={{ color: C.violet }} className="mb-2 text-xs font-extrabold uppercase tracking-[0.16em]">PIN-linked history</p>
+          <h1 style={{ color: C.ink }} className="text-3xl font-extrabold">Teams</h1>
+          <p style={{ color: C.sub }} className="mt-2 max-w-2xl text-sm leading-6">
+            Teams appear here after they use a PIN in one of your completed games. Statistics include only games you hosted; PINs are never displayed.
+          </p>
+        </div>
+
+        {loadError && (
+          <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="mb-5 rounded-xl px-4 py-3 text-sm font-semibold">
+            {loadError}
+          </div>
+        )}
+
+        {!loading && teams.length > 0 && (
+          <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {[
+              ['Known teams', teams.length.toString()],
+              ['Team appearances', totalGames.toString()],
+              ['Returning teams', returningTeams.toString()],
+              ['Overall correct', overallCorrect === null ? '—' : `${overallCorrect}%`],
+            ].map(([label, value]) => (
+              <div key={label} style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-4 sm:p-5">
+                <strong style={{ color: C.ink }} className="block text-2xl font-black tabular-nums">{value}</strong>
+                <span style={{ color: C.sub }} className="mt-1 block text-xs font-semibold">{label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {loading ? (
+          <div style={{ color: C.sub }} className="py-24 text-center text-sm">Loading team history…</div>
+        ) : teams.length === 0 ? (
+          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-3xl px-6 py-20 text-center">
+            <h2 style={{ color: C.ink }} className="text-xl font-bold">No PIN-linked teams yet</h2>
+            <p style={{ color: C.sub }} className="mx-auto mt-2 max-w-md text-sm leading-6">
+              Once a team uses a PIN and finishes one of your games, its history will appear here automatically.
+            </p>
+            <Btn cls="mt-6" onClick={() => go('dashboard')}>Choose a Quiz</Btn>
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {teams.map(team => (
+              <article key={team.team_profile_id} style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5 shadow-sm">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h2 style={{ color: C.ink }} className="truncate text-lg font-extrabold">{team.display_name}</h2>
+                    <p style={{ color: C.sub }} className="mt-1 truncate text-xs">
+                      {team.recent_game_title ? `Last played ${team.recent_game_title}` : 'No completed game'}
+                      {team.recent_game_at ? ` · ${formatGameDate(team.recent_game_at)}` : ''}
+                    </p>
+                  </div>
+                  {team.best_placement && (
+                    <span style={{ background: C.violetPale, color: C.violet }} className="shrink-0 rounded-full px-3 py-1 text-xs font-extrabold">
+                      Best {ordinalPlacement(team.best_placement)}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-5 grid grid-cols-4 gap-2 border-t pt-4" style={{ borderColor: C.line }}>
+                  {[
+                    ['Games', team.games_played.toString()],
+                    ['Avg place', team.average_placement === null ? '—' : Number(team.average_placement).toFixed(1)],
+                    ['Correct', team.correct_rate === null ? '—' : `${Number(team.correct_rate).toFixed(1)}%`],
+                    ['Wins', team.wins.toString()],
+                  ].map(([label, value]) => (
+                    <div key={label} className="min-w-0">
+                      <strong style={{ color: C.ink }} className="block truncate text-base font-black tabular-nums">{value}</strong>
+                      <span style={{ color: C.sub }} className="mt-0.5 block truncate text-[10px] font-bold uppercase tracking-wide">{label}</span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </main>
     </div>
   )
 }
@@ -6354,6 +6515,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const [teams, setTeams] = useState<LiveTeam[]>([])
   const [submissions, setSubmissions] = useState<LiveSubmission[]>([])
   const [bonusSubmissions, setBonusSubmissions] = useState<LiveBonusSubmission[]>([])
+  const [showVerdictHint, setShowVerdictHint] = useState(false)
   const [question, setQuestion] = useState<LiveQuestionDefinition | null>(null)
   const [allQuestions, setAllQuestions] = useState<LiveQuestionDefinition[]>([])
   const [contentScreen, setContentScreen] = useState<LiveContentScreenDefinition | null>(null)
@@ -6393,6 +6555,19 @@ function LiveQuestion({ go }: { go: Go }) {
     const timer = window.setInterval(() => setPresenceNow(Date.now()), 30_000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    let active = true
+    void shouldShowHostVerdictHint().then(shouldShow => {
+      if (active) setShowVerdictHint(shouldShow)
+    })
+    return () => { active = false }
+  }, [])
+
+  function dismissVerdictHint() {
+    setShowVerdictHint(false)
+    void markHostVerdictHintSeen()
+  }
 
   async function removeLiveTeam(team: LiveTeam) {
     if (removingLiveTeamId || !window.confirm(`Remove ${team.name} from this game?`)) return
@@ -8220,6 +8395,17 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           </div>
 
 
+          {showVerdictHint && submissions.length > 0 && phase !== 'revealed' && (
+            <div className="flex justify-end">
+              <div style={{ background: '#FFFBEB', border: '1px solid #F59E0B', color: '#78350F' }} className="relative max-w-sm rounded-xl px-4 py-3 pr-12 text-sm shadow-lg">
+                <span className="font-extrabold">Handy hint:</span> click any Correct or Incorrect verdict to change it.
+                <span style={{ borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#F59E0B' }} className="absolute -bottom-2 right-14 h-0 w-0 border-x-[8px] border-t-[8px]" aria-hidden />
+                <button type="button" onClick={dismissVerdictHint} aria-label="Dismiss hint" className="absolute right-2 top-2 cursor-pointer rounded-md px-2 py-1 text-xs font-extrabold hover:bg-amber-100">Got it</button>
+              </div>
+            </div>
+          )}
+
+
   <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl overflow-hidden shrink-0">
     {!compoundQuestion ? (
       <>
@@ -9987,6 +10173,7 @@ export default function App({
   const screens: Record<Screen, React.ReactNode> = {
     'dashboard': <Dashboard go={setScreen} />,
     'questions': <QuestionsScreen go={setScreen} />,
+    'teams': <TeamsScreen go={setScreen} />,
     'recent-games': <RecentGamesScreen go={setScreen} />,
     'create-quiz': <CreateQuiz go={setScreen} />,
     'quiz-builder': <QuizBuilder go={setScreen} />,

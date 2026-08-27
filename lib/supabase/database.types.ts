@@ -482,18 +482,21 @@ export type Database = {
         Row: {
           user_id: string
           game_settings: Json
+          ui_hints: Json
           created_at: string
           updated_at: string
         }
         Insert: {
           user_id: string
           game_settings?: Json
+          ui_hints?: Json
           created_at?: string
           updated_at?: string
         }
         Update: {
           user_id?: string
           game_settings?: Json
+          ui_hints?: Json
           created_at?: string
           updated_at?: string
         }
@@ -1272,6 +1275,32 @@ export type Database = {
           p_payload: Json
         }
         Returns: Json
+      }
+      replace_question_library_batch: {
+        Args: {
+          p_file_name: string
+          p_file_sha256: string
+          p_payload: Json
+          p_activate?: boolean
+        }
+        Returns: Json
+      }
+      get_host_team_stats: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          team_profile_id: string
+          display_name: string
+          games_played: number
+          average_placement: number | null
+          best_placement: number | null
+          wins: number
+          correct_points: number
+          possible_points: number
+          correct_rate: number | null
+          total_points: number
+          recent_game_title: string | null
+          recent_game_at: string | null
+        }[]
       }
       resolve_question_library_proposed_tag: {
         Args: {

@@ -224,6 +224,8 @@ create table if not exists public.host_preferences (
   user_id uuid primary key references auth.users(id) on delete cascade,
   game_settings jsonb not null default '{}'::jsonb
     check (jsonb_typeof(game_settings) = 'object'),
+  ui_hints jsonb not null default '{}'::jsonb
+    check (jsonb_typeof(ui_hints) = 'object'),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

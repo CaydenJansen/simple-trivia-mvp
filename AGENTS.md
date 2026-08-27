@@ -43,6 +43,7 @@
   - Host controls open, close, review, reveal, scoring, rounds, and completion.
   - The game finishes with the appropriate leaderboard.
 - Preserve optional team PIN behaviour; do not require player accounts.
+- PIN-linked team history is host-scoped: a host may see statistics from games they hosted, never another host's history or any raw PIN/digest. Build future tournaments by linking games and stable team profiles; tournament standings must not rewrite game scores or final placements.
 - The dashboard navigation label is **Questions**, with **My Questions** and **Question Library** inside it.
 - Quiz Builder add-question choices are **Write New**, **My Questions**, and **Question Library**.
 - Always call the platform question bank **Question Library**. “Verified” may be question metadata or a badge, not part of the product name.
@@ -228,6 +229,7 @@ Preserve and verify:
 - Keep source metadata relational where it must be searched and controlled. Quiz/game snapshots may deliberately denormalize structured metadata so they remain independent of later taxonomy edits.
 - Treat current flat `category`, `difficulty`, `tags`, `image_url`, and mechanic-specific JSON columns as compatibility projections while the normalized model is adopted. Do not remove them until every deployed reader and writer has migrated.
 - External bulk imports must pass through separate staging, validation, normalization, and review. Never shape production tables around a historical import format.
+- A complete-library replacement archives platform sources omitted from the validated workbook rather than deleting history. It must activate the incoming set atomically and leave quiz/game snapshots untouched.
 - The human spreadsheet uses one long-format Questions sheet plus a separate Tiebreakers sheet. Infer mechanics from grouped child Row Types and reject contradictory structures rather than guessing.
 - Consider Supabase RLS and Realtime publication requirements for every new table or operation.
 
@@ -254,7 +256,7 @@ At minimum, grading tests must cover:
 - Case, punctuation, and whitespace normalization.
 - Host review override.
 - Scoring idempotency: reveal or retries must not award points twice.
-- Prepared tiebreaker numeric validation, optional manual recommendation, and the exact auto-build count of three.
+- Prepared tiebreaker numeric validation, optional manual recommendation, and the exact auto-build count of two.
 - Auto-Run timing by points and ranking workload, stable pre-game mode parsing, pending-review exclusion from provisional scoring, and score visibility at round/final checkpoints.
 
 For live-session changes, verify with at least three teams where practical:

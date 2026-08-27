@@ -54,6 +54,28 @@ A bulk decision can map a phrase to an existing tag, create a canonical tag, or 
    npm run questions:import -- "/path/to/question-library.xlsx" --apply
    ```
 
+### Replace the complete live library
+
+When a workbook is the new complete platform library, use the dedicated replacement command. It validates first and writes nothing:
+
+```sh
+npm run questions:replace -- "/path/to/question-library.xlsx"
+```
+
+After reviewing the clean dry run, apply it:
+
+```sh
+npm run questions:replace -- "/path/to/question-library.xlsx" --apply
+```
+
+If the local environment does not have the server-only service-role key, generate one already-validated SQL file for the Supabase SQL editor:
+
+```sh
+npm run questions:replace -- "/path/to/question-library.xlsx" --sql-output "/tmp/replace-question-library.sql"
+```
+
+Replacement activates the incoming questions and tiebreakers and archives platform source rows omitted from the workbook. It never changes the independent copies already saved in quizzes or frozen into games.
+
 Applying requires the server-only `SUPABASE_SERVICE_ROLE_KEY`. Never place it in browser code, source control, the workbook, or a `NEXT_PUBLIC_` variable.
 
 ## Safety guarantees
@@ -62,5 +84,6 @@ Applying requires the server-only `SUPABASE_SERVICE_ROLE_KEY`. Never place it in
 - The complete batch is applied atomically; database errors roll back everything.
 - Question ID and Tiebreaker ID are stable external import identifiers. Database rows retain UUID primary keys.
 - Reapplying identical file bytes is a no-op.
+- Complete-library replacement is atomic: import, activation, and retirement of omitted source rows succeed or roll back together.
 - Updated imports never mutate existing quiz-question or game-question snapshots.
 - Removed freshness and human-entered provenance fields remain non-destructively deprecated in the database during migration.
