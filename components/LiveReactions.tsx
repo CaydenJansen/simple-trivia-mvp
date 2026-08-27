@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 
-const REACTIONS = ['👍', '👎', '❤️'] as const
+const REACTIONS = ['👍', '👎', '❤️', '😂', '😢', '😡'] as const
 
 type ReactionEvent = {
   id: string

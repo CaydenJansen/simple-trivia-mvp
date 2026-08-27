@@ -742,7 +742,7 @@ export type Database = {
           game_id: string
           team_id: string
           team_name: string
-          reaction: '👍' | '👎' | '❤️'
+          reaction: '👍' | '👎' | '❤️' | '😂' | '😢' | '😡'
           created_at: string
         }
         Insert: {
@@ -750,7 +750,7 @@ export type Database = {
           game_id: string
           team_id: string
           team_name: string
-          reaction: '👍' | '👎' | '❤️'
+          reaction: '👍' | '👎' | '❤️' | '😂' | '😢' | '😡'
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['game_reactions']['Insert']>
@@ -985,7 +985,7 @@ export type Database = {
         Returns: string
       }
       send_game_reaction: {
-        Args: { p_request_id: string; p_request_token: string; p_reaction: '👍' | '👎' | '❤️' }
+        Args: { p_request_id: string; p_request_token: string; p_reaction: '👍' | '👎' | '❤️' | '😂' | '😢' | '😡' }
         Returns: Database['public']['Tables']['game_reactions']['Row']
       }
       submit_player_answer: {
