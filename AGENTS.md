@@ -83,6 +83,8 @@
 - Auto-Build is conceptually two-stage: select an eligible candidate set using hard requirements, then sequence it with soft diversity penalties. Its diversity fingerprint includes part and bonus metadata.
 - Explicit round themes discount their own broad category/tag repetition, but not repeated specific subtopics. Check whole-quiz saturation as well as adjacent repetition.
 - Tiebreakers are numeric closest-answer questions used only to resolve a consequential final-placement tie. Normal round and in-game ties are allowed.
+- Show games are ordered, reusable show modules that remain separate from ordinary questions, content screens, bonuses, and tiebreakers. New game types extend the show-game model rather than adding one-off columns to questions.
+- Beat the Bomb is a no-points random-chance interlude: each team can press once, the server chooses a 10–30 second fuse, the bomb cannot resolve before the first press, all teams pressing resolves immediately, and the latest server-timestamped press wins.
 - Do not include tiebreakers in normal question counts, running-time estimates, or game points. Resolving a tie must never change a team's trivia score.
 - Tiebreaker resolution choices require an explicit host selection and confirmation. Player numeric submissions lock immediately after submission and cannot be edited.
 - Calculate tiebreaker distance as each answer is submitted so the host can see the current closest team live. Keep distances and outcomes hidden from players until reveal; the revealed player screen shows whether they won, lost, or remain tied together with the correct answer, their submitted answer, and its distance from correct.
@@ -203,6 +205,7 @@ Preserve and verify:
 - Recalculate cached quiz counts and duration metadata when quiz content changes.
 - Store accepted aliases explicitly; do not hide them in display text.
 - Model content screens explicitly rather than pretending they are scored questions.
+- Model show games explicitly rather than pretending they are scored questions or content screens. Preserve the `quiz_show_games` → `game_show_games` frozen snapshot boundary and keep each game type's runtime events/results separate from trivia score.
 - Model prepared tiebreakers explicitly rather than assigning special point values to ordinary questions.
 - Keep source metadata relational where it must be searched and controlled. Quiz/game snapshots may deliberately denormalize structured metadata so they remain independent of later taxonomy edits.
 - Treat current flat `category`, `difficulty`, `tags`, `image_url`, and mechanic-specific JSON columns as compatibility projections while the normalized model is adopted. Do not remove them until every deployed reader and writer has migrated.

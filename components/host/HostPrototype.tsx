@@ -127,6 +127,7 @@ async function updateLiveGame(values: {
   question_stage?: 'core' | 'bonus'
   current_question_key?: string | null
   current_content_screen_key?: string | null
+  current_show_game_key?: string | null
   round_scores_finalized?: boolean
 }) {
   const { error } = await supabase
@@ -1059,7 +1060,7 @@ function Dashboard({ go }: { go: Go }) {
     setLoadError(null)
     setActionNotice(null)
 
-    const [questionResult, contentScreenResult, tiebreakerResult] = await Promise.all([
+    const [questionResult, contentScreenResult, tiebreakerResult, showGameResult] = await Promise.all([
       supabase
         .from('quiz_questions')
         .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, tags, image_url, points_max, bonus, metadata_snapshot, notes, source_question_id, source_revision')
@@ -1075,9 +1076,14 @@ function Dashboard({ go }: { go: Go }) {
         .select('tiebreaker_key, position, prompt, correct_value, answer_unit, notes')
         .eq('quiz_id', quiz.id)
         .order('position', { ascending: true }),
+      supabase
+        .from('quiz_show_games')
+        .select('show_game_key, item_position, round_number, round_title, game_type, title, settings')
+        .eq('quiz_id', quiz.id)
+        .order('item_position', { ascending: true }),
     ])
 
-    const snapshotError = questionResult.error || contentScreenResult.error || tiebreakerResult.error
+    const snapshotError = questionResult.error || contentScreenResult.error || tiebreakerResult.error || showGameResult.error
     if (snapshotError) {
       console.error('Could not load quiz snapshots for duplication:', snapshotError)
       setLoadError('Could not copy that quiz. Please try again.')
@@ -1086,7 +1092,7 @@ function Dashboard({ go }: { go: Go }) {
     }
 
     const copyTitle = nextQuizCopyTitle(quiz.title, quizzes.map(item => item.title))
-    const { data: copiedQuizId, error: copyError } = await supabase.rpc('save_quiz_with_bonus_snapshots', {
+    const { data: copiedQuizId, error: copyError } = await supabase.rpc('save_quiz_with_show_games', {
       p_quiz_id: null,
       p_title: copyTitle,
       p_status: quiz.status,
@@ -1094,6 +1100,7 @@ function Dashboard({ go }: { go: Go }) {
       p_questions: (questionResult.data ?? []) as Json,
       p_content_screens: (contentScreenResult.data ?? []) as Json,
       p_tiebreakers: (tiebreakerResult.data ?? []) as Json,
+      p_show_games: (showGameResult.data ?? []) as Json,
     })
 
     if (copyError || !copiedQuizId) {
@@ -1400,11 +1407,20 @@ type BuilderContentScreenData = {
   imageUrl: string | null
 }
 
+type BuilderShowGameData = {
+  id: string
+  showGameKey: string
+  itemPosition: number
+  gameType: 'beat-the-bomb'
+  title: string
+}
+
 type BuilderRoundData = {
   id: number
   title: string
   questions: BuilderQuestionData[]
   contentScreens: BuilderContentScreenData[]
+  showGames: BuilderShowGameData[]
 }
 
 type BuilderTiebreakerData = {
@@ -1580,6 +1596,7 @@ function nextRoundItemPosition(round: BuilderRoundData) {
     0,
     ...round.questions.map(question => question.itemPosition),
     ...round.contentScreens.map(screen => screen.itemPosition),
+    ...round.showGames.map(showGame => showGame.itemPosition),
   ) + 1
 }
 
@@ -1657,7 +1674,7 @@ function QuizBuilder({ go }: { go: Go }) {
       if (!selectedId) {
         if (!active) return
         setTitle('Untitled Quiz')
-        setRounds([{ id: 1, title: 'Round 1', questions: [], contentScreens: [] }])
+        setRounds([{ id: 1, title: 'Round 1', questions: [], contentScreens: [], showGames: [] }])
         setTiebreakers([])
         setQuizId(null)
         setQuizStatus('draft')
@@ -1667,7 +1684,7 @@ function QuizBuilder({ go }: { go: Go }) {
         return
       }
 
-      const [quizResult, questionResult, contentScreenResult, tiebreakerResult] = await Promise.all([
+      const [quizResult, questionResult, contentScreenResult, tiebreakerResult, showGameResult] = await Promise.all([
         supabase
           .from('quizzes')
           .select('id, title, status')
@@ -1688,12 +1705,17 @@ function QuizBuilder({ go }: { go: Go }) {
           .select('id, tiebreaker_key, position, prompt, correct_value, answer_unit, notes')
           .eq('quiz_id', selectedId)
           .order('position', { ascending: true }),
+        supabase
+          .from('quiz_show_games')
+          .select('id, show_game_key, item_position, round_number, round_title, game_type, title')
+          .eq('quiz_id', selectedId)
+          .order('item_position', { ascending: true }),
       ])
 
       if (!active) return
 
-      if (quizResult.error || !quizResult.data || questionResult.error || contentScreenResult.error || tiebreakerResult.error) {
-        console.error('Could not load quiz builder:', quizResult.error ?? questionResult.error ?? contentScreenResult.error ?? tiebreakerResult.error)
+      if (quizResult.error || !quizResult.data || questionResult.error || contentScreenResult.error || tiebreakerResult.error || showGameResult.error) {
+        console.error('Could not load quiz builder:', quizResult.error ?? questionResult.error ?? contentScreenResult.error ?? tiebreakerResult.error ?? showGameResult.error)
         setLoadError('Could not load this quiz. Return to My Quizzes and try again.')
         setLoading(false)
         return
@@ -1739,6 +1761,7 @@ function QuizBuilder({ go }: { go: Go }) {
           title: row.round_title,
           questions: [],
           contentScreens: [],
+          showGames: [],
         }
 
         round.questions.push({
@@ -1773,6 +1796,7 @@ function QuizBuilder({ go }: { go: Go }) {
           title: row.round_title,
           questions: [],
           contentScreens: [],
+          showGames: [],
         }
 
         round.contentScreens.push({
@@ -1786,12 +1810,30 @@ function QuizBuilder({ go }: { go: Go }) {
         groupedRounds.set(row.round_number, round)
       }
 
+      for (const row of showGameResult.data ?? []) {
+        const round = groupedRounds.get(row.round_number) ?? {
+          id: row.round_number,
+          title: row.round_title,
+          questions: [],
+          contentScreens: [],
+          showGames: [],
+        }
+        round.showGames.push({
+          id: row.id,
+          showGameKey: row.show_game_key,
+          itemPosition: row.item_position,
+          gameType: row.game_type as 'beat-the-bomb',
+          title: row.title,
+        })
+        groupedRounds.set(row.round_number, round)
+      }
+
       setTitle(quizResult.data.title)
       setQuizId(quizResult.data.id)
       const loadedStatus = quizResult.data.status === 'ready' ? 'ready' : 'draft'
       setQuizStatus(loadedStatus)
       const loadedRounds = [...groupedRounds.values()].sort((a, b) => a.id - b.id)
-      setRounds(loadedRounds.length > 0 ? loadedRounds : [{ id: 1, title: 'Round 1', questions: [], contentScreens: [] }])
+      setRounds(loadedRounds.length > 0 ? loadedRounds : [{ id: 1, title: 'Round 1', questions: [], contentScreens: [], showGames: [] }])
       setTiebreakers((tiebreakerResult.data ?? []).map(row => ({
         id: row.id,
         tiebreakerKey: row.tiebreaker_key,
@@ -2006,6 +2048,10 @@ function QuizBuilder({ go }: { go: Go }) {
       setSaveError('Give every content screen a title before saving.')
       return null
     }
+    if (rounds.some(round => round.showGames.some(showGame => !showGame.title.trim()))) {
+      setSaveError('Give every game a title before saving.')
+      return null
+    }
     if (tiebreakers.some(tiebreaker => !tiebreaker.prompt.trim())) {
       setSaveError('Give every tiebreaker a question before saving, or remove the unfinished tiebreaker.')
       return null
@@ -2022,6 +2068,7 @@ function QuizBuilder({ go }: { go: Go }) {
     let itemPosition = 0
     const snapshots: Json[] = []
     const contentScreenSnapshots: Json[] = []
+    const showGameSnapshots: Json[] = []
     const tiebreakerSnapshots: Json[] = tiebreakers.map((tiebreaker, index) => ({
       tiebreaker_key: tiebreaker.tiebreakerKey,
       position: index + 1,
@@ -2037,6 +2084,7 @@ function QuizBuilder({ go }: { go: Go }) {
       const items = [
         ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, question })),
         ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, screen })),
+        ...round.showGames.map(showGame => ({ kind: 'show-game' as const, itemPosition: showGame.itemPosition, showGame })),
       ].sort((a, b) => a.itemPosition - b.itemPosition)
 
       items.forEach(item => {
@@ -2050,6 +2098,18 @@ function QuizBuilder({ go }: { go: Go }) {
             title: item.screen.title.trim(),
             body: item.screen.body.trim() || null,
             image_url: item.screen.imageUrl,
+          })
+          return
+        }
+        if (item.kind === 'show-game') {
+          showGameSnapshots.push({
+            show_game_key: item.showGame.showGameKey,
+            item_position: itemPosition,
+            round_number: roundIndex + 1,
+            round_title: round.title,
+            game_type: item.showGame.gameType,
+            title: item.showGame.title.trim(),
+            settings: { minimum_seconds: 10, maximum_seconds: 30 },
           })
           return
         }
@@ -2084,7 +2144,7 @@ function QuizBuilder({ go }: { go: Go }) {
       })
     })
 
-    const { data, error } = await supabase.rpc('save_quiz_with_bonus_snapshots', {
+    const { data, error } = await supabase.rpc('save_quiz_with_show_games', {
       p_quiz_id: quizId,
       p_title: title.trim(),
       p_status: statusToSave,
@@ -2092,6 +2152,7 @@ function QuizBuilder({ go }: { go: Go }) {
       p_questions: snapshots,
       p_content_screens: contentScreenSnapshots,
       p_tiebreakers: tiebreakerSnapshots,
+      p_show_games: showGameSnapshots,
     })
 
     setSaving(false)
@@ -2277,6 +2338,19 @@ function QuizBuilder({ go }: { go: Go }) {
                 } : item))
                 setDirty(true)
               }}
+              onAddShowGame={() => {
+                setRounds(current => current.map(item => item.id === round.id ? {
+                  ...item,
+                  showGames: [...item.showGames, {
+                    id: `show-game-${crypto.randomUUID()}`,
+                    showGameKey: `show-game-${crypto.randomUUID()}`,
+                    itemPosition: nextRoundItemPosition(item),
+                    gameType: 'beat-the-bomb',
+                    title: 'Beat the Bomb',
+                  }],
+                } : item))
+                setDirty(true)
+              }}
               onUpdateContentScreen={(screenId, updates) => {
                 setRounds(current => current.map(item => item.id === round.id ? {
                   ...item,
@@ -2288,6 +2362,20 @@ function QuizBuilder({ go }: { go: Go }) {
                 setRounds(current => current.map(item => item.id === round.id ? {
                   ...item,
                   contentScreens: item.contentScreens.filter(screen => screen.id !== screenId),
+                } : item))
+                setDirty(true)
+              }}
+              onUpdateShowGame={(showGameId, updates) => {
+                setRounds(current => current.map(item => item.id === round.id ? {
+                  ...item,
+                  showGames: item.showGames.map(showGame => showGame.id === showGameId ? { ...showGame, ...updates } : showGame),
+                } : item))
+                setDirty(true)
+              }}
+              onDeleteShowGame={showGameId => {
+                setRounds(current => current.map(item => item.id === round.id ? {
+                  ...item,
+                  showGames: item.showGames.filter(showGame => showGame.id !== showGameId),
                 } : item))
                 setDirty(true)
               }}
@@ -2322,6 +2410,10 @@ function QuizBuilder({ go }: { go: Go }) {
                     ...screen,
                     itemPosition: positions.get(`content:${screen.id}`) ?? screen.itemPosition,
                   })),
+                  showGames: item.showGames.map(showGame => ({
+                    ...showGame,
+                    itemPosition: positions.get(`show-game:${showGame.id}`) ?? showGame.itemPosition,
+                  })),
                 } : item))
                 setDirty(true)
               }}
@@ -2332,7 +2424,7 @@ function QuizBuilder({ go }: { go: Go }) {
           <button
             onClick={() => {
               const nextId = Math.max(0, ...rounds.map(round => round.id)) + 1
-              setRounds(current => [...current, { id: nextId, title: `Round ${nextId}`, questions: [], contentScreens: [] }])
+              setRounds(current => [...current, { id: nextId, title: `Round ${nextId}`, questions: [], contentScreens: [], showGames: [] }])
               setDirty(true)
             }}
             style={{ border: `2px dashed ${C.line}` }}
@@ -3087,6 +3179,13 @@ function QuizPreview({ title, rounds, onClose }: {
         roundNumber: roundIndex + 1,
         screen,
       })),
+      ...round.showGames.map(showGame => ({
+        kind: 'show-game' as const,
+        itemPosition: showGame.itemPosition,
+        round,
+        roundNumber: roundIndex + 1,
+        showGame,
+      })),
     ].sort((a, b) => a.itemPosition - b.itemPosition)
   })
   const active = items[activeIndex]
@@ -3127,7 +3226,7 @@ function QuizPreview({ title, rounds, onClose }: {
               <p className="mt-1 text-violet-200">
                 {active.kind === 'question'
                   ? `Question ${active.questionNumber} of ${active.roundQuestionCount} · ${active.question.type}`
-                  : 'Content Screen'}
+                  : active.kind === 'content' ? 'Content Screen' : 'Game'}
               </p>
             </div>
           )}
@@ -3139,6 +3238,14 @@ function QuizPreview({ title, rounds, onClose }: {
                 {active.screen.imageUrl && <div role="img" aria-label="Content screen image" className="mx-auto mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.screen.imageUrl})` }} />}
                 <h3 className="text-4xl font-black leading-tight">{active.screen.title || 'Untitled screen'}</h3>
                 {active.screen.body && <p className="mx-auto mt-5 max-w-xl text-lg leading-8 text-zinc-300">{active.screen.body}</p>}
+              </div>
+            ) : active.kind === 'show-game' ? (
+              <div className="w-full max-w-2xl text-center">
+                <div className="text-8xl" aria-hidden="true">💣</div>
+                <h3 className="mt-5 text-4xl font-black">{active.showGame.title}</h3>
+                <p className="mx-auto mt-4 max-w-lg text-lg text-zinc-300">Press once. Be the last team to press before the bomb explodes.</p>
+                <div className="mx-auto mt-7 max-w-xs rounded-2xl bg-violet-600 px-8 py-4 text-xl font-black">PRESS ME</div>
+                <p className="mt-4 text-sm text-zinc-400">Random 10–30 second fuse · No trivia points</p>
               </div>
             ) : (
               <div className="w-full max-w-2xl">
@@ -3175,7 +3282,7 @@ function QuizPreview({ title, rounds, onClose }: {
   )
 }
 
-function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, onReplace, onCycleLibrary, onRoundPointerDown, onTitleChange, onAddQuestion, onAddContentScreen, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onReorderItems }: {
+function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, onReplace, onCycleLibrary, onRoundPointerDown, onTitleChange, onAddQuestion, onAddContentScreen, onAddShowGame, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onDeleteShowGame, onReorderItems }: {
   round: BuilderRoundData
   roundNumber: number
   replacingLibraryQuestionId: string | null
@@ -3186,10 +3293,13 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
   onTitleChange: (title: string) => void
   onAddQuestion: () => void
   onAddContentScreen: () => void
+  onAddShowGame: () => void
   onDeleteQuestion: (questionId: string) => void
   onDuplicateQuestion: (questionId: string) => void
   onUpdateContentScreen: (screenId: string, updates: Partial<BuilderContentScreenData>) => void
   onDeleteContentScreen: (screenId: string) => void
+  onUpdateShowGame: (showGameId: string, updates: Partial<BuilderShowGameData>) => void
+  onDeleteShowGame: (showGameId: string) => void
   onReorderItems: (orderedKeys: string[]) => void
 }) {
   const [open, setOpen] = useState(true)
@@ -3206,8 +3316,11 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
   const items = [
     ...round.questions.map(question => ({ kind: 'question' as const, itemPosition: question.itemPosition, question })),
     ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, screen })),
+    ...round.showGames.map(showGame => ({ kind: 'show-game' as const, itemPosition: showGame.itemPosition, showGame })),
   ].sort((a, b) => a.itemPosition - b.itemPosition)
-  const itemKeys = items.map(item => item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`)
+  const itemKeys = items.map(item => item.kind === 'question'
+    ? `question:${item.question.id}`
+    : item.kind === 'content' ? `content:${item.screen.id}` : `show-game:${item.showGame.id}`)
 
   function itemDragTransform(itemKey: string) {
     if (!itemDragPreview) return undefined
@@ -3363,7 +3476,9 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
       {open && (
         <div data-builder-item-list className="p-3 space-y-2">
           {items.map(item => {
-            const itemKey = item.kind === 'question' ? `question:${item.question.id}` : `content:${item.screen.id}`
+            const itemKey = item.kind === 'question'
+              ? `question:${item.question.id}`
+              : item.kind === 'content' ? `content:${item.screen.id}` : `show-game:${item.showGame.id}`
             const dragged = itemDragPreview?.key === itemKey
             const isSettlingAfterDrop = dropSettlingItemKeys.includes(itemKey)
             return (
@@ -3387,11 +3502,18 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
               onDuplicate={() => onDuplicateQuestion(item.question.id)}
               onPointerDown={event => startItemDrag(itemKey, event)}
             />
-          ) : (
+          ) : item.kind === 'content' ? (
             <BuilderContentScreen
               screen={item.screen}
               onChange={updates => onUpdateContentScreen(item.screen.id, updates)}
               onDelete={() => onDeleteContentScreen(item.screen.id)}
+              onPointerDown={event => startItemDrag(itemKey, event)}
+            />
+          ) : (
+            <BuilderShowGame
+              showGame={item.showGame}
+              onChange={updates => onUpdateShowGame(item.showGame.id, updates)}
+              onDelete={() => onDeleteShowGame(item.showGame.id)}
               onPointerDown={event => startItemDrag(itemKey, event)}
             />
           )}
@@ -3405,6 +3527,10 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
             <button onClick={onAddContentScreen} style={{ color: C.sub }}
               className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
               <I.plus /> Add Content Screen
+            </button>
+            <button onClick={onAddShowGame} style={{ color: C.sub }}
+              className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
+              <I.plus /> Add Game
             </button>
           </div>
         </div>
@@ -3485,6 +3611,48 @@ function BuilderContentScreen({ screen, onChange, onDelete, onPointerDown }: {
             <button onClick={() => setExpanded(false)} style={{ color: C.violet }}
               className="text-xs font-semibold hover:opacity-70 transition-opacity">Done</button>
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
+  showGame: BuilderShowGameData
+  onChange: (updates: Partial<BuilderShowGameData>) => void
+  onDelete: () => void
+  onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
+}) {
+  const [expanded, setExpanded] = useState(() => showGame.id.startsWith('show-game-'))
+
+  return (
+    <div style={{ border: `1.5px solid ${C.violet}55`, background: C.violetMist }} className="rounded-xl overflow-hidden">
+      <div className="group flex cursor-pointer items-start gap-3 px-3 py-3 transition-colors hover:bg-violet/5" onClick={() => setExpanded(value => !value)}>
+        <button type="button" aria-label="Drag game to reorder" title="Drag to reorder" onPointerDown={onPointerDown}
+          style={{ color: C.sub }} className="mt-0.5 touch-none select-none cursor-grab hover:text-ink active:cursor-grabbing transition-colors shrink-0"
+          onClick={event => event.stopPropagation()}><I.grip /></button>
+        <div className="min-w-0 flex-1">
+          <div className="mb-1.5 flex items-center gap-2">
+            <span style={{ background: C.violet, color: 'white' }} className="rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest">Game</span>
+            <span style={{ color: C.sub }} className="text-[10px]">Random chance · Not scored</span>
+          </div>
+          <p style={{ color: C.ink }} className="truncate text-sm font-semibold group-hover:text-violet">💣 {showGame.title}</p>
+        </div>
+        <div onClick={event => event.stopPropagation()}><IBtn icon={<I.trash />} title="Delete game" onClick={onDelete} danger /></div>
+      </div>
+      {expanded && (
+        <div style={{ borderTop: `1px solid ${C.violet}30` }} className="space-y-3 px-4 pb-4 pt-3">
+          <div>
+            <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Game</label>
+            <div style={{ border: `1px solid ${C.line}`, background: C.panel, color: C.ink }} className="rounded-xl px-3 py-2 text-sm font-bold">Beat the Bomb</div>
+          </div>
+          <div>
+            <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Title</label>
+            <input value={showGame.title} onChange={event => onChange({ title: event.target.value })}
+              style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+          </div>
+          <p style={{ color: C.sub }} className="text-xs leading-5">Each team presses once. The fuse lasts a random 10–30 seconds, and the last team to press before it explodes wins. No trivia points are awarded.</p>
+          <div className="flex justify-end"><button onClick={() => setExpanded(false)} style={{ color: C.violet }} className="text-xs font-semibold">Done</button></div>
         </div>
       )}
     </div>
@@ -4393,7 +4561,7 @@ function AutoBuild({ go }: { go: Go }) {
         notes: tiebreaker.notes,
       }))
       const title = 'Auto-Built Quiz'
-      const { data, error } = await supabase.rpc('save_quiz_with_bonus_snapshots', {
+      const { data, error } = await supabase.rpc('save_quiz_with_show_games', {
         p_quiz_id: null,
         p_title: title,
         p_status: 'draft',
@@ -4401,6 +4569,7 @@ function AutoBuild({ go }: { go: Go }) {
         p_questions: questionSnapshots,
         p_content_screens: [],
         p_tiebreakers: tiebreakerSnapshots,
+        p_show_games: [],
       })
 
       if (error || !data) throw error ?? new Error('No quiz id returned')
@@ -4929,7 +5098,7 @@ function HostSetup({ go }: { go: Go }) {
 
     try {
       const { data: game, error: gameError } = await supabase
-        .rpc('create_game_from_quiz', {
+        .rpc('create_game_from_quiz_with_show_games', {
           p_quiz_id: quiz.id,
           p_settings: {
             answer_reveal: reveal,
@@ -5533,14 +5702,31 @@ type LiveContentScreenDefinition = {
   image_url: string | null
 }
 
+type LiveShowGameDefinition = {
+  id: string
+  show_game_key: string
+  item_position: number
+  round_number: number
+  round_title: string
+  game_type: 'beat-the-bomb'
+  title: string
+  settings: Json
+  status: 'ready' | 'open' | 'exploded' | 'cancelled'
+  started_at: string | null
+  explode_at: string | null
+  winner_team_id: string | null
+}
+
 type LiveSequenceItem =
   | { kind: 'question'; itemPosition: number; roundNumber: number; question: LiveQuestionDefinition }
   | { kind: 'content'; itemPosition: number; roundNumber: number; content: LiveContentScreenDefinition }
+  | { kind: 'show-game'; itemPosition: number; roundNumber: number; showGame: LiveShowGameDefinition }
 
-function liveSequenceItems(questions: LiveQuestionDefinition[], contentScreens: LiveContentScreenDefinition[]): LiveSequenceItem[] {
+function liveSequenceItems(questions: LiveQuestionDefinition[], contentScreens: LiveContentScreenDefinition[], showGames: LiveShowGameDefinition[] = []): LiveSequenceItem[] {
   return [
     ...questions.map(question => ({ kind: 'question' as const, itemPosition: question.item_position, roundNumber: question.round_number, question })),
     ...contentScreens.map(content => ({ kind: 'content' as const, itemPosition: content.item_position, roundNumber: content.round_number, content })),
+    ...showGames.map(showGame => ({ kind: 'show-game' as const, itemPosition: showGame.item_position, roundNumber: showGame.round_number, showGame })),
   ].sort((a, b) => a.itemPosition - b.itemPosition)
 }
 
@@ -5682,6 +5868,10 @@ function LiveQuestion({ go }: { go: Go }) {
   const [allQuestions, setAllQuestions] = useState<LiveQuestionDefinition[]>([])
   const [contentScreen, setContentScreen] = useState<LiveContentScreenDefinition | null>(null)
   const [allContentScreens, setAllContentScreens] = useState<LiveContentScreenDefinition[]>([])
+  const [showGame, setShowGame] = useState<LiveShowGameDefinition | null>(null)
+  const [allShowGames, setAllShowGames] = useState<LiveShowGameDefinition[]>([])
+  const [showGamePresses, setShowGamePresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
+  const [showGameNow, setShowGameNow] = useState(() => Date.now())
   const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
   const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
@@ -5702,7 +5892,7 @@ function LiveQuestion({ go }: { go: Go }) {
     async function loadLiveData() {
       const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('id, answer_phase, question_stage, current_question_key, current_content_screen_key, current_screen, settings')
+        .select('id, answer_phase, question_stage, current_question_key, current_content_screen_key, current_show_game_key, current_screen, settings')
         .eq('code', getHostGameCode())
         .maybeSingle()
 
@@ -5733,7 +5923,7 @@ function LiveQuestion({ go }: { go: Go }) {
         setPhase(game.answer_phase)
       }
 
-      const [questionResult, contentScreenResult, teamResult] = await Promise.all([
+      const [questionResult, contentScreenResult, showGameResult, teamResult] = await Promise.all([
         supabase
           .from('game_questions')
           .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, image_url, points_max, bonus, notes')
@@ -5745,6 +5935,11 @@ function LiveQuestion({ go }: { go: Go }) {
           .eq('game_id', game.id)
           .order('item_position', { ascending: true }),
         supabase
+          .from('game_show_games')
+          .select('id, show_game_key, item_position, round_number, round_title, game_type, title, settings, status, started_at, explode_at, winner_team_id')
+          .eq('game_id', game.id)
+          .order('item_position', { ascending: true }),
+        supabase
           .from('teams')
           .select('id, name, score')
           .eq('game_id', game.id)
@@ -5753,22 +5948,36 @@ function LiveQuestion({ go }: { go: Go }) {
 
       if (!active) return
 
-      if (questionResult.error || contentScreenResult.error || teamResult.error) {
-        console.error('Could not load live question data:', questionResult.error ?? contentScreenResult.error ?? teamResult.error)
+      if (questionResult.error || contentScreenResult.error || showGameResult.error || teamResult.error) {
+        console.error('Could not load live question data:', questionResult.error ?? contentScreenResult.error ?? showGameResult.error ?? teamResult.error)
         setLiveError('Could not load the live question.')
         return
       }
 
       const questions = (questionResult.data ?? []) as LiveQuestionDefinition[]
       const contentScreens = (contentScreenResult.data ?? []) as LiveContentScreenDefinition[]
+      const showGames = (showGameResult.data ?? []) as LiveShowGameDefinition[]
       const currentQuestion = questions.find(item => item.question_key === game.current_question_key) ?? questions[0] ?? null
       const currentContentScreen = contentScreens.find(item => item.screen_key === game.current_content_screen_key) ?? null
+      const currentShowGame = showGames.find(item => item.show_game_key === game.current_show_game_key) ?? null
 
       setAllQuestions(questions)
       setAllContentScreens(contentScreens)
+      setAllShowGames(showGames)
       setQuestion(currentQuestion)
       setContentScreen(currentContentScreen)
+      setShowGame(currentShowGame)
       setTeams((teamResult.data ?? []) as LiveTeam[])
+
+      if (currentShowGame) {
+        const { data: pressRows, error: pressError } = await supabase
+          .from('game_show_game_presses')
+          .select('team_id, pressed_at')
+          .eq('game_show_game_id', currentShowGame.id)
+          .order('pressed_at', { ascending: true })
+        if (pressError) console.error('Could not load show-game presses:', pressError)
+        else setShowGamePresses(pressRows ?? [])
+      } else setShowGamePresses([])
 
       if (currentQuestion) {
         const [submissionResult, bonusSubmissionResult] = await Promise.all([
@@ -5808,6 +6017,16 @@ function LiveQuestion({ go }: { go: Go }) {
           .channel(`host-live-question-${game.id}`)
           .on(
             'postgres_changes',
+            { event: '*', schema: 'public', table: 'game_show_games', filter: `game_id=eq.${game.id}` },
+            () => { void loadLiveData() },
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'game_show_game_presses', filter: `game_id=eq.${game.id}` },
+            () => { void loadLiveData() },
+          )
+          .on(
+            'postgres_changes',
             { event: '*', schema: 'public', table: 'submissions', filter: `game_id=eq.${game.id}` },
             () => { void loadLiveData() },
           )
@@ -5838,13 +6057,44 @@ function LiveQuestion({ go }: { go: Go }) {
     }
   }, [])
 
+  const activeShowGameId = showGame?.id ?? null
+  const activeShowGameStatus = showGame?.status ?? null
+  const activeShowGameExplodeAt = showGame?.explode_at ?? null
+
+  useEffect(() => {
+    if (!activeShowGameId || activeShowGameStatus !== 'open' || !activeShowGameExplodeAt) return
+    const interval = window.setInterval(() => setShowGameNow(Date.now()), 100)
+    const delay = Math.max(0, new Date(activeShowGameExplodeAt).getTime() - Date.now())
+    const timeout = window.setTimeout(() => {
+      void supabase.rpc('resolve_beat_the_bomb', { p_game_show_game_id: activeShowGameId })
+        .then(({ error }) => { if (error) console.error('Could not resolve Beat the Bomb:', error) })
+    }, delay + 50)
+    return () => { window.clearInterval(interval); window.clearTimeout(timeout) }
+  }, [activeShowGameExplodeAt, activeShowGameId, activeShowGameStatus])
+
+  async function openShowGame(nextShowGame: LiveShowGameDefinition) {
+    await updateLiveGame({
+      status: 'live',
+      current_screen: 'show-game',
+      answer_phase: 'closed',
+      current_content_screen_key: null,
+      current_show_game_key: nextShowGame.show_game_key,
+    })
+    const { data, error } = await supabase.rpc('start_beat_the_bomb', { p_game_show_game_id: nextShowGame.id })
+    if (error) throw error
+    setShowGame(data as LiveShowGameDefinition)
+    setShowGamePresses([])
+    setGameScreen('show-game')
+    setPhase('closed')
+  }
+
   async function handleOpenQuestion() {
     if (!question || actionBusy) return
     setActionBusy(true)
     setLiveError(null)
 
     try {
-      const firstRoundItem = liveSequenceItems(allQuestions, allContentScreens)
+      const firstRoundItem = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
         .find(item => item.roundNumber === question.round_number) ?? null
 
       if (firstRoundItem?.kind === 'content') {
@@ -5860,6 +6110,11 @@ function LiveQuestion({ go }: { go: Go }) {
         return
       }
 
+      if (firstRoundItem?.kind === 'show-game') {
+        await openShowGame(firstRoundItem.showGame)
+        return
+      }
+
       const openingQuestion = firstRoundItem?.kind === 'question' ? firstRoundItem.question : question
       await updateLiveGame({
         status: 'live',
@@ -5869,6 +6124,7 @@ function LiveQuestion({ go }: { go: Go }) {
         question_stage: 'core',
         current_question_key: openingQuestion.question_key,
         current_content_screen_key: null,
+        current_show_game_key: null,
       })
       setQuestion(openingQuestion)
       setGameScreen(openingQuestion.question_type)
@@ -6108,7 +6364,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
     try {
       await scoreCurrentQuestion(false)
-      const nextItem = liveSequenceItems(allQuestions, allContentScreens)
+      const nextItem = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
         .find(item => item.itemPosition > question.item_position) ?? null
       const roundIsComplete = !nextItem || nextItem.roundNumber !== question.round_number
 
@@ -6151,6 +6407,10 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         setPhase('closed')
         return
       }
+      if (nextItem.kind === 'show-game') {
+        await openShowGame(nextItem.showGame)
+        return
+      }
 
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
@@ -6180,7 +6440,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     setLiveError(null)
 
     try {
-      const nextItem = liveSequenceItems(allQuestions, allContentScreens)
+      const nextItem = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
         .find(item => item.itemPosition > question.item_position) ?? null
 
       if (!nextItem) {
@@ -6233,6 +6493,10 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         setPhase('closed')
         return
       }
+      if (nextItem.kind === 'show-game') {
+        await openShowGame(nextItem.showGame)
+        return
+      }
 
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
@@ -6262,7 +6526,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     setLiveError(null)
 
     try {
-      const nextItem = liveSequenceItems(allQuestions, allContentScreens)
+      const nextItem = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
         .find(item => item.itemPosition > contentScreen.item_position) ?? null
 
       if (answerRevealMode === 'round' && (!nextItem || nextItem.roundNumber !== contentScreen.round_number)) {
@@ -6318,6 +6582,10 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         setContentScreen(nextItem.content)
         return
       }
+      if (nextItem.kind === 'show-game') {
+        await openShowGame(nextItem.showGame)
+        return
+      }
 
       await updateLiveGame({
         current_screen: nextItem.question.question_type,
@@ -6336,6 +6604,64 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       setBonusSubmissions([])
     } catch (error) {
       console.error('Could not advance the content screen:', error)
+      setLiveError('Could not advance the game. Please try again.')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  async function handleAdvanceShowGame() {
+    if (!showGame || actionBusy || showGame.status !== 'exploded') return
+    setActionBusy(true)
+    setLiveError(null)
+    try {
+      const nextItem = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
+        .find(item => item.itemPosition > showGame.item_position) ?? null
+
+      if (!nextItem) {
+        if (!liveGameId) throw new Error('The live game could not be found.')
+        await finalizeLiveGame(liveGameId)
+        go('final-results')
+        return
+      }
+      if (nextItem.roundNumber !== showGame.round_number) {
+        await updateLiveGame({
+          current_screen: roundResultsScreen(leaderboardVisibility),
+          answer_phase: 'closed',
+          current_show_game_key: null,
+        })
+        go('end-of-round')
+        return
+      }
+      if (nextItem.kind === 'content') {
+        await updateLiveGame({ current_screen: 'content-screen', current_content_screen_key: nextItem.content.screen_key, current_show_game_key: null })
+        setContentScreen(nextItem.content)
+        setShowGame(null)
+        setGameScreen('content-screen')
+        return
+      }
+      if (nextItem.kind === 'show-game') {
+        await openShowGame(nextItem.showGame)
+        return
+      }
+      await updateLiveGame({
+        current_screen: nextItem.question.question_type,
+        answer_phase: 'open',
+        answer_editing_allowed: false,
+        question_stage: 'core',
+        current_question_key: nextItem.question.question_key,
+        current_content_screen_key: null,
+        current_show_game_key: null,
+      })
+      setQuestion(nextItem.question)
+      setShowGame(null)
+      setPhase('open')
+      setQuestionStage('core')
+      setGameScreen(nextItem.question.question_type)
+      setSubmissions([])
+      setBonusSubmissions([])
+    } catch (error) {
+      console.error('Could not advance the show game:', error)
       setLiveError('Could not advance the game. Please try again.')
     } finally {
       setActionBusy(false)
@@ -6393,7 +6719,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const leaderboardPlacements = competitionPlacements(leaderboard)
   const totalRounds = Math.max(1, ...allQuestions.map(item => item.round_number))
-  const sequenceItems = liveSequenceItems(allQuestions, allContentScreens)
+  const sequenceItems = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
   const firstRoundItem = question
     ? sequenceItems.find(item => item.roundNumber === question.round_number) ?? null
     : null
@@ -6538,6 +6864,49 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     </section>
   ) : null
 
+  if (gameScreen === 'show-game') {
+    const winner = teams.find(team => team.id === showGame?.winner_team_id) ?? null
+    const pressedTeamIds = new Set(showGamePresses.map(press => press.team_id))
+    const startedAt = showGame?.started_at ? new Date(showGame.started_at).getTime() : showGameNow
+    const explodeAt = showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow
+    const fuseProgress = showGame?.status === 'exploded' ? 0 : Math.max(0, Math.min(100, ((explodeAt - showGameNow) / Math.max(1, explodeAt - startedAt)) * 100))
+    return (
+      <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
+        <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }} className="sticky top-0 z-40 flex items-center gap-4 px-6">
+          <BrandWordmark dark compact className="text-sm" />
+          <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>Round {showGame?.round_number ?? 1} · Game</div>
+          <JoinCodeButton dark /><CancelGameButton go={go} dark />
+          <span style={{ background: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">GAME LIVE</span>
+        </header>
+        <main className="flex flex-1 items-center justify-center px-6 py-10">
+          <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-8 text-center shadow-2xl">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300">Beat the Bomb</p>
+            <h1 className="mt-2 text-5xl font-black">{showGame?.title ?? 'Beat the Bomb'}</h1>
+            <div className={`mt-7 text-9xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
+            <div style={{ background: C.liveLine }} className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full">
+              <div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" />
+            </div>
+            {showGame?.status === 'exploded' ? (
+              <div className="mt-7">
+                <p className="text-sm font-bold uppercase tracking-widest text-violet-300">Winner</p>
+                <p className="mt-2 text-4xl font-black text-emerald-400">{winner?.name ?? '—'}</p>
+              </div>
+            ) : (
+              <p style={{ color: C.liveDim }} className="mt-6 text-lg">Fuse burning… {showGamePresses.length} of {teams.length} teams have pressed.</p>
+            )}
+            <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
+              {teams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
+            </div>
+            {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
+            <button data-host-navigation="forward" onClick={handleAdvanceShowGame} disabled={actionBusy || showGame?.status !== 'exploded'} style={{ background: C.violet }} className="mx-auto mt-8 rounded-2xl px-10 py-5 text-xl font-extrabold text-white disabled:opacity-35">
+              {showGame?.status === 'exploded' ? 'Continue →' : 'Waiting for the bomb…'}
+            </button>
+          </section>
+        </main>
+      </div>
+    )
+  }
+
   if (gameScreen === 'content-screen') {
     const nextContentItem = contentScreen
       ? sequenceItems.find(item => item.itemPosition > contentScreen.item_position) ?? null
@@ -6548,7 +6917,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         ? 'End Round →'
         : nextContentItem.kind === 'content'
           ? 'Next Content Screen →'
-          : 'Open Next Question →'
+          : nextContentItem.kind === 'show-game' ? 'Start Game →' : 'Open Next Question →'
 
     return (
       <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
@@ -7323,13 +7692,15 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     ? 'Opening…'
                     : firstRoundItem?.kind === 'content'
                       ? 'Show First Content Screen →'
+                      : firstRoundItem?.kind === 'show-game'
+                        ? 'Start Beat the Bomb →'
                       : `Show Question ${question?.round_position ?? 1} →`}
                 </button>
               ) : gameScreen === 'question-results' ? (
                 <button data-host-navigation="forward" onClick={handleAdvance} disabled={actionBusy}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
                   className="w-full rounded-2xl py-6 text-xl font-extrabold transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
-                  {actionBusy ? 'Advancing…' : nextLiveItem?.kind === 'content' ? 'Show Content Screen →' : 'Next Question →'}
+                  {actionBusy ? 'Advancing…' : nextLiveItem?.kind === 'content' ? 'Show Content Screen →' : nextLiveItem?.kind === 'show-game' ? 'Start Game →' : 'Next Question →'}
                 </button>
               ) : phase === 'open' ? (
                 <button
@@ -7402,6 +7773,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                         ? 'End Round →'
                         : nextLiveItem?.kind === 'content'
                           ? 'Show Content Screen →'
+                          : nextLiveItem?.kind === 'show-game'
+                            ? 'Start Game →'
                           : 'Next Question →'}
                 </button>
               )}

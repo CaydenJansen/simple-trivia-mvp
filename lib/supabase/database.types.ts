@@ -397,6 +397,12 @@ export type Database = {
           referencedColumns: ['id']
         }]
       }
+      quiz_show_games: {
+        Row: ShowGameRow & { quiz_id: string; updated_at: string }
+        Insert: ShowGameInsert & { quiz_id: string; updated_at?: string }
+        Update: Partial<ShowGameInsert> & { quiz_id?: string; updated_at?: string }
+        Relationships: []
+      }
       quiz_tiebreakers: {
         Row: TiebreakerRow & { quiz_id: string; updated_at: string }
         Insert: TiebreakerInsert & { quiz_id: string; updated_at?: string }
@@ -422,6 +428,7 @@ export type Database = {
           question_stage: string
           current_question_key: string | null
           current_content_screen_key: string | null
+          current_show_game_key: string | null
           current_tiebreaker_attempt_id: string | null
           round_scores_finalized: boolean
           quiz_id: string | null
@@ -439,6 +446,7 @@ export type Database = {
           question_stage?: string
           current_question_key?: string | null
           current_content_screen_key?: string | null
+          current_show_game_key?: string | null
           current_tiebreaker_attempt_id?: string | null
           round_scores_finalized?: boolean
           quiz_id?: string | null
@@ -456,6 +464,7 @@ export type Database = {
           question_stage?: string
           current_question_key?: string | null
           current_content_screen_key?: string | null
+          current_show_game_key?: string | null
           current_tiebreaker_attempt_id?: string | null
           round_scores_finalized?: boolean
           quiz_id?: string | null
@@ -492,6 +501,18 @@ export type Database = {
           referencedRelation: 'games'
           referencedColumns: ['id']
         }]
+      }
+      game_show_games: {
+        Row: LiveShowGameRow
+        Insert: Omit<LiveShowGameRow, 'id'> & { id?: string }
+        Update: Partial<LiveShowGameRow>
+        Relationships: []
+      }
+      game_show_game_presses: {
+        Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; pressed_at: string }
+        Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; pressed_at?: string }
+        Update: Partial<{ id: string; game_show_game_id: string; game_id: string; team_id: string; pressed_at: string }>
+        Relationships: []
       }
       game_tiebreakers: {
         Row: TiebreakerRow & { game_id: string }
@@ -933,6 +954,22 @@ export type Database = {
           game_title: string
         }[]
       }
+      create_game_from_quiz_with_show_games: {
+        Args: { p_quiz_id: string; p_settings?: Json }
+        Returns: { game_id: string; game_code: string; game_title: string }[]
+      }
+      start_beat_the_bomb: {
+        Args: { p_game_show_game_id: string }
+        Returns: LiveShowGameRow
+      }
+      press_beat_the_bomb: {
+        Args: { p_game_show_game_id: string; p_team_id: string }
+        Returns: LiveShowGameRow
+      }
+      resolve_beat_the_bomb: {
+        Args: { p_game_show_game_id: string }
+        Returns: LiveShowGameRow
+      }
       finalize_question_scoring: {
         Args: {
           p_game_id: string
@@ -1045,6 +1082,19 @@ export type Database = {
           p_questions: Json
           p_content_screens?: Json
           p_tiebreakers?: Json
+        }
+        Returns: string
+      }
+      save_quiz_with_show_games: {
+        Args: {
+          p_quiz_id: string | null
+          p_title: string
+          p_status: string
+          p_estimated_minutes: number
+          p_questions: Json
+          p_content_screens?: Json
+          p_tiebreakers?: Json
+          p_show_games?: Json
         }
         Returns: string
       }
@@ -1168,6 +1218,40 @@ type ContentScreenInsert = {
   body?: string | null
   image_url?: string | null
   created_at?: string
+}
+
+type ShowGameRow = {
+  id: string
+  show_game_key: string
+  item_position: number
+  round_number: number
+  round_title: string
+  game_type: 'beat-the-bomb'
+  title: string
+  settings: Json
+  created_at: string
+}
+
+type ShowGameInsert = {
+  id?: string
+  show_game_key: string
+  item_position: number
+  round_number: number
+  round_title: string
+  game_type: 'beat-the-bomb'
+  title: string
+  settings?: Json
+  created_at?: string
+}
+
+type LiveShowGameRow = ShowGameRow & {
+  game_id: string
+  quiz_show_game_id: string | null
+  status: 'ready' | 'open' | 'exploded' | 'cancelled'
+  started_at: string | null
+  explode_at: string | null
+  exploded_at: string | null
+  winner_team_id: string | null
 }
 
 type TiebreakerRow = {

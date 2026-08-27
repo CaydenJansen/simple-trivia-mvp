@@ -44,7 +44,7 @@ type PlayerScreen =
   | 'bonus-answer' | 'bonus-submitted'
   | 'submitted' | 'no-answer' | 'correct' | 'incorrect'
   | 'partial-correct' | 'pending-review'
-  | 'content-screen' | 'intermission' | 'question-results' | 'round-results' | 'round-results-hidden'
+  | 'content-screen' | 'show-game' | 'intermission' | 'question-results' | 'round-results' | 'round-results-hidden'
   | 'delayed-reveal' | 'winner' | 'final-result'
   | 'tiebreaker-pending' | 'tiebreaker' | 'tiebreaker-result'
   | 'reconnecting' | 'game-ended'
@@ -72,7 +72,7 @@ const LIVE_PLAYER_SCREENS = new Set<PlayerScreen>([
   'waiting', 'round-start', 'single-answer', 'image-question', 'multiple-choice',
   'multi-answer', 'multi-part', 'ranking', 'submitted', 'no-answer', 'correct',
   'bonus-answer', 'bonus-submitted',
-  'incorrect', 'partial-correct', 'content-screen', 'intermission', 'question-results', 'round-results',
+  'incorrect', 'partial-correct', 'content-screen', 'show-game', 'intermission', 'question-results', 'round-results',
   'pending-review',
   'round-results-hidden', 'delayed-reveal', 'winner', 'final-result', 'reconnecting', 'game-ended',
   'tiebreaker-pending', 'tiebreaker', 'tiebreaker-result',
@@ -89,6 +89,7 @@ type RemoteGameState = {
   question_stage: string | null
   current_question_key: string | null
   current_content_screen_key: string | null
+  current_show_game_key: string | null
 }
 
 type LiveQuestionDefinition = {
@@ -264,7 +265,7 @@ function useLivePlayerSync(
       }
       const { data, error } = await supabase
         .from('games')
-        .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key')
+        .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
         .eq('id', activeGameId)
         .maybeSingle()
       if (error) {
@@ -1512,7 +1513,7 @@ async function handleJoin() {
     localStorage.removeItem('simple-trivia-join-request-token')
     const { data: game } = await supabase
       .from('games')
-      .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key')
+      .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
       .eq('id', gameId)
       .maybeSingle()
     const nextScreen = game ? await resolveLivePlayerScreen(gameId, request.team_id, game as RemoteGameState) : null
@@ -2622,6 +2623,105 @@ function ContentScreen() {
   )
 }
 
+type PlayerShowGame = {
+  id: string
+  show_game_key: string
+  round_number: number
+  round_title: string
+  game_type: 'beat-the-bomb'
+  title: string
+  status: 'ready' | 'open' | 'exploded' | 'cancelled'
+  winner_team_id: string | null
+}
+
+function BeatTheBomb() {
+  const snapshot = usePlayerSnapshot()
+  const [showGame, setShowGame] = useState<PlayerShowGame | null>(null)
+  const [hasPressed, setHasPressed] = useState(false)
+  const [pressing, setPressing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    const teamId = localStorage.getItem('simple-trivia-team-id')
+    if (!gameId || !teamId) return
+    const { data: game } = await supabase.from('games').select('current_show_game_key').eq('id', gameId).maybeSingle()
+    if (!game?.current_show_game_key) return
+    const { data: activeShowGame, error: showGameError } = await supabase
+      .from('game_show_games')
+      .select('id, show_game_key, round_number, round_title, game_type, title, status, winner_team_id')
+      .eq('game_id', gameId)
+      .eq('show_game_key', game.current_show_game_key)
+      .maybeSingle()
+    if (showGameError) { setError('Could not load the game.'); return }
+    setShowGame(activeShowGame as PlayerShowGame | null)
+    if (activeShowGame) {
+      const { data: press } = await supabase.from('game_show_game_presses').select('id').eq('game_show_game_id', activeShowGame.id).eq('team_id', teamId).maybeSingle()
+      setHasPressed(Boolean(press))
+    }
+  }, [])
+
+  useEffect(() => {
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    if (!gameId) return
+    // Initial network hydration intentionally updates component state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load()
+    const channel = supabase.channel(`player-show-game-${gameId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_games', filter: `game_id=eq.${gameId}` }, () => { void load() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_presses', filter: `game_id=eq.${gameId}` }, () => { void load() })
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [load])
+
+  async function press() {
+    if (!showGame || hasPressed || pressing || showGame.status !== 'open') return
+    const teamId = localStorage.getItem('simple-trivia-team-id')
+    if (!teamId) return
+    setPressing(true)
+    setError(null)
+    const { error: pressError } = await supabase.rpc('press_beat_the_bomb', { p_game_show_game_id: showGame.id, p_team_id: teamId })
+    if (pressError) setError(pressError.message.includes('already pressed') ? 'Your press is already locked in.' : 'That press did not go through. Try again.')
+    else setHasPressed(true)
+    setPressing(false)
+    void load()
+  }
+
+  const teamId = typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id')
+  const exploded = showGame?.status === 'exploded'
+  const won = exploded && showGame?.winner_team_id === teamId
+
+  return (
+    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={showGame ? `Round ${showGame.round_number}` : ''} question="Game" />
+      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8 text-center">
+        <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-[0.18em]">Beat the Bomb</p>
+        <h1 style={{ color: C.ink }} className="mt-2 text-3xl font-black">{showGame?.title ?? 'Beat the Bomb'}</h1>
+        <div className={`mt-7 text-8xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>
+        {exploded ? (
+          <div className="mt-7">
+            <h2 style={{ color: won ? C.go : C.ink }} className="text-3xl font-black">{won ? 'Nice work — you won!' : 'The bomb exploded!'}</h2>
+            <p style={{ color: C.sub }} className="mt-3 text-base">{won ? 'You were the last team to press.' : 'Another team got the final press this time.'}</p>
+            <div className="mt-7"><WaitMsg msg="Waiting for the host to continue…" /></div>
+          </div>
+        ) : hasPressed ? (
+          <div className="mt-7">
+            <div style={{ background: C.violetPale, color: C.violet }} className="mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl">✓</div>
+            <h2 style={{ color: C.ink }} className="mt-4 text-2xl font-black">Press locked in</h2>
+            <p style={{ color: C.sub }} className="mt-2">Now hope nobody presses after you…</p>
+          </div>
+        ) : (
+          <div className="mt-7 w-full max-w-sm">
+            <p style={{ color: C.sub }} className="mb-5 text-base leading-6">Press once. Be the last team to press before the bomb explodes.</p>
+            <button onClick={() => void press()} disabled={pressing || !showGame || showGame.status !== 'open'} style={{ background: C.violet, boxShadow: '0 12px 30px rgba(124,58,237,.35)' }} className="w-full rounded-3xl px-8 py-7 text-2xl font-black text-white active:scale-95 disabled:opacity-50">{pressing ? 'PRESSING…' : 'PRESS ME'}</button>
+          </div>
+        )}
+        {error && <p style={{ color: C.stop }} className="mt-5 text-sm font-bold">{error}</p>}
+      </div>
+    </div>
+  )
+}
+
 // ─── SCREEN 16 — INTERMISSION ─────────────────────────────────────────────────
 function Intermission() {
   const snapshot = usePlayerSnapshot()
@@ -3123,6 +3223,7 @@ function renderScreen(screen: PlayerScreen, go: (s: PlayerScreen) => void) {
     case 'partial-correct':      return <PartialCorrect />
     case 'pending-review':       return <PendingReview />
     case 'content-screen':       return <ContentScreen />
+    case 'show-game':            return <BeatTheBomb />
     case 'intermission':   return <Intermission />
     case 'question-results':      return <QuestionResults />
     case 'round-results':         return <RoundResults />
@@ -3221,7 +3322,7 @@ export function PlayerFlow() {
       const [{ data: game, error: gameError }, { data: team, error: teamError }] = await Promise.all([
         supabase
           .from('games')
-          .select('status, current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key')
+          .select('status, current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
           .eq('id', gameId)
           .maybeSingle(),
         teamId
