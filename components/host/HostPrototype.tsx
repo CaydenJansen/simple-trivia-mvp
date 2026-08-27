@@ -100,6 +100,7 @@ import {
 } from "@/lib/trivia/auto-run";
 import { playerScoreVisibilityFromSettings, type PlayerScoreVisibility } from "@/lib/trivia/score-visibility";
 import { teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
+import { quizExitPrompt } from "@/lib/trivia/quiz-exit";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -1309,6 +1310,7 @@ function CreateQuiz({ go }: { go: Go }) {
     if (id === 'scratch') {
       localStorage.removeItem('simple-trivia-selected-quiz-id')
       localStorage.removeItem('simple-trivia-selected-quiz-title')
+      localStorage.removeItem('simple-trivia-new-quiz-id')
     }
     go(next)
   }
@@ -1620,11 +1622,13 @@ function QuizBuilder({ go }: { go: Go }) {
   const [rounds, setRounds] = useState<BuilderRoundData[]>([])
   const [tiebreakers, setTiebreakers] = useState<BuilderTiebreakerData[]>([])
   const [persisted, setPersisted] = useState(false)
+  const [newQuiz, setNewQuiz] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [discarding, setDiscarding] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
   const [editingTiebreakerId, setEditingTiebreakerId] = useState<string | null>(null)
@@ -1662,9 +1666,10 @@ function QuizBuilder({ go }: { go: Go }) {
   const needsStatusSync = persisted && !dirty && quizStatus !== expectedQuizStatus
   const needsSave = !persisted || dirty || needsStatusSync
   const canHost = quizCanHost({ persisted, dirty, ready: readiness.ready, status: quizStatus })
+  const exitPrompt = quizExitPrompt({ newQuiz, dirty })
 
   useEffect(() => {
-    if (loading || !needsSave) return
+    if (loading || !exitPrompt) return
 
     function warnBeforeUnload(event: BeforeUnloadEvent) {
       event.preventDefault()
@@ -1673,7 +1678,7 @@ function QuizBuilder({ go }: { go: Go }) {
 
     window.addEventListener('beforeunload', warnBeforeUnload)
     return () => window.removeEventListener('beforeunload', warnBeforeUnload)
-  }, [loading, needsSave])
+  }, [exitPrompt, loading])
 
   useEffect(() => {
     let active = true
@@ -1691,7 +1696,8 @@ function QuizBuilder({ go }: { go: Go }) {
         setQuizId(null)
         setQuizStatus('draft')
         setPersisted(false)
-        setDirty(true)
+        setNewQuiz(true)
+        setDirty(false)
         setLoading(false)
         return
       }
@@ -1861,6 +1867,7 @@ function QuizBuilder({ go }: { go: Go }) {
         notes: row.notes ?? '',
       })))
       setPersisted(true)
+      setNewQuiz(localStorage.getItem('simple-trivia-new-quiz-id') === selectedId)
       setDirty(false)
       setLoading(false)
     }
@@ -2194,6 +2201,7 @@ function QuizBuilder({ go }: { go: Go }) {
 
     setQuizId(data)
     setPersisted(true)
+    setNewQuiz(false)
     setQuizStatus(statusToSave)
     setDirty(false)
     setSaveNotice(statusToSave === 'ready'
@@ -2201,6 +2209,7 @@ function QuizBuilder({ go }: { go: Go }) {
       : `Saved as a draft. ${readiness.blockers[0] ?? 'Finish the required quiz content before hosting.'}`)
     localStorage.setItem('simple-trivia-selected-quiz-id', data)
     localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
+    localStorage.removeItem('simple-trivia-new-quiz-id')
     return data
   }
 
@@ -2212,7 +2221,7 @@ function QuizBuilder({ go }: { go: Go }) {
   }
 
   function requestExit(next: Screen) {
-    if (loading || !needsSave) {
+    if (loading || !exitPrompt) {
       go(next)
       return
     }
@@ -2226,6 +2235,35 @@ function QuizBuilder({ go }: { go: Go }) {
     const savedQuizId = await saveQuiz()
     if (!savedQuizId) return
     setPendingExit(null)
+    go(next)
+  }
+
+  async function discardAndExit() {
+    if (!pendingExit || discarding) return
+    const next = pendingExit
+    setSaveError(null)
+    setDiscarding(true)
+
+    if (newQuiz && quizId) {
+      const { error } = await supabase.from('quizzes').delete().eq('id', quizId)
+      if (error) {
+        console.error('Could not discard new quiz:', error)
+        setSaveError('Could not discard this quiz. Please try again.')
+        setDiscarding(false)
+        return
+      }
+    }
+
+    if (newQuiz) {
+      if (!quizId || localStorage.getItem('simple-trivia-selected-quiz-id') === quizId) {
+        localStorage.removeItem('simple-trivia-selected-quiz-id')
+        localStorage.removeItem('simple-trivia-selected-quiz-title')
+      }
+      localStorage.removeItem('simple-trivia-new-quiz-id')
+    }
+
+    setPendingExit(null)
+    setDiscarding(false)
     go(next)
   }
 
@@ -2692,13 +2730,15 @@ function QuizBuilder({ go }: { go: Go }) {
       {pendingExit && (
         <div data-host-shortcuts="blocked" className="fixed inset-0 z-[130] flex items-center justify-center bg-zinc-950/55 px-4 backdrop-blur-sm">
           <section className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
-            <h2 className="text-xl font-bold text-zinc-900">Save your changes?</h2>
-            <p className="mt-3 text-sm leading-6 text-zinc-600">This quiz has changes that haven’t been saved yet. Save them before leaving, or discard them and return to My Quizzes.</p>
+            <h2 className="text-xl font-bold text-zinc-900">{newQuiz ? 'Save this quiz?' : 'Save your changes?'}</h2>
+            <p className="mt-3 text-sm leading-6 text-zinc-600">{newQuiz
+              ? 'This is a new quiz. Save it to keep it in My Quizzes, or discard the quiz completely.'
+              : 'This quiz has changes that haven’t been saved yet. Save them before leaving, or discard only those changes.'}</p>
             {saveError && <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{saveError}</p>}
             <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button disabled={saving} onClick={() => setPendingExit(null)} className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Keep Editing</button>
-              <button disabled={saving} onClick={() => { const next = pendingExit; setPendingExit(null); go(next) }} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50">Discard Changes</button>
-              <button disabled={saving} onClick={() => void saveAndExit()} className="rounded-xl bg-violet px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-hover disabled:opacity-50">{saving ? 'Saving…' : 'Save & Leave'}</button>
+              <button disabled={saving || discarding} onClick={() => setPendingExit(null)} className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Keep Editing</button>
+              <button disabled={saving || discarding} onClick={() => void discardAndExit()} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">{discarding ? 'Discarding…' : newQuiz ? 'Discard Quiz' : 'Discard Changes'}</button>
+              <button disabled={saving || discarding} onClick={() => void saveAndExit()} className="rounded-xl bg-violet px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-hover disabled:opacity-50">{saving ? 'Saving…' : newQuiz ? 'Save Quiz & Leave' : 'Save & Leave'}</button>
             </div>
           </section>
         </div>
@@ -4670,6 +4710,7 @@ function AutoBuild({ go }: { go: Go }) {
       if (error || !data) throw error ?? new Error('No quiz id returned')
       localStorage.setItem('simple-trivia-selected-quiz-id', data)
       localStorage.setItem('simple-trivia-selected-quiz-title', title)
+      localStorage.setItem('simple-trivia-new-quiz-id', data)
       go('quiz-builder')
     } catch (error) {
       console.error('Could not generate quiz:', error)
@@ -5970,6 +6011,8 @@ function LiveQuestion({ go }: { go: Go }) {
   const [contentScreen, setContentScreen] = useState<LiveContentScreenDefinition | null>(null)
   const [allContentScreens, setAllContentScreens] = useState<LiveContentScreenDefinition[]>([])
   const [showGame, setShowGame] = useState<LiveShowGameDefinition | null>(null)
+  const [wheelSettled, setWheelSettled] = useState(false)
+  const handleWheelSettled = useCallback(() => setWheelSettled(true), [])
   const [allShowGames, setAllShowGames] = useState<LiveShowGameDefinition[]>([])
   const [showGamePresses, setShowGamePresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [showGameNow, setShowGameNow] = useState(() => Date.now())
@@ -6182,6 +6225,7 @@ function LiveQuestion({ go }: { go: Go }) {
   }, [activeShowGameExplodeAt, activeShowGameId, activeShowGameStatus, showGame?.game_type])
 
   async function openShowGame(nextShowGame: LiveShowGameDefinition) {
+    setWheelSettled(false)
     await updateLiveGame({
       status: 'live',
       current_screen: 'show-game',
@@ -7065,6 +7109,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const isWheel = showGame?.game_type === 'spin-the-wheel'
     const eligibleIds = showGameEligibleTeamIds(showGame?.settings)
     const wheelTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : teams
+    const showGameWinner = showGame?.status === 'exploded' && (!isWheel || wheelSettled)
     const pressedTeamIds = new Set(showGamePresses.map(press => press.team_id))
     const startedAt = showGame?.started_at ? new Date(showGame.started_at).getTime() : showGameNow
     const explodeAt = showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow
@@ -7085,25 +7130,25 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               {showGameRewardDescription(activeShowGameReward)}
             </p>
             {isWheel ? (
-              <div className="mt-7"><TeamWheel dark teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} /></div>
+              <div className="mt-7"><TeamWheel dark teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} onSettled={handleWheelSettled} /></div>
             ) : (
               <><div className={`mt-7 text-9xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
               <div style={{ background: C.liveLine }} className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full"><div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" /></div></>
             )}
-            {showGame?.status === 'exploded' ? (
+            {showGameWinner ? (
               <div className="mt-7">
                 <p className="text-sm font-bold uppercase tracking-widest text-violet-300">Winner</p>
                 <p className="mt-2 text-4xl font-black text-emerald-400">{winner?.name ?? '—'}</p>
               </div>
             ) : (
-              <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isWheel ? `Spinning across ${wheelTeams.length} teams…` : `Fuse burning… ${showGamePresses.length} of ${teams.length} teams have pressed.`}</p>
+              <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`) : `Fuse burning… ${showGamePresses.length} of ${teams.length} teams have pressed.`}</p>
             )}
             {!isWheel && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
               {teams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
             </div>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
-            <button data-host-navigation="forward" onClick={handleAdvanceShowGame} disabled={actionBusy || showGame?.status !== 'exploded'} style={{ background: C.violet }} className="mx-auto mt-8 rounded-2xl px-10 py-5 text-xl font-extrabold text-white disabled:opacity-35">
-              {showGame?.status === 'exploded' ? 'Continue →' : isWheel ? 'Wheel spinning…' : 'Waiting for the bomb…'}
+            <button data-host-navigation="forward" onClick={handleAdvanceShowGame} disabled={actionBusy || showGame?.status !== 'exploded' || (isWheel && !wheelSettled)} style={{ background: C.violet }} className="mx-auto mt-8 rounded-2xl px-10 py-5 text-xl font-extrabold text-white disabled:opacity-35">
+              {showGameWinner ? 'Continue →' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
             </button>
           </section>
         </main>

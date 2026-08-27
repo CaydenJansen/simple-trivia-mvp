@@ -1,24 +1,27 @@
 "use client";
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 type TeamWheelProps = {
   teamNames: string[]
   spinning?: boolean
   winnerName?: string | null
   dark?: boolean
+  onSettled?: () => void
 }
 
 const WHEEL_COLORS = ['#7C3AED', '#F59E0B', '#10B981', '#EC4899', '#2563EB', '#F97316']
 
-export default function TeamWheel({ teamNames, spinning = false, winnerName = null, dark = false }: TeamWheelProps) {
+export default function TeamWheel({ teamNames, spinning = false, winnerName = null, dark = false, onSettled }: TeamWheelProps) {
   const names = teamNames.length > 0 ? teamNames : ['Waiting for teams…']
+  const namesKey = names.join('\u0000')
   const slice = 360 / names.length
   const winnerIndex = winnerName ? names.indexOf(winnerName) : -1
   const restingRotation = winnerIndex >= 0 ? -((winnerIndex * slice) + (slice / 2)) : 0
   const wheelRef = useRef<HTMLDivElement>(null)
   const rotationRef = useRef(0)
   const wasSpinningRef = useRef(false)
+  const [selectedName, setSelectedName] = useState(names[0])
   const background = names.map((_, index) => {
     const start = index * slice
     return `${WHEEL_COLORS[index % WHEEL_COLORS.length]} ${start}deg ${start + slice}deg`
@@ -27,16 +30,26 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
   useEffect(() => {
     const wheel = wheelRef.current
     if (!wheel) return
+    const animatedNames = namesKey.split('\u0000')
 
     let frame = 0
+    let cancelled = false
+    const updateWheel = (rotation: number) => {
+      rotationRef.current = rotation
+      wheel.style.transform = `rotate(${rotation}deg)`
+      const pointerAngle = ((-rotation % 360) + 360) % 360
+      const selectedIndex = Math.min(animatedNames.length - 1, Math.floor(pointerAngle / slice))
+      setSelectedName(current => current === animatedNames[selectedIndex] ? current : animatedNames[selectedIndex])
+    }
+
     if (spinning) {
       wasSpinningRef.current = true
       wheel.style.transition = 'none'
       let previous = performance.now()
       const animate = (now: number) => {
-        rotationRef.current += Math.min(40, now - previous) * 0.62
+        const nextRotation = rotationRef.current + (Math.min(40, now - previous) * 0.62)
         previous = now
-        wheel.style.transform = `rotate(${rotationRef.current}deg)`
+        updateWheel(nextRotation)
         frame = requestAnimationFrame(animate)
       }
       frame = requestAnimationFrame(animate)
@@ -44,21 +57,43 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
       const current = rotationRef.current
       const currentMod = ((current % 360) + 360) % 360
       const targetMod = ((restingRotation % 360) + 360) % 360
-      const target = current + ((targetMod - currentMod + 360) % 360) + (360 * (wasSpinningRef.current ? 3 : 0))
-      rotationRef.current = target
+      const shouldSettle = wasSpinningRef.current
+      const target = current + ((targetMod - currentMod + 360) % 360) + (360 * (shouldSettle ? 5 : 0))
       wasSpinningRef.current = false
-      wheel.style.transition = 'transform 2800ms cubic-bezier(.12,.72,.12,1)'
-      frame = requestAnimationFrame(() => { wheel.style.transform = `rotate(${target}deg)` })
+      wheel.style.transition = 'none'
+      if (!shouldSettle) {
+        updateWheel(target)
+        setSelectedName(animatedNames[winnerIndex])
+        onSettled?.()
+      } else {
+        const duration = 5600
+        const started = performance.now()
+        const settle = (now: number) => {
+          const progress = Math.min(1, (now - started) / duration)
+          const eased = 1 - ((1 - progress) ** 5)
+          updateWheel(current + ((target - current) * eased))
+          if (progress < 1) frame = requestAnimationFrame(settle)
+          else {
+            setSelectedName(animatedNames[winnerIndex])
+            if (!cancelled) onSettled?.()
+          }
+        }
+        frame = requestAnimationFrame(settle)
+      }
     } else {
       wheel.style.transition = 'none'
-      wheel.style.transform = `rotate(${rotationRef.current}deg)`
+      updateWheel(rotationRef.current)
     }
 
-    return () => cancelAnimationFrame(frame)
-  }, [restingRotation, spinning, winnerIndex])
+    return () => { cancelled = true; cancelAnimationFrame(frame) }
+  }, [namesKey, onSettled, restingRotation, slice, spinning, winnerIndex])
 
   return (
     <div className="flex flex-col items-center">
+      <div style={{ background: dark ? '#211A38' : '#F3EEFF', color: dark ? '#F4F1FF' : '#4C1D95' }} className="mb-5 min-h-14 w-full max-w-sm rounded-2xl px-5 py-3 text-center shadow-sm">
+        <p style={{ color: dark ? '#A9A4BF' : '#77738C' }} className="text-[10px] font-black uppercase tracking-[0.18em]">Under the pointer</p>
+        <p className="mt-1 truncate text-xl font-black">{selectedName}</p>
+      </div>
       <div className="relative h-72 w-72 sm:h-96 sm:w-96">
         <div className="absolute left-1/2 top-[-10px] z-20 -translate-x-1/2 border-x-[14px] border-t-[24px] border-x-transparent border-t-rose-500 drop-shadow-lg" />
         <div

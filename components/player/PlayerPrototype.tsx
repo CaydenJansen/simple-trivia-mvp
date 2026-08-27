@@ -2641,6 +2641,9 @@ function ShowGame() {
   const snapshot = usePlayerSnapshot()
   const { teams: liveTeams } = useLiveLeaderboard()
   const [showGame, setShowGame] = useState<PlayerShowGame | null>(null)
+  const [wheelSettled, setWheelSettled] = useState(false)
+  const wheelShowGameIdRef = useRef<string | null>(null)
+  const handleWheelSettled = useCallback(() => setWheelSettled(true), [])
   const [hasPressed, setHasPressed] = useState(false)
   const [pressing, setPressing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -2658,6 +2661,10 @@ function ShowGame() {
       .eq('show_game_key', game.current_show_game_key)
       .maybeSingle()
     if (showGameError) { setError('Could not load the game.'); return }
+    if (activeShowGame?.id !== wheelShowGameIdRef.current) {
+      wheelShowGameIdRef.current = activeShowGame?.id ?? null
+      setWheelSettled(false)
+    }
     setShowGame(activeShowGame as PlayerShowGame | null)
     if (activeShowGame?.game_type === 'beat-the-bomb') {
       const { data: press } = await supabase.from('game_show_game_presses').select('id').eq('game_show_game_id', activeShowGame.id).eq('team_id', teamId).maybeSingle()
@@ -2702,6 +2709,7 @@ function ShowGame() {
   const wheelTeamIds = Array.isArray(eligibleIds) ? eligibleIds.filter((id): id is string => typeof id === 'string') : []
   const wheelTeams = liveTeams.filter(team => wheelTeamIds.length === 0 || wheelTeamIds.includes(team.id))
   const wheelWinner = liveTeams.find(team => team.id === showGame?.winner_team_id) ?? null
+  const showWheelOutcome = exploded && (!isWheel || wheelSettled)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2710,16 +2718,16 @@ function ShowGame() {
         <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-[0.18em]">{isWheel ? 'Spin the Wheel' : 'Beat the Bomb'}</p>
         <h1 style={{ color: C.ink }} className="mt-2 text-3xl font-black">{showGame?.title ?? (isWheel ? 'Spin the Wheel' : 'Beat the Bomb')}</h1>
         <p style={{ color: C.sub }} className="mt-3 max-w-sm text-base font-semibold">{showGameRewardDescription(reward)}</p>
-        {isWheel && <div className="mt-7"><TeamWheel teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} /></div>}
+        {isWheel && <div className="mt-7"><TeamWheel teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} onSettled={handleWheelSettled} /></div>}
         {!isWheel && <div className={`mt-7 text-8xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
-        {exploded ? (
+        {showWheelOutcome ? (
           <div className="mt-7">
             <h2 style={{ color: won ? C.go : C.ink }} className="text-3xl font-black">{won ? showGameWinnerMessage(reward) : isWheel ? 'Another team was selected' : 'The bomb exploded!'}</h2>
             <p style={{ color: C.sub }} className="mt-3 text-base">{won ? (isWheel ? 'The wheel landed on your team!' : 'You were the last team to press.') : (isWheel ? 'Better luck on the next spin.' : 'Another team got the final press this time.')}</p>
             <div className="mt-7"><WaitMsg msg="Waiting for the host to continue…" /></div>
           </div>
         ) : isWheel ? (
-          <div className="mt-7"><h2 style={{ color: C.ink }} className="text-2xl font-black">The wheel is spinning…</h2><p style={{ color: C.sub }} className="mt-2">One team will be selected at random.</p></div>
+          <div className="mt-7"><h2 style={{ color: C.ink }} className="text-2xl font-black">{exploded ? 'The wheel is slowing down…' : 'The wheel is spinning…'}</h2><p style={{ color: C.sub }} className="mt-2">Watch the team names under the pointer.</p></div>
         ) : hasPressed ? (
           <div className="mt-7">
             <div style={{ background: C.violetPale, color: C.violet }} className="mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl">✓</div>
