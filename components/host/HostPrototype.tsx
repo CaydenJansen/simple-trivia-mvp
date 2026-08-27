@@ -73,6 +73,13 @@ import { loadAllSourceRows } from "@/lib/trivia/paginated-source-load";
 import { nextQuizCopyTitle } from "@/lib/trivia/quiz-copy";
 import { quizPreviewIndexForKey } from "@/lib/trivia/quiz-preview-navigation";
 import {
+  DEFAULT_SHOW_GAME_REWARD,
+  showGameRewardDescription,
+  showGameRewardFromSettings,
+  showGameRewardSettings,
+  type ShowGameRewardType,
+} from "@/lib/trivia/show-game-rewards";
+import {
   EMPTY_SOURCE_QUESTION_BONUS,
   estimatedQuizMinutes,
   sourceQuestionBonusDraft,
@@ -1413,6 +1420,10 @@ type BuilderShowGameData = {
   itemPosition: number
   gameType: 'beat-the-bomb'
   title: string
+  rewardType: ShowGameRewardType
+  rewardPoints: number
+  rewardDescription: string
+  winnerMessage: string
 }
 
 type BuilderRoundData = {
@@ -1707,7 +1718,7 @@ function QuizBuilder({ go }: { go: Go }) {
           .order('position', { ascending: true }),
         supabase
           .from('quiz_show_games')
-          .select('id, show_game_key, item_position, round_number, round_title, game_type, title')
+          .select('id, show_game_key, item_position, round_number, round_title, game_type, title, settings')
           .eq('quiz_id', selectedId)
           .order('item_position', { ascending: true }),
       ])
@@ -1811,6 +1822,7 @@ function QuizBuilder({ go }: { go: Go }) {
       }
 
       for (const row of showGameResult.data ?? []) {
+        const reward = showGameRewardFromSettings(row.settings)
         const round = groupedRounds.get(row.round_number) ?? {
           id: row.round_number,
           title: row.round_title,
@@ -1824,6 +1836,10 @@ function QuizBuilder({ go }: { go: Go }) {
           itemPosition: row.item_position,
           gameType: row.game_type as 'beat-the-bomb',
           title: row.title,
+          rewardType: reward.type,
+          rewardPoints: reward.points,
+          rewardDescription: reward.description,
+          winnerMessage: reward.winnerMessage,
         })
         groupedRounds.set(row.round_number, round)
       }
@@ -2052,6 +2068,14 @@ function QuizBuilder({ go }: { go: Go }) {
       setSaveError('Give every game a title before saving.')
       return null
     }
+    if (rounds.some(round => round.showGames.some(showGame => showGame.rewardType === 'custom' && !showGame.rewardDescription.trim()))) {
+      setSaveError('Describe the prize for every custom game reward before saving.')
+      return null
+    }
+    if (rounds.some(round => round.showGames.some(showGame => showGame.rewardType === 'custom' && !showGame.winnerMessage.trim()))) {
+      setSaveError('Add a winner message for every custom game reward before saving.')
+      return null
+    }
     if (tiebreakers.some(tiebreaker => !tiebreaker.prompt.trim())) {
       setSaveError('Give every tiebreaker a question before saving, or remove the unfinished tiebreaker.')
       return null
@@ -2109,7 +2133,12 @@ function QuizBuilder({ go }: { go: Go }) {
             round_title: round.title,
             game_type: item.showGame.gameType,
             title: item.showGame.title.trim(),
-            settings: { minimum_seconds: 10, maximum_seconds: 30 },
+            settings: showGameRewardSettings({
+              type: item.showGame.rewardType,
+              points: item.showGame.rewardPoints,
+              description: item.showGame.rewardDescription.trim(),
+              winnerMessage: item.showGame.winnerMessage.trim(),
+            }),
           })
           return
         }
@@ -2347,6 +2376,10 @@ function QuizBuilder({ go }: { go: Go }) {
                     itemPosition: nextRoundItemPosition(item),
                     gameType: 'beat-the-bomb',
                     title: 'Beat the Bomb',
+                    rewardType: DEFAULT_SHOW_GAME_REWARD.type,
+                    rewardPoints: DEFAULT_SHOW_GAME_REWARD.points,
+                    rewardDescription: DEFAULT_SHOW_GAME_REWARD.description,
+                    winnerMessage: DEFAULT_SHOW_GAME_REWARD.winnerMessage,
                   }],
                 } : item))
                 setDirty(true)
@@ -3245,7 +3278,15 @@ function QuizPreview({ title, rounds, onClose }: {
                 <h3 className="mt-5 text-4xl font-black">{active.showGame.title}</h3>
                 <p className="mx-auto mt-4 max-w-lg text-lg text-zinc-300">Press once. Be the last team to press before the bomb explodes.</p>
                 <div className="mx-auto mt-7 max-w-xs rounded-2xl bg-violet-600 px-8 py-4 text-xl font-black">PRESS ME</div>
-                <p className="mt-4 text-sm text-zinc-400">Random 10–30 second fuse · No trivia points</p>
+                <p className="mt-4 text-sm text-zinc-400">Random 10–30 second fuse</p>
+                <p className="mx-auto mt-3 max-w-lg rounded-xl border border-violet-300/20 bg-violet-300/10 px-4 py-3 text-sm font-bold text-violet-100">
+                  {showGameRewardDescription({
+                    type: active.showGame.rewardType,
+                    points: active.showGame.rewardPoints,
+                    description: active.showGame.rewardDescription,
+                    winnerMessage: active.showGame.winnerMessage,
+                  })}
+                </p>
               </div>
             ) : (
               <div className="w-full max-w-2xl">
@@ -3634,7 +3675,9 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex items-center gap-2">
             <span style={{ background: C.violet, color: 'white' }} className="rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest">Game</span>
-            <span style={{ color: C.sub }} className="text-[10px]">Random chance · Not scored</span>
+            <span style={{ color: C.sub }} className="text-[10px]">
+              Random chance · {showGame.rewardType === 'points' ? `${showGame.rewardPoints} bonus ${showGame.rewardPoints === 1 ? 'point' : 'points'}` : 'Custom prize'}
+            </span>
           </div>
           <p style={{ color: C.ink }} className="truncate text-sm font-semibold group-hover:text-violet">💣 {showGame.title}</p>
         </div>
@@ -3651,7 +3694,44 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
             <input value={showGame.title} onChange={event => onChange({ title: event.target.value })}
               style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
           </div>
-          <p style={{ color: C.sub }} className="text-xs leading-5">Each team presses once. The fuse lasts a random 10–30 seconds, and the last team to press before it explodes wins. No trivia points are awarded.</p>
+          <div>
+            <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Reward</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['points', 'custom'] as const).map(type => (
+                <button key={type} type="button" onClick={() => onChange({ rewardType: type })}
+                  style={{ border: `1px solid ${showGame.rewardType === type ? C.violet : C.line}`, background: showGame.rewardType === type ? C.violetMist : 'white', color: showGame.rewardType === type ? C.violet : C.ink }}
+                  className="cursor-pointer rounded-xl px-3 py-2 text-sm font-bold">
+                  {type === 'points' ? 'Bonus points' : 'Custom prize'}
+                </button>
+              ))}
+            </div>
+          </div>
+          {showGame.rewardType === 'points' && (
+            <div>
+              <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Bonus points</label>
+              <input type="number" min={1} max={100} value={showGame.rewardPoints}
+                onChange={event => onChange({ rewardPoints: Math.max(1, Math.min(100, Number(event.target.value) || 1)) })}
+                style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-28 rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+            </div>
+          )}
+          <div>
+            <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">What will the winner get?</label>
+            <input value={showGame.rewardDescription} onChange={event => onChange({ rewardDescription: event.target.value })}
+              placeholder={showGame.rewardType === 'points'
+                ? showGameRewardDescription({ type: 'points', points: showGame.rewardPoints, description: '', winnerMessage: '' })
+                : 'e.g. The winner of this game will win a free jug of beer'}
+              style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+            <p style={{ color: C.sub }} className="mt-1 text-[11px]">Shown to everyone before and during the game.</p>
+          </div>
+          {showGame.rewardType === 'custom' && (
+            <div>
+              <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Winner message</label>
+              <textarea rows={2} value={showGame.winnerMessage} onChange={event => onChange({ winnerMessage: event.target.value })}
+                placeholder="e.g. You won! Head to the bar for your beer!"
+                style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full resize-none rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+            </div>
+          )}
+          <p style={{ color: C.sub }} className="text-xs leading-5">Each team presses once. The fuse lasts a random 10–30 seconds, and the last team to press before it explodes wins.</p>
           <div className="flex justify-end"><button onClick={() => setExpanded(false)} style={{ color: C.violet }} className="text-xs font-semibold">Done</button></div>
         </div>
       )}
@@ -6727,6 +6807,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   const nextIsNewRound = !!question && !!nextLiveItem && nextLiveItem.roundNumber !== question.round_number
   const isFinalQuestion = !!question && !nextLiveItem
   const correctDisplay = correctAnswerDisplay(question)
+  const activeShowGameReward = showGameRewardFromSettings(showGame?.settings)
   const questionDetails = hostQuestionDetails(question)
   const showBonusInAnswers = Boolean(activeBonus && (questionStage === 'bonus' || phase !== 'open'))
   const compoundQuestion = question?.question_type === 'multi-answer'
@@ -6882,6 +6963,9 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-8 text-center shadow-2xl">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300">Beat the Bomb</p>
             <h1 className="mt-2 text-5xl font-black">{showGame?.title ?? 'Beat the Bomb'}</h1>
+            <p style={{ color: C.liveDim }} className="mx-auto mt-4 max-w-xl text-lg font-semibold">
+              {showGameRewardDescription(activeShowGameReward)}
+            </p>
             <div className={`mt-7 text-9xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
             <div style={{ background: C.liveLine }} className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full">
               <div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" />
@@ -7043,13 +7127,24 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   <div className="min-w-0 flex-1">
                     <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Host only · Up next</p>
                     <p style={{ color: C.liveText }} className="mt-2 text-lg font-bold leading-snug">
-                      Q{question?.round_position ?? 1}: {question?.prompt ?? 'Loading question…'}
+                      {firstRoundItem?.kind === 'show-game'
+                        ? `Game: ${firstRoundItem.showGame.title}`
+                        : firstRoundItem?.kind === 'content'
+                          ? `Content: ${firstRoundItem.content.title}`
+                          : `Q${question?.round_position ?? 1}: ${question?.prompt ?? 'Loading question…'}`}
                     </p>
                   </div>
-                  <div className="max-w-xs shrink-0 text-right">
-                    <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Correct answer</p>
-                    <p style={{ color: '#C4B5FD' }} className="mt-1 text-sm font-extrabold">{correctDisplay}</p>
-                  </div>
+                  {firstRoundItem?.kind === 'show-game' ? (
+                    <div className="max-w-sm shrink-0 text-right">
+                      <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Reward</p>
+                      <p style={{ color: '#C4B5FD' }} className="mt-1 text-sm font-extrabold">{showGameRewardDescription(showGameRewardFromSettings(firstRoundItem.showGame.settings))}</p>
+                    </div>
+                  ) : firstRoundItem?.kind === 'question' ? (
+                    <div className="max-w-xs shrink-0 text-right">
+                      <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Correct answer</p>
+                      <p style={{ color: '#C4B5FD' }} className="mt-1 text-sm font-extrabold">{correctDisplay}</p>
+                    </div>
+                  ) : null}
                 </div>
               </section>
             </>
@@ -7700,7 +7795,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 <button data-host-navigation="forward" onClick={handleAdvance} disabled={actionBusy}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
                   className="w-full rounded-2xl py-6 text-xl font-extrabold transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
-                  {actionBusy ? 'Advancing…' : nextLiveItem?.kind === 'content' ? 'Show Content Screen →' : nextLiveItem?.kind === 'show-game' ? 'Start Game →' : 'Next Question →'}
+                  {actionBusy ? 'Advancing…' : nextLiveItem?.kind === 'content' ? 'Show Content Screen →' : nextLiveItem?.kind === 'show-game' ? `Start ${nextLiveItem.showGame.title} →` : 'Next Question →'}
                 </button>
               ) : phase === 'open' ? (
                 <button
@@ -7774,7 +7869,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                         : nextLiveItem?.kind === 'content'
                           ? 'Show Content Screen →'
                           : nextLiveItem?.kind === 'show-game'
-                            ? 'Start Game →'
+                            ? `Start ${nextLiveItem.showGame.title} →`
                           : 'Next Question →'}
                 </button>
               )}

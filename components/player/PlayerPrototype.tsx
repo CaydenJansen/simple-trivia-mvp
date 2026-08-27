@@ -32,6 +32,7 @@ import {
 import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { autoRunClockColor, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
 import { suggestedTeamName } from "@/lib/trivia/team-name-suggestions";
+import { showGameRewardDescription, showGameRewardFromSettings, showGameWinnerMessage } from "@/lib/trivia/show-game-rewards";
 import { correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
 import { playersSeeCorrectnessPercentage } from "@/lib/trivia/correctness-visibility";
 import BrandWordmark from "@/components/BrandWordmark";
@@ -2630,6 +2631,7 @@ type PlayerShowGame = {
   round_title: string
   game_type: 'beat-the-bomb'
   title: string
+  settings: Json
   status: 'ready' | 'open' | 'exploded' | 'cancelled'
   winner_team_id: string | null
 }
@@ -2649,7 +2651,7 @@ function BeatTheBomb() {
     if (!game?.current_show_game_key) return
     const { data: activeShowGame, error: showGameError } = await supabase
       .from('game_show_games')
-      .select('id, show_game_key, round_number, round_title, game_type, title, status, winner_team_id')
+      .select('id, show_game_key, round_number, round_title, game_type, title, settings, status, winner_team_id')
       .eq('game_id', gameId)
       .eq('show_game_key', game.current_show_game_key)
       .maybeSingle()
@@ -2690,6 +2692,7 @@ function BeatTheBomb() {
   const teamId = typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id')
   const exploded = showGame?.status === 'exploded'
   const won = exploded && showGame?.winner_team_id === teamId
+  const reward = showGameRewardFromSettings(showGame?.settings)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2697,10 +2700,11 @@ function BeatTheBomb() {
       <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8 text-center">
         <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-[0.18em]">Beat the Bomb</p>
         <h1 style={{ color: C.ink }} className="mt-2 text-3xl font-black">{showGame?.title ?? 'Beat the Bomb'}</h1>
+        <p style={{ color: C.sub }} className="mt-3 max-w-sm text-base font-semibold">{showGameRewardDescription(reward)}</p>
         <div className={`mt-7 text-8xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>
         {exploded ? (
           <div className="mt-7">
-            <h2 style={{ color: won ? C.go : C.ink }} className="text-3xl font-black">{won ? 'Nice work — you won!' : 'The bomb exploded!'}</h2>
+            <h2 style={{ color: won ? C.go : C.ink }} className="text-3xl font-black">{won ? showGameWinnerMessage(reward) : 'The bomb exploded!'}</h2>
             <p style={{ color: C.sub }} className="mt-3 text-base">{won ? 'You were the last team to press.' : 'Another team got the final press this time.'}</p>
             <div className="mt-7"><WaitMsg msg="Waiting for the host to continue…" /></div>
           </div>

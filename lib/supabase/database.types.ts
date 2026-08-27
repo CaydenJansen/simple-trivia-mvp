@@ -1252,6 +1252,7 @@ type LiveShowGameRow = ShowGameRow & {
   explode_at: string | null
   exploded_at: string | null
   winner_team_id: string | null
+  reward_points_awarded: number
 }
 
 type TiebreakerRow = {
