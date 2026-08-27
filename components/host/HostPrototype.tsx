@@ -15,6 +15,7 @@ import QuestionsArea from "@/components/host/QuestionsArea";
 import BuilderQuestionPicker, { type PickerSourceQuestion } from "@/components/host/BuilderQuestionPicker";
 import BrandWordmark from "@/components/BrandWordmark";
 import TeamWheel from "@/components/TeamWheel";
+import LiveReactions from "@/components/LiveReactions";
 import type { Database, Json, QuestionType } from "@/lib/supabase/database.types";
 import {
   asStringArray,
@@ -108,6 +109,7 @@ import { teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { quizExitPrompt } from "@/lib/trivia/quiz-exit";
 import { submittedAnswersEditableFromSettings } from "@/lib/trivia/answer-editing";
 import { hostGameSettingsRecord, persistentHostGameSettings } from "@/lib/trivia/host-preferences";
+import { isTeamDormant } from "@/lib/trivia/team-presence";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -5684,6 +5686,7 @@ function SCard({ title, children }: { title: string; children: React.ReactNode }
 type LobbyTeam = {
   id: string
   name: string
+  last_seen_at: string
 }
 
 function Lobby({ go }: { go: Go }) {
@@ -5699,6 +5702,14 @@ function Lobby({ go }: { go: Go }) {
   const [approvalRequired, setApprovalRequired] = useState(true)
   const [approvalBusy, setApprovalBusy] = useState(false)
   const [removingTeamId, setRemovingTeamId] = useState<string | null>(null)
+  const [presenceNow, setPresenceNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setPresenceNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const activeLobbyTeams = teams.filter(team => !isTeamDormant(team.last_seen_at, presenceNow))
 
   async function handleRemoveTeam(team: LobbyTeam) {
     if (removingTeamId || !window.confirm(`Remove ${team.name} from this game?`)) return
@@ -5855,7 +5866,7 @@ function Lobby({ go }: { go: Go }) {
 
       const { data, error } = await supabase
         .from("teams")
-        .select("id, name")
+        .select("id, name, last_seen_at")
         .eq("game_id", game.id)
         .order("created_at", { ascending: true })
 
@@ -5958,8 +5969,9 @@ function Lobby({ go }: { go: Go }) {
               <h2 style={{ color: C.ink }} className="font-extrabold">Teams Joined</h2>
               <div className="flex items-center gap-2">
                 <span style={{ background: C.go }} className="w-2 h-2 rounded-full animate-pulse inline-block" />
-                <span style={{ color: C.ink }} className="font-bold text-lg">{teams.length}</span>
-                <span style={{ color: C.sub }} className="text-sm">teams</span>
+                <span style={{ color: C.ink }} className="font-bold text-lg">{activeLobbyTeams.length}</span>
+                <span style={{ color: C.sub }} className="text-sm">active</span>
+                {teams.length > activeLobbyTeams.length && <span style={{ color: C.sub }} className="text-xs">· {teams.length - activeLobbyTeams.length} asleep</span>}
               </div>
             </div>
             {lobbyError && (
@@ -5975,20 +5987,22 @@ function Lobby({ go }: { go: Go }) {
                   <p style={{ color: C.sub }} className="text-sm">Waiting for teams to join…</p>
                 </div>
               )}
-              {teams.map((t, i) => (
-                <div key={t.id} style={{ background: C.panel, border: `1px solid ${C.line}` }}
+              {teams.map((t, i) => {
+                const dormant = isTeamDormant(t.last_seen_at, presenceNow)
+                return (
+                <div key={t.id} style={{ background: C.panel, border: `1px solid ${C.line}`, opacity: dormant ? 0.48 : 1 }}
                   className="flex items-center gap-3 p-3 rounded-xl">
                   <div style={{ background: C.violetPale, color: C.violet }}
                     className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 font-mono">
                     {i + 1}
                   </div>
                   <span style={{ color: C.ink }} className="text-sm font-semibold flex-1 truncate">{t.name}</span>
-                  <span style={{ background: C.go }} className="w-2 h-2 rounded-full shrink-0" />
+                  {dormant ? <span style={{ color: C.sub }} className="text-[10px] font-bold uppercase">Asleep</span> : <span style={{ background: C.go }} className="w-2 h-2 rounded-full shrink-0" />}
                   <button type="button" onClick={() => { void handleRemoveTeam(t) }} disabled={removingTeamId === t.id} style={{ color: C.stop }} className="cursor-pointer rounded-lg px-2 py-1 text-xs font-bold hover:bg-red-50 disabled:opacity-50">
                     {removingTeamId === t.id ? 'Removing…' : 'Remove'}
                   </button>
                 </div>
-              ))}
+              )})}
             </div>
             {startError && (
               <div style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}
@@ -5996,7 +6010,7 @@ function Lobby({ go }: { go: Go }) {
                 <p style={{ color: C.stop }} className="text-xs font-semibold">{startError}</p>
               </div>
             )}
-            <Btn sz="lg" cls="w-full" onClick={handleStartQuiz} disabled={starting || teams.length === 0} hostNavigation="forward">
+            <Btn sz="lg" cls="w-full" onClick={handleStartQuiz} disabled={starting || activeLobbyTeams.length === 0} hostNavigation="forward">
               {starting ? 'Starting Quiz…' : 'Start Quiz'}
             </Btn>
           </div>
@@ -6017,6 +6031,7 @@ type LiveTeam = {
   final_placement?: number | null
   final_bottom_placement?: number | null
   final_sort_order?: number | null
+  last_seen_at?: string | null
 }
 
 type LiveSubmission = {
@@ -6263,6 +6278,12 @@ function LiveQuestion({ go }: { go: Go }) {
   const [liveError, setLiveError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
   const [removingLiveTeamId, setRemovingLiveTeamId] = useState<string | null>(null)
+  const [presenceNow, setPresenceNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setPresenceNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   async function removeLiveTeam(team: LiveTeam) {
     if (removingLiveTeamId || !window.confirm(`Remove ${team.name} from this game?`)) return
@@ -6345,7 +6366,7 @@ function LiveQuestion({ go }: { go: Go }) {
           .order('item_position', { ascending: true }),
         supabase
           .from('teams')
-          .select('id, name, score')
+          .select('id, name, score, last_seen_at')
           .eq('game_id', game.id)
           .order('created_at', { ascending: true }),
       ])
@@ -7117,6 +7138,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     }
   }
 
+  const activeTeams = teams.filter(team => !isTeamDormant(team.last_seen_at, presenceNow))
+  const sleepingTeamCount = teams.length - activeTeams.length
+  const activeTeamIds = new Set(activeTeams.map(team => team.id))
+  const activeSubmissions = submissions.filter(submission => activeTeamIds.has(submission.team_id))
+  const activeBonusSubmissions = bonusSubmissions.filter(submission => activeTeamIds.has(submission.team_id))
   const submissionByTeam = new Map<string, LiveSubmission>(submissions.map(submission => [submission.team_id, submission] as const))
   const activeBonus = runtimeBonusFromJson(question?.bonus)
   const bonusSubmissionByTeam = new Map<string, LiveBonusSubmission>(bonusSubmissions.map(submission => [submission.team_id, submission] as const))
@@ -7139,7 +7165,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
       return aPriority - bPriority || a.originalIndex - b.originalIndex
     })
-  const answeredCount = answerRows.filter(row => row.submission).length
+  const answeredCount = answerRows.filter(row => activeTeamIds.has(row.team.id) && row.submission).length
   const coreReviewCount = answerRows.reduce(
     (total, row) => total + (row.grading?.items.filter(item => item.status === 'review').length ?? 0),
     0,
@@ -7152,19 +7178,19 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       grading: submission && activeBonus ? storedBonusGrading(activeBonus, submission) : null,
     }
   })
-  const bonusAnsweredCount = bonusAnswerRows.filter(row => row.submission).length
+  const bonusAnsweredCount = bonusAnswerRows.filter(row => activeTeamIds.has(row.team.id) && row.submission).length
   const bonusReviewCount = bonusAnswerRows.reduce(
     (total, row) => total + (row.grading?.items.filter(item => item.status === 'review').length ?? 0),
     0,
   )
   const reviewCount = coreReviewCount + bonusReviewCount
-  const allActivePlayersLocked = phase === 'open' && teams.length > 0 && (
+  const allActivePlayersLocked = phase === 'open' && activeTeams.length > 0 && (
     questionStage === 'bonus'
-      ? bonusAnsweredCount >= teams.length
-      : answeredCount >= teams.length
+      ? bonusAnsweredCount >= activeTeams.length
+      : answeredCount >= activeTeams.length
   )
-  const coreCorrectness = correctnessSummary(teams.length, submissions)
-  const bonusCorrectness = correctnessSummary(teams.length, bonusSubmissions)
+  const coreCorrectness = correctnessSummary(activeTeams.length, activeSubmissions)
+  const bonusCorrectness = correctnessSummary(activeTeams.length, activeBonusSubmissions)
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const leaderboardPlacements = competitionPlacements(leaderboard)
   const totalRounds = Math.max(1, ...allQuestions.map(item => item.round_number))
@@ -7484,6 +7510,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const showGameInstructions = showGame?.status === 'ready'
     const eligibleIds = showGameEligibleTeamIds(showGame?.settings)
     const wheelTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : teams
+    const participatingTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : activeTeams
     const showGameWinner = showGame?.status === 'exploded' && (!isWheel || wheelSettled)
     const pressedTeamIds = new Set(showGamePresses.map(press => press.team_id))
     const startedAt = showGame?.started_at ? new Date(showGame.started_at).getTime() : showGameNow
@@ -7524,10 +7551,10 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 <p className="mt-2 text-4xl font-black text-emerald-400">{winner?.name ?? '—'}</p>
               </div>
             ) : (
-              <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`) : `Fuse burning… ${showGamePresses.length} of ${teams.length} teams have pressed.`}</p>
+              <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`) : `Fuse burning… ${showGamePresses.length} of ${participatingTeams.length} active teams have pressed.`}</p>
             ))}
             {!showGameInstructions && !isWheel && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
-              {teams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
+              {participatingTeams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
             </div>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
             <button data-host-navigation="forward" onClick={showGameInstructions ? startPreparedShowGame : handleAdvanceShowGame} disabled={actionBusy || (!showGameInstructions && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled)))} style={{ background: C.violet }} className="mx-auto mt-8 rounded-2xl px-10 py-5 text-xl font-extrabold text-white disabled:opacity-35">
@@ -7535,6 +7562,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             </button>
           </section>
         </main>
+        <LiveReactions gameId={liveGameId} dark />
       </div>
     )
   }
@@ -7588,6 +7616,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             </div>
           </section>
         </main>
+        <LiveReactions gameId={liveGameId} dark />
       </div>
     )
   }
@@ -7930,9 +7959,9 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   : gameScreen === 'round-start'
                     ? 'Waiting to start'
                   : phase === 'open'
-                    ? `${questionStage === 'bonus' ? 'Accepting bonus answers' : 'Accepting answers'} · ${questionStage === 'bonus' ? bonusAnsweredCount : answeredCount}/${teams.length}`
+                    ? `${questionStage === 'bonus' ? 'Accepting bonus answers' : 'Accepting answers'} · ${questionStage === 'bonus' ? bonusAnsweredCount : answeredCount}/${activeTeams.length} active`
                     : phase === 'closed'
-                      ? `Answers closed · ${answeredCount}/${teams.length}`
+                      ? `Answers closed · ${answeredCount}/${activeTeams.length} active`
                       : 'Answer revealed'}
               </span>
             </div>
@@ -7988,6 +8017,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         </div>
 
         {answerRows.map(({ team, submission, grading }) => {
+          const dormant = isTeamDormant(team.last_seen_at, presenceNow)
           const waiting = !submission
           const item = grading?.items[0] ?? null
           const bonusRow = bonusAnswerRows.find(row => row.team.id === team.id) ?? null
@@ -8000,7 +8030,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               key={team.id}
               style={{
                 borderBottom: `1px solid ${needsReview ? `${C.caution}45` : C.liveLine}`,
-                background: needsReview ? `${C.caution}12` : 'transparent',
+                background: needsReview ? `${C.caution}12` : dormant ? `${C.liveText}05` : 'transparent',
+                opacity: dormant ? 0.48 : 1,
                 display: 'grid',
                 gridTemplateColumns: '1.1fr 1.5fr 150px',
               }}
@@ -8010,7 +8041,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 style={{ color: waiting && !bonusRow?.submission ? `${C.liveText}45` : needsReview ? C.liveText : `${C.liveText}85` }}
                 className={`text-sm truncate ${needsReview ? 'font-bold' : 'font-medium'}`}
               >
-                {team.name}
+                {team.name}{dormant ? ' · asleep' : ''}
               </span>
 
               <div className="min-w-0 space-y-2">
@@ -8018,7 +8049,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   {showBonusInAnswers && <span style={{ color: C.liveDim }} className="w-12 shrink-0 text-[10px] font-extrabold uppercase">Main</span>}
                   <span
                     style={{ color: waiting ? C.liveDim : submittedIsCorrect ? C.go : `${C.liveText}85` }}
-                    className={`truncate text-sm italic ${submittedIsCorrect ? 'font-extrabold' : 'font-semibold'}`}
+                    className={`truncate pr-1 text-sm italic ${submittedIsCorrect ? 'font-extrabold' : 'font-semibold'}`}
                   >
                     {waiting ? 'Waiting…' : item?.submitted || submissionDisplay(question, submission.answer_text)}
                   </span>
@@ -8035,7 +8066,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 {showBonusInAnswers && (
                   <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="flex min-h-9 min-w-0 items-center gap-2 pt-2">
                     <span style={{ color: '#C4B5FD' }} className="w-12 shrink-0 text-[10px] font-extrabold uppercase">Bonus</span>
-                    <span style={{ color: bonusItem?.status === 'correct' ? C.go : bonusRow?.submission ? `${C.liveText}85` : C.liveDim }} className="truncate text-sm italic font-semibold">
+                    <span style={{ color: bonusItem?.status === 'correct' ? C.go : bonusRow?.submission ? `${C.liveText}85` : C.liveDim }} className="truncate pr-1 text-sm italic font-semibold">
                       {bonusRow?.submission ? bonusItem?.submitted || bonusRow.submission.answer_text : 'Waiting…'}
                     </span>
                     {bonusItem?.expected && bonusItem.status !== 'correct' && (
@@ -8084,6 +8115,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         </div>
 
         {answerRows.map(({ team, submission, grading }) => {
+          const dormant = isTeamDormant(team.last_seen_at, presenceNow)
           const waiting = !submission
           const items = grading?.items ?? []
           const bonusRow = bonusAnswerRows.find(row => row.team.id === team.id) ?? null
@@ -8098,7 +8130,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               key={team.id}
               style={{
                 borderBottom: `1px solid ${hasReview ? `${C.caution}45` : C.liveLine}`,
-                background: hasReview ? `${C.caution}12` : 'transparent',
+                background: hasReview ? `${C.caution}12` : dormant ? `${C.liveText}05` : 'transparent',
+                opacity: dormant ? 0.48 : 1,
                 display: 'grid',
                 gridTemplateColumns: '1.05fr minmax(0, 2.2fr) 90px',
                 alignItems: 'start',
@@ -8109,7 +8142,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 style={{ color: waiting && !bonusRow?.submission ? `${C.liveText}45` : hasReview ? C.liveText : `${C.liveText}85` }}
                 className={`text-sm truncate pt-1 ${hasReview ? 'font-bold' : 'font-medium'}`}
               >
-                {team.name}
+                {team.name}{dormant ? ' · asleep' : ''}
               </span>
 
               <div className="space-y-1.5 min-w-0">
@@ -8147,7 +8180,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                               ? C.go
                               : `${C.liveText}85`,
                           }}
-                          className="text-sm italic font-semibold truncate"
+                          className="truncate pr-1 text-sm italic font-semibold"
                           title={item.submitted || 'No answer'}
                         >
                           {item.submitted || '—'}
@@ -8225,7 +8258,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     <div className="grid items-center gap-2" style={{ gridTemplateColumns: '52px minmax(0, 1fr) 120px' }}>
                       <span style={{ color: '#C4B5FD' }} className="text-[10px] font-extrabold uppercase">Bonus</span>
                       <div className="flex min-w-0 items-center gap-2">
-                        <span style={{ color: bonusItem?.status === 'correct' ? C.go : bonusRow?.submission ? `${C.liveText}85` : C.liveDim }} className="truncate text-sm italic font-semibold">
+                        <span style={{ color: bonusItem?.status === 'correct' ? C.go : bonusRow?.submission ? `${C.liveText}85` : C.liveDim }} className="truncate pr-1 text-sm italic font-semibold">
                           {bonusRow?.submission ? bonusItem?.submitted || bonusRow.submission.answer_text : 'Waiting…'}
                         </span>
                         {bonusItem?.expected && bonusItem.status !== 'correct' && (
@@ -8277,16 +8310,20 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <div className="flex-1 p-5 overflow-y-auto">
             <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">Leaderboard</p>
             <div className="space-y-1">
-              {leaderboard.map((team, i) => (
-                <div key={team.id} style={{ background: leaderboardPlacements[i] === 1 ? `${C.violet}20` : 'transparent' }} className="flex items-center gap-3 p-2.5 rounded-xl">
+              {leaderboard.map((team, i) => {
+                const dormant = isTeamDormant(team.last_seen_at, presenceNow)
+                return (
+                <div key={team.id} style={{ background: !dormant && leaderboardPlacements[i] === 1 ? `${C.violet}20` : 'transparent', opacity: dormant ? 0.42 : 1 }} className="flex items-center gap-3 p-2.5 rounded-xl">
                   <div style={{ background: leaderboardPlacements[i] === 1 ? C.violet : C.liveLine, color: leaderboardPlacements[i] === 1 ? 'white' : C.liveDim, width: 24, height: 24 }}
                     className="rounded-full flex items-center justify-center text-xs font-bold shrink-0 tabular-nums">{leaderboardPlacements[i]}</div>
                   <span style={{ color: leaderboardPlacements[i] === 1 ? C.liveText : `${C.liveText}99` }} className={`text-sm flex-1 truncate ${leaderboardPlacements[i] === 1 ? 'font-bold' : 'font-medium'}`}>{team.name}</span>
                   <span style={{ color: leaderboardPlacements[i] === 1 ? C.liveText : `${C.liveText}99` }} className="text-sm font-bold tabular-nums">{team.score}</span>
+                  {dormant && <span style={{ color: C.liveDim }} className="text-[9px] font-black uppercase">Asleep</span>}
                   <button type="button" onClick={() => { void removeLiveTeam(team) }} disabled={removingLiveTeamId === team.id} title={`Remove ${team.name}`} style={{ color: C.liveDim }} className="cursor-pointer rounded px-1 text-xs hover:text-red-400 disabled:opacity-40">×</button>
                 </div>
-              ))}
+              )})}
             </div>
+            {sleepingTeamCount > 0 && <p style={{ color: C.liveDim }} className="mt-2 text-[10px] leading-4">Sleeping teams do not hold up Auto-Run. They wake automatically when they reconnect.</p>}
             <TeamAdmissionList gameCode={getHostGameCode()} dark compact hideWhenEmpty className="mt-5" />
           </div>
 
@@ -8421,6 +8458,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           </div>
         </div>
       </div>
+      <LiveReactions gameId={liveGameId} dark />
     </div>
   )
 }
@@ -9066,7 +9104,7 @@ function TieResolutionChooser({
 
   return (
     <div>
-      <p style={{ color: C.ink }} className="mb-3 text-center text-sm font-bold">Select one option, then confirm.</p>
+      <p style={{ color: C.liveText }} className="mb-3 text-center text-sm font-bold">Select one option, then confirm.</p>
       <div className="grid gap-3 sm:grid-cols-3">
         {choices.map(choice => {
           const isSelected = selected === choice.id
@@ -9078,9 +9116,9 @@ function TieResolutionChooser({
               onClick={() => onSelect(choice.id)}
               disabled={busy || choice.disabled}
               style={{
-                background: isSelected ? C.violetPale : C.panel,
-                border: `2px solid ${isSelected ? C.violet : C.line}`,
-                color: C.ink,
+                background: isSelected ? `${C.violet}28` : C.liveSurface,
+                border: `2px solid ${isSelected ? C.violet : C.liveLine}`,
+                color: C.liveText,
               }}
               className="cursor-pointer rounded-2xl p-5 text-left transition-all hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet/40 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none"
             >
@@ -9089,8 +9127,8 @@ function TieResolutionChooser({
                 <span
                   aria-hidden="true"
                   style={{
-                    background: isSelected ? C.violet : C.panel,
-                    border: `2px solid ${isSelected ? C.violet : C.line}`,
+                    background: isSelected ? C.violet : C.livePanel,
+                    border: `2px solid ${isSelected ? C.violet : C.liveLine}`,
                     color: 'white',
                   }}
                   className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-black"
@@ -9098,7 +9136,7 @@ function TieResolutionChooser({
                   {isSelected ? '✓' : ''}
                 </span>
               </span>
-              <span style={{ color: C.sub }} className="mt-2 block text-xs">{choice.description}</span>
+              <span style={{ color: C.liveDim }} className="mt-2 block text-xs">{choice.description}</span>
             </button>
           )
         })}
@@ -9301,7 +9339,7 @@ function FinalResults({ go }: { go: Go }) {
   }
 
   return (
-    <div style={{ background: resolvingTie ? C.ground : C.liveBg }} className="min-h-screen flex flex-col">
+    <div style={{ background: C.liveBg }} className="min-h-screen flex flex-col">
       <header style={{ background: C.ink }} className="h-12 flex items-center px-6 shrink-0">
         <div className="flex items-center gap-2.5">
           <BrandWordmark dark compact className="text-sm" />
@@ -9314,20 +9352,20 @@ function FinalResults({ go }: { go: Go }) {
         {resolvingTie && displayResolution ? (
           <>
             <div className="text-center mb-8">
-              <div style={{ background: '#FEF3C7', color: '#92400E' }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-4">Final placement tie</div>
-              <h1 style={{ color: C.ink }} className="text-4xl font-extrabold">These teams are tied on {displayResolution.tied_score}</h1>
-              <p style={{ color: C.sub }} className="mt-3 text-sm">Resolve their placement without changing either team’s trivia score.</p>
+              <div style={{ background: `${C.caution}20`, color: '#FCD34D', border: `1px solid ${C.caution}55` }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-4">Final placement tie</div>
+              <h1 style={{ color: C.liveText }} className="text-4xl font-extrabold">These teams are tied on {displayResolution.tied_score}</h1>
+              <p style={{ color: C.liveDim }} className="mt-3 text-sm">Resolve their placement without changing either team’s trivia score.</p>
             </div>
 
-            {error && <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="mb-5 rounded-xl px-4 py-3 text-sm font-semibold">{error}</div>}
+            {error && <div style={{ background: `${C.stop}18`, border: `1px solid ${C.stop}55`, color: '#FCA5A5' }} className="mb-5 rounded-xl px-4 py-3 text-sm font-semibold">{error}</div>}
 
             {activeAttempt && activePrepared && game?.current_screen !== 'tiebreaker-pending' && !manualMode ? (
-              <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-3xl p-6 shadow-sm">
+              <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-3xl p-6 shadow-2xl">
                 <div className="flex items-center justify-between gap-4">
                   <p style={{ color: C.violet }} className="text-xs font-extrabold uppercase tracking-widest">Closest answer wins</p>
-                  <span style={{ color: C.sub }} className="text-xs font-bold">{activeSubmissions.length} / {activeAttempt.team_ids.length} answered</span>
+                  <span style={{ color: C.liveDim }} className="text-xs font-bold">{activeSubmissions.length} / {activeAttempt.team_ids.length} answered</span>
                 </div>
-                <h2 style={{ color: C.ink }} className="mt-4 text-2xl font-extrabold leading-snug">{activePrepared.prompt}</h2>
+                <h2 style={{ color: C.liveText }} className="mt-4 text-2xl font-extrabold leading-snug">{activePrepared.prompt}</h2>
                 <p style={{ color: C.go }} className="mt-3 text-sm font-bold">Correct answer: {activePrepared.correct_value}{activePrepared.answer_unit ? ` ${activePrepared.answer_unit}` : ''}</p>
 
                 <div className="mt-6 space-y-2">
@@ -9335,14 +9373,14 @@ function FinalResults({ go }: { go: Go }) {
                     const submission = activeSubmissions.find(item => item.team_id === team.id)
                     const isClosest = closestTeamIds.has(team.id)
                     return (
-                      <div key={team.id} style={{ background: isClosest ? '#F0FDF4' : C.ground, border: `1px solid ${isClosest ? C.go : C.line}` }} className="flex items-center gap-3 rounded-xl px-4 py-3">
-                        <span style={{ color: isClosest ? C.go : C.ink }} className="flex-1 text-sm font-bold">{team.name}</span>
+                      <div key={team.id} style={{ background: isClosest ? `${C.go}16` : C.livePanel, border: `1px solid ${isClosest ? `${C.go}75` : C.liveLine}` }} className="flex items-center gap-3 rounded-xl px-4 py-3">
+                        <span style={{ color: isClosest ? '#6EE7B7' : C.liveText }} className="flex-1 text-sm font-bold">{team.name}</span>
                         {isClosest && <span style={{ color: C.go }} className="text-[10px] font-extrabold uppercase tracking-wider">Closest</span>}
-                        <span style={{ color: isClosest ? C.go : submission ? C.ink : C.sub }} className="text-sm font-extrabold tabular-nums">
+                        <span style={{ color: isClosest ? '#6EE7B7' : submission ? C.liveText : C.liveDim }} className="text-sm font-extrabold tabular-nums">
                           {submission ? submission.numeric_answer : 'Waiting…'}
                         </span>
                         {submission?.distance !== null && submission?.distance !== undefined && (
-                          <span style={{ color: C.sub }} className="text-xs">off by {submission.distance}</span>
+                          <span style={{ color: C.liveDim }} className="text-xs">off by {submission.distance}</span>
                         )}
                       </div>
                     )
@@ -9375,17 +9413,17 @@ function FinalResults({ go }: { go: Go }) {
                 {activeAttempt.status === 'tied' && <p style={{ color: C.caution }} className="mt-3 text-center text-sm font-bold">Two or more teams were equally close, so the tie remains unresolved.</p>}
               </div>
             ) : manualMode ? (
-              <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-3xl p-6 shadow-sm">
-                <h2 style={{ color: C.ink }} className="text-xl font-extrabold">Choose the final order</h2>
-                <p style={{ color: C.sub }} className="mt-1 text-sm">Put the highest-placed team first. Scores will not change.</p>
+              <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-3xl p-6 shadow-2xl">
+                <h2 style={{ color: C.liveText }} className="text-xl font-extrabold">Choose the final order</h2>
+                <p style={{ color: C.liveDim }} className="mt-1 text-sm">Put the highest-placed team first. Scores will not change.</p>
                 <div className="mt-5 space-y-2">
                   {manualOrder.map((teamId, index) => {
                     const team = teams.find(item => item.id === teamId)
-                    return <div key={teamId} style={{ background: C.ground, border: `1px solid ${C.line}` }} className="flex items-center gap-3 rounded-xl px-4 py-3">
+                    return <div key={teamId} style={{ background: C.livePanel, border: `1px solid ${C.liveLine}` }} className="flex items-center gap-3 rounded-xl px-4 py-3">
                       <span style={{ color: C.violet }} className="w-6 text-sm font-extrabold">{index + 1}</span>
-                      <span style={{ color: C.ink }} className="flex-1 text-sm font-bold">{team?.name ?? 'Team'}</span>
-                      <button onClick={() => moveManualTeam(index, -1)} disabled={index === 0} className="rounded-lg px-2 py-1 text-sm font-bold disabled:opacity-25">↑</button>
-                      <button onClick={() => moveManualTeam(index, 1)} disabled={index === manualOrder.length - 1} className="rounded-lg px-2 py-1 text-sm font-bold disabled:opacity-25">↓</button>
+                      <span style={{ color: C.liveText }} className="flex-1 text-sm font-bold">{team?.name ?? 'Team'}</span>
+                      <button style={{ color: C.liveText }} onClick={() => moveManualTeam(index, -1)} disabled={index === 0} className="rounded-lg px-2 py-1 text-sm font-bold disabled:opacity-25">↑</button>
+                      <button style={{ color: C.liveText }} onClick={() => moveManualTeam(index, 1)} disabled={index === manualOrder.length - 1} className="rounded-lg px-2 py-1 text-sm font-bold disabled:opacity-25">↓</button>
                     </div>
                   })}
                 </div>
@@ -9479,6 +9517,7 @@ function FinalResults({ go }: { go: Go }) {
         </>
         )}
       </main>
+      <LiveReactions gameId={game?.id ?? null} dark />
     </div>
   )
 }

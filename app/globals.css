@@ -113,6 +113,27 @@ button {
   animation: dot-pulse 1.4s ease-in-out infinite;
 }
 
+@keyframes live-reaction-float {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.85);
+  }
+
+  12%, 78% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-34px) scale(1.05);
+  }
+}
+
+.live-reaction-float {
+  animation: live-reaction-float 3.6s ease-out forwards;
+}
+
 @keyframes rank-pop {
   0% {
     transform: scale(1);

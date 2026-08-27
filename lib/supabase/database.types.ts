@@ -691,6 +691,7 @@ export type Database = {
           final_bottom_placement: number | null
           final_sort_order: number | null
           created_at: string
+          last_seen_at: string
         }
         Insert: {
           id?: string
@@ -703,6 +704,7 @@ export type Database = {
           final_bottom_placement?: number | null
           final_sort_order?: number | null
           created_at?: string
+          last_seen_at?: string
         }
         Update: {
           id?: string
@@ -715,6 +717,7 @@ export type Database = {
           final_bottom_placement?: number | null
           final_sort_order?: number | null
           created_at?: string
+          last_seen_at?: string
         }
         Relationships: [
           {
@@ -729,6 +732,41 @@ export type Database = {
             columns: ['team_profile_id']
             isOneToOne: false
             referencedRelation: 'team_profiles'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      game_reactions: {
+        Row: {
+          id: string
+          game_id: string
+          team_id: string
+          team_name: string
+          reaction: '👍' | '👎' | '❤️'
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          game_id: string
+          team_id: string
+          team_name: string
+          reaction: '👍' | '👎' | '❤️'
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['game_reactions']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'game_reactions_game_id_fkey'
+            columns: ['game_id']
+            isOneToOne: false
+            referencedRelation: 'games'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'game_reactions_team_id_fkey'
+            columns: ['team_id']
+            isOneToOne: false
+            referencedRelation: 'teams'
             referencedColumns: ['id']
           },
         ]
@@ -941,6 +979,14 @@ export type Database = {
       remove_team_from_game: {
         Args: { p_team_id: string }
         Returns: string
+      }
+      touch_team_presence: {
+        Args: { p_request_id: string; p_request_token: string }
+        Returns: string
+      }
+      send_game_reaction: {
+        Args: { p_request_id: string; p_request_token: string; p_reaction: '👍' | '👎' | '❤️' }
+        Returns: Database['public']['Tables']['game_reactions']['Row']
       }
       submit_player_answer: {
         Args: {

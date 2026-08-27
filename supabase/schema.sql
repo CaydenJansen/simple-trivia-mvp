@@ -309,7 +309,17 @@ create table if not exists public.teams (
   final_bottom_placement integer,
   final_sort_order integer,
   created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
   unique (game_id, name)
+);
+
+create table if not exists public.game_reactions (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.games(id) on delete cascade,
+  team_id uuid not null references public.teams(id) on delete cascade,
+  team_name text not null check (length(btrim(team_name)) > 0),
+  reaction text not null check (reaction in ('👍', '👎', '❤️')),
+  created_at timestamptz not null default now()
 );
 
 create table if not exists public.team_join_requests (
@@ -439,6 +449,12 @@ create index if not exists game_tiebreakers_game_order_idx
 
 create index if not exists teams_game_score_idx
   on public.teams (game_id, score desc);
+
+create index if not exists teams_game_last_seen_idx
+  on public.teams (game_id, last_seen_at desc);
+
+create index if not exists game_reactions_game_created_idx
+  on public.game_reactions (game_id, created_at desc);
 
 create index if not exists teams_team_profile_history_idx
   on public.teams (team_profile_id, created_at desc)
@@ -1226,3 +1242,78 @@ group by proposed_question_tags.id;
 
 revoke all on public.question_library_proposed_tag_review from anon, authenticated;
 grant select on public.question_library_proposed_tag_review to service_role;
+
+alter table public.game_reactions enable row level security;
+
+drop policy if exists "Live game reactions are readable" on public.game_reactions;
+create policy "Live game reactions are readable"
+  on public.game_reactions for select
+  using (exists (
+    select 1 from public.games
+    where games.id = game_reactions.game_id
+      and games.status in ('lobby', 'live')
+  ));
+
+grant select on public.game_reactions to anon, authenticated;
+
+create or replace function public.touch_team_presence(p_request_id uuid, p_request_token uuid)
+returns timestamptz
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  touched_at timestamptz;
+begin
+  update public.teams
+  set last_seen_at = clock_timestamp()
+  where teams.id = (
+    select team_join_requests.team_id
+    from public.team_join_requests
+    where team_join_requests.id = p_request_id
+      and team_join_requests.request_token = p_request_token
+      and team_join_requests.status = 'approved'
+      and team_join_requests.team_id is not null
+  )
+  returning teams.last_seen_at into touched_at;
+  if touched_at is null then raise exception 'TEAM_SESSION_INVALID'; end if;
+  return touched_at;
+end;
+$$;
+
+create or replace function public.send_game_reaction(p_request_id uuid, p_request_token uuid, p_reaction text)
+returns public.game_reactions
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  team_row public.teams%rowtype;
+  created public.game_reactions%rowtype;
+begin
+  if p_reaction not in ('👍', '👎', '❤️') then raise exception 'REACTION_INVALID'; end if;
+  select teams.* into team_row
+  from public.team_join_requests
+  join public.teams on teams.id = team_join_requests.team_id
+  join public.games on games.id = teams.game_id
+  where team_join_requests.id = p_request_id
+    and team_join_requests.request_token = p_request_token
+    and team_join_requests.status = 'approved'
+    and games.status in ('lobby', 'live');
+  if team_row.id is null then raise exception 'TEAM_SESSION_INVALID'; end if;
+  if exists (
+    select 1 from public.game_reactions
+    where game_reactions.team_id = team_row.id
+      and game_reactions.created_at > clock_timestamp() - interval '400 milliseconds'
+  ) then raise exception 'REACTION_TOO_FAST'; end if;
+  update public.teams set last_seen_at = clock_timestamp() where id = team_row.id;
+  delete from public.game_reactions where created_at < clock_timestamp() - interval '10 minutes';
+  insert into public.game_reactions (game_id, team_id, team_name, reaction)
+  values (team_row.game_id, team_row.id, team_row.name, p_reaction)
+  returning * into created;
+  return created;
+end;
+$$;
+
+revoke all on function public.touch_team_presence(uuid, uuid), public.send_game_reaction(uuid, uuid, text) from public;
+grant execute on function public.touch_team_presence(uuid, uuid), public.send_game_reaction(uuid, uuid, text) to anon, authenticated;

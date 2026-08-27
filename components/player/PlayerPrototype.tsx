@@ -37,6 +37,8 @@ import { correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correc
 import { playersSeeCorrectnessPercentage } from "@/lib/trivia/correctness-visibility";
 import BrandWordmark from "@/components/BrandWordmark";
 import TeamWheel from "@/components/TeamWheel";
+import LiveReactions from "@/components/LiveReactions";
+import { TEAM_PRESENCE_HEARTBEAT_MS } from "@/lib/trivia/team-presence";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -310,6 +312,39 @@ function useLivePlayerSync(
       void supabase.removeChannel(channel)
     }
   }, [joined, setScreen])
+}
+
+function usePlayerPresence(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return
+    let active = true
+
+    async function touchPresence() {
+      if (!active || !navigator.onLine || document.visibilityState === 'hidden') return
+      const requestId = localStorage.getItem('simple-trivia-join-request-id')
+      const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+      if (!requestId || !requestToken) return
+      const { error } = await supabase.rpc('touch_team_presence', {
+        p_request_id: requestId,
+        p_request_token: requestToken,
+      })
+      if (error && !error.message.includes('TEAM_SESSION_INVALID')) console.error('Could not update team presence:', error)
+    }
+
+    const wake = () => { if (document.visibilityState === 'visible') void touchPresence() }
+    void touchPresence()
+    const timer = window.setInterval(() => { void touchPresence() }, TEAM_PRESENCE_HEARTBEAT_MS)
+    window.addEventListener('focus', wake)
+    window.addEventListener('online', wake)
+    document.addEventListener('visibilitychange', wake)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      window.removeEventListener('focus', wake)
+      window.removeEventListener('online', wake)
+      document.removeEventListener('visibilitychange', wake)
+    }
+  }, [enabled])
 }
 
 function usePlayerAutoRunClock() {
@@ -1517,8 +1552,6 @@ async function handleJoin() {
 
   if (request.admission_status === 'approved' && request.team_id) {
     localStorage.setItem('simple-trivia-team-id', request.team_id)
-    localStorage.removeItem('simple-trivia-join-request-id')
-    localStorage.removeItem('simple-trivia-join-request-token')
     const { data: game } = await supabase
       .from('games')
       .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
@@ -1843,8 +1876,6 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
       if (transition.kind === 'approved') {
         localStorage.setItem('simple-trivia-team-id', transition.teamId)
         localStorage.setItem('simple-trivia-team-name', transition.name)
-        localStorage.removeItem('simple-trivia-join-request-id')
-        localStorage.removeItem('simple-trivia-join-request-token')
         go('waiting')
       }
     }
@@ -3311,6 +3342,8 @@ export function PlayerFlow() {
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [scoresVisible, setScoresVisible] = useState(true)
   useLivePlayerSync(screen, setScreen, !restoringSession)
+  const hasJoinedTeam = !restoringSession && LIVE_PLAYER_SCREENS.has(screen) && screen !== 'game-ended'
+  usePlayerPresence(hasJoinedTeam)
 
   useEffect(() => {
     if (screen === 'join' || screen === 'team-setup') return
@@ -3462,6 +3495,8 @@ export function PlayerFlow() {
   }
 
   const canLeaveGame = screen !== 'join' && screen !== 'team-setup' && screen !== 'game-ended'
+  const reactionsGameId = typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id')
+  const canReact = hasJoinedTeam && screen !== 'reconnecting' && Boolean(typeof window !== 'undefined' && localStorage.getItem('simple-trivia-team-id'))
 
   return (
     <main
@@ -3485,6 +3520,8 @@ export function PlayerFlow() {
           {renderScreen(screen, go)}
         </PlayerScoreVisibilityContext.Provider>
       </div>
+
+      <LiveReactions gameId={reactionsGameId} canReact={canReact} />
 
       {confirmingLeave && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#18171F]/70 px-5 backdrop-blur-sm">

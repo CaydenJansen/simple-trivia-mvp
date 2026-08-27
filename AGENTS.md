@@ -71,6 +71,8 @@
 - Player-facing denial copy stays neutral and does not assume why the host denied entry; the host handles any explanation in the room.
 - Games accept new zero-score teams while they are in the lobby or actively running, subject to the game’s approval setting. Finished and cancelled games are never joinable.
 - A pending player can withdraw and change their proposed team name. The owning host can remove a joined team from an active lobby or live game; removal must also remove that team from submissions and active-team counts through database-enforced ownership and cascading references.
+- Joined player devices heartbeat through their browser-owned approved join token. After five minutes without a heartbeat, treat the team as asleep: visibly dim it for the host and exclude it from Auto-Run completion, correctness denominators, and newly started show games. A reconnect/focus heartbeat wakes it automatically; never delete or alter its score merely for inactivity.
+- Player reactions are ephemeral live-show signals, limited to the supported reaction vocabulary and authenticated through the approved join token. Show them on player and host screens without altering scores or persisted game progression.
 - Host live controls and question content must remain usable on small laptop screens.
 - Player live screens use a compact two-line mobile header: brand with Leave Game, then round/question with team/score. Present question prompts as clear, prominent reading surfaces without centering long question text.
 - Quiz readiness is derived automatically when saving: complete quizzes become Ready, incomplete quizzes remain Draft with specific blockers. Do not reintroduce a manual readiness step or preparation progress wizard.
@@ -92,6 +94,7 @@
 - Wheel slice order and colours are deterministic across host and player devices. Its landing animation begins at the current cruise speed and then decelerates continuously; it must not speed up during the landing phase.
 - Do not include tiebreakers in normal question counts, running-time estimates, or game points. Resolving a tie must never change a team's trivia score.
 - Tiebreaker resolution choices require an explicit host selection and confirmation. Player numeric submissions lock immediately after submission and cannot be edited.
+- Every host-facing tiebreaker and final-placement resolution screen uses the same dark operational theme as the rest of the live host interface.
 - Calculate tiebreaker distance as each answer is submitted so the host can see the current closest team live. Keep distances and outcomes hidden from players until reveal; the revealed player screen shows whether they won, lost, or remain tied together with the correct answer, their submitted answer, and its distance from correct.
 - A future final-results resolution must offer tiebreaker, allowed-tie, and manual ordering methods, and store the decision and placement separately from score.
 - Never expose a prepared tiebreaker's correct numeric value to players before the relevant tiebreaker reveal.
