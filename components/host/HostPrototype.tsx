@@ -16,6 +16,7 @@ import BuilderQuestionPicker, { type PickerSourceQuestion } from "@/components/h
 import BrandWordmark from "@/components/BrandWordmark";
 import TeamWheel from "@/components/TeamWheel";
 import LiveReactions from "@/components/LiveReactions";
+import EliminationShowGame from "@/components/EliminationShowGame";
 import type { Database, Json, QuestionType } from "@/lib/supabase/database.types";
 import {
   asStringArray,
@@ -110,6 +111,15 @@ import { quizExitPrompt } from "@/lib/trivia/quiz-exit";
 import { submittedAnswersEditableFromSettings } from "@/lib/trivia/answer-editing";
 import { hostGameSettingsRecord, persistentHostGameSettings } from "@/lib/trivia/host-preferences";
 import { isTeamDormant } from "@/lib/trivia/team-presence";
+import {
+  eliminationShowGameState,
+  isEliminationShowGame,
+  showGameEmoji,
+  showGameInstructions,
+  showGameLabel,
+  type EliminationShowGameType,
+  type ShowGameType,
+} from "@/lib/trivia/elimination-show-games";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -1459,7 +1469,7 @@ type BuilderShowGameData = {
   id: string
   showGameKey: string
   itemPosition: number
-  gameType: 'beat-the-bomb' | 'spin-the-wheel'
+  gameType: ShowGameType
   title: string
   rewardType: ShowGameRewardType
   rewardPoints: number
@@ -3395,10 +3405,10 @@ function QuizPreview({ title, rounds, onClose }: {
             ) : active.kind === 'show-game' ? (
               <div className="w-full max-w-2xl text-center">
                 {active.showGame.gameType === 'spin-the-wheel'
-                  ? <TeamWheel dark teamNames={['Olivia Newton Trivia', 'The Blim Blams', 'Team Name', 'Dwayne “The Trivia” Johnson']} />
-                  : <div className="text-8xl" aria-hidden="true">💣</div>}
+                  ? <TeamWheel dark compact teamNames={['Olivia Newton Trivia', 'The Blim Blams', 'Team Name', 'Dwayne “The Trivia” Johnson']} />
+                  : <div className="text-8xl" aria-hidden="true">{showGameEmoji(active.showGame.gameType)}</div>}
                 <h3 className="mt-5 text-4xl font-black">{active.showGame.title}</h3>
-                <p className="mx-auto mt-4 max-w-lg text-lg text-zinc-300">{active.showGame.gameType === 'spin-the-wheel' ? 'Every team goes on the wheel. One winner is selected at random.' : 'Press once. Be the last team to press before the bomb explodes.'}</p>
+                <p className="mx-auto mt-4 max-w-lg text-lg text-zinc-300">{showGameInstructions(active.showGame.gameType)}</p>
                 {active.showGame.gameType === 'beat-the-bomb' && <><div className="mx-auto mt-7 max-w-xs rounded-2xl bg-violet-600 px-8 py-4 text-xl font-black">PRESS ME</div><p className="mt-4 text-sm text-zinc-400">Random 10–30 second fuse</p></>}
                 <p className="mx-auto mt-3 max-w-lg rounded-xl border border-violet-300/20 bg-violet-300/10 px-4 py-3 text-sm font-bold text-violet-100">
                   {showGameRewardDescription({
@@ -3823,10 +3833,10 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
           <div className="mb-1.5 flex items-center gap-2">
             <span style={{ background: C.violet, color: 'white' }} className="rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest">Game</span>
             <span style={{ color: C.sub }} className="text-[10px]">
-              {showGame.gameType === 'spin-the-wheel' ? 'Random team draw' : 'Random chance'} · {showGame.rewardType === 'points' ? `${showGame.rewardPoints} bonus ${showGame.rewardPoints === 1 ? 'point' : 'points'}` : 'Custom prize'}
+              {isEliminationShowGame(showGame.gameType) ? 'Multi-round elimination' : 'Immediate winner'} · {showGame.rewardType === 'points' ? `${showGame.rewardPoints} bonus ${showGame.rewardPoints === 1 ? 'point' : 'points'}` : 'Custom prize'}
             </span>
           </div>
-          <p style={{ color: C.ink }} className="truncate text-sm font-semibold group-hover:text-violet">{showGame.gameType === 'spin-the-wheel' ? '🎡' : '💣'} {showGame.title}</p>
+          <p style={{ color: C.ink }} className="truncate text-sm font-semibold group-hover:text-violet">{showGameEmoji(showGame.gameType)} {showGame.title}</p>
         </div>
         <div onClick={event => event.stopPropagation()}><IBtn icon={<I.trash />} title="Delete game" onClick={onDelete} danger /></div>
       </div>
@@ -3834,22 +3844,25 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
         <div style={{ borderTop: `1px solid ${C.violet}30` }} className="space-y-3 px-4 pb-4 pt-3">
           <div>
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Game</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-3">
               {([
-                { type: 'spin-the-wheel' as const, label: '🎡 Spin the Wheel' },
-                { type: 'beat-the-bomb' as const, label: '💣 Beat the Bomb' },
-              ]).map(option => (
-                <button key={option.type} type="button" onClick={() => onChange({ gameType: option.type, title: option.type === 'spin-the-wheel' ? 'Spin the Wheel' : 'Beat the Bomb' })}
-                  style={{ border: `1px solid ${showGame.gameType === option.type ? C.violet : C.line}`, background: showGame.gameType === option.type ? C.violetMist : 'white', color: showGame.gameType === option.type ? C.violet : C.ink }}
-                  className="cursor-pointer rounded-xl px-3 py-2 text-sm font-bold">
-                  {option.label}
-                </button>
-              ))}
+                { heading: 'One-step games · immediate winner', games: ['spin-the-wheel', 'beat-the-bomb'] as ShowGameType[] },
+                { heading: 'Elimination games · multiple rounds', games: ['heads-or-tails', 'dodge-the-rock'] as ShowGameType[] },
+              ]).map(group => <div key={group.heading}>
+                <p style={{ color: C.sub }} className="mb-1.5 text-[10px] font-black uppercase tracking-wider">{group.heading}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {group.games.map(type => (
+                    <button key={type} type="button" onClick={() => onChange({ gameType: type, title: showGameLabel(type) })}
+                      style={{ border: `1px solid ${showGame.gameType === type ? C.violet : C.line}`, background: showGame.gameType === type ? C.violetMist : 'white', color: showGame.gameType === type ? C.violet : C.ink }}
+                      className="cursor-pointer rounded-xl px-3 py-2 text-sm font-bold">
+                      {showGameEmoji(type)} {showGameLabel(type)}
+                    </button>
+                  ))}
+                </div>
+              </div>)}
             </div>
           </div>
-          <p style={{ color: C.sub }} className="text-xs leading-5">{showGame.gameType === 'spin-the-wheel'
-            ? 'Every team in the game is placed on one large wheel. The wheel spins, slows down, and randomly selects one winner.'
-            : 'Each team presses once. The fuse lasts a random 10–30 seconds, and the last team to press before it explodes wins.'}</p>
+          <p style={{ color: C.sub }} className="text-xs leading-5">{showGameInstructions(showGame.gameType)}</p>
           <div>
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Title</label>
             <input value={showGame.title} onChange={event => onChange({ title: event.target.value })}
@@ -6083,7 +6096,7 @@ type LiveShowGameDefinition = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel'
+  game_type: ShowGameType
   title: string
   settings: Json
   status: 'ready' | 'open' | 'exploded' | 'cancelled'
@@ -6491,12 +6504,15 @@ function LiveQuestion({ go }: { go: Go }) {
     const interval = window.setInterval(() => setShowGameNow(Date.now()), 100)
     const delay = Math.max(0, new Date(activeShowGameExplodeAt).getTime() - Date.now())
     const timeout = window.setTimeout(() => {
-      const rpc = showGame?.game_type === 'spin-the-wheel' ? 'resolve_spin_the_wheel' : 'resolve_beat_the_bomb'
+      const eliminationState = eliminationShowGameState(showGame?.settings)
+      const rpc = isEliminationShowGame(showGame?.game_type)
+        ? eliminationState.roundPhase === 'reveal' ? 'advance_elimination_show_game' : 'resolve_elimination_show_game'
+        : showGame?.game_type === 'spin-the-wheel' ? 'resolve_spin_the_wheel' : 'resolve_beat_the_bomb'
       void supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId })
         .then(({ error }) => { if (error) console.error('Could not resolve show game:', error) })
     }, delay + 50)
     return () => { window.clearInterval(interval); window.clearTimeout(timeout) }
-  }, [activeShowGameExplodeAt, activeShowGameId, activeShowGameStatus, showGame?.game_type])
+  }, [activeShowGameExplodeAt, activeShowGameId, activeShowGameStatus, showGame?.game_type, showGame?.settings])
 
   async function prepareShowGame(nextShowGame: LiveShowGameDefinition) {
     setWheelSettled(false)
@@ -6518,7 +6534,9 @@ function LiveQuestion({ go }: { go: Go }) {
     setActionBusy(true)
     setLiveError(null)
     try {
-      const rpc = showGame.game_type === 'spin-the-wheel' ? 'start_spin_the_wheel' : 'start_beat_the_bomb'
+      const rpc = isEliminationShowGame(showGame.game_type)
+        ? 'start_elimination_show_game'
+        : showGame.game_type === 'spin-the-wheel' ? 'start_spin_the_wheel' : 'start_beat_the_bomb'
       const { data, error } = await supabase.rpc(rpc, { p_game_show_game_id: showGame.id })
       if (error) throw error
       setShowGame(data as LiveShowGameDefinition)
@@ -7521,7 +7539,9 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   if (gameScreen === 'show-game') {
     const winner = teams.find(team => team.id === showGame?.winner_team_id) ?? null
     const isWheel = showGame?.game_type === 'spin-the-wheel'
-    const showGameInstructions = showGame?.status === 'ready'
+    const isElimination = isEliminationShowGame(showGame?.game_type)
+    const eliminationState = eliminationShowGameState(showGame?.settings)
+    const showingShowGameInstructions = showGame?.status === 'ready'
     const eligibleIds = showGameEligibleTeamIds(showGame?.settings)
     const wheelTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : teams
     const participatingTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : activeTeams
@@ -7529,6 +7549,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const pressedTeamIds = new Set(showGamePresses.map(press => press.team_id))
     const startedAt = showGame?.started_at ? new Date(showGame.started_at).getTime() : showGameNow
     const explodeAt = showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow
+    const eliminationSecondsRemaining = Math.max(0, Math.ceil((explodeAt - showGameNow) / 1000))
     const fuseProgress = showGame?.status === 'exploded' ? 0 : Math.max(0, Math.min(100, ((explodeAt - showGameNow) / Math.max(1, explodeAt - startedAt)) * 100))
     return (
       <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
@@ -7539,40 +7560,43 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <span style={{ background: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">GAME LIVE</span>
         </header>
         {autoRunControls}
-        <main className="flex flex-1 items-center justify-center px-6 py-10">
-          <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-8 text-center shadow-2xl">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{isWheel ? 'Spin the Wheel' : 'Beat the Bomb'}</p>
-            <h1 className="mt-2 text-5xl font-black">{showGame?.title ?? (isWheel ? 'Spin the Wheel' : 'Beat the Bomb')}</h1>
-            <p style={{ color: C.liveDim }} className="mx-auto mt-4 max-w-xl text-lg font-semibold">
+        <main className="flex flex-1 items-center justify-center px-6 py-6">
+          <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-6 text-center shadow-2xl">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{showGame ? showGameLabel(showGame.game_type) : 'Game'}</p>
+            <h1 className="mt-1 text-3xl font-black">{showGame?.title ?? 'Game'}</h1>
+            <p style={{ color: C.liveDim }} className="mx-auto mt-2 max-w-xl text-base font-semibold">
               {showGameRewardDescription(activeShowGameReward)}
             </p>
-            {showGameInstructions ? (
+            {showingShowGameInstructions ? (
               <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}` }} className="mx-auto mt-7 max-w-2xl rounded-2xl px-6 py-6 text-left">
                 <p className="text-xs font-black uppercase tracking-widest text-violet-300">How it works</p>
-                <p style={{ color: C.liveText }} className="mt-3 text-lg font-semibold leading-7">{isWheel
-                  ? 'Every joined team is placed on the wheel. It will spin, slow down, and randomly select one winner.'
-                  : 'Each team can press once. Be the last team to press before the randomly timed bomb explodes.'}</p>
+                <p style={{ color: C.liveText }} className="mt-3 text-lg font-semibold leading-7">{showGame ? showGameInstructions(showGame.game_type) : ''}</p>
               </div>
+            ) : isElimination && showGame ? (
+              <EliminationShowGame type={showGame.game_type as EliminationShowGameType} teams={participatingTeams} state={eliminationState} secondsRemaining={eliminationSecondsRemaining} dark />
             ) : isWheel ? (
-              <div className="mt-7"><TeamWheel dark teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
+              <div className="mt-5"><TeamWheel dark compact teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
             ) : (
               <><div className={`mt-7 text-9xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
               <div style={{ background: C.liveLine }} className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full"><div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" /></div></>
             )}
-            {!showGameInstructions && (showGameWinner ? (
+            {!showingShowGameInstructions && (showGameWinner ? (
               <div className="mt-7">
                 <p className="text-sm font-bold uppercase tracking-widest text-violet-300">Winner</p>
                 <p className="mt-2 text-4xl font-black text-emerald-400">{winner?.name ?? '—'}</p>
               </div>
             ) : (
-              <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`) : `Fuse burning… ${showGamePresses.length} of ${participatingTeams.length} active teams have pressed.`}</p>
+              <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isElimination
+                ? `${eliminationState.aliveTeamIds.length} teams remain · ${eliminationState.roundPhase === 'choosing' ? 'Choosing now' : 'Round result'}`
+                : isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`)
+                  : `Fuse burning… ${showGamePresses.length} of ${participatingTeams.length} active teams have pressed.`}</p>
             ))}
-            {!showGameInstructions && !isWheel && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
+            {!showingShowGameInstructions && !isWheel && !isElimination && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
               {participatingTeams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
             </div>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
-            <button data-host-navigation="forward" onClick={showGameInstructions ? startPreparedShowGame : handleAdvanceShowGame} disabled={actionBusy || (!showGameInstructions && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled)))} style={{ background: C.violet }} className="mx-auto mt-8 rounded-2xl px-10 py-5 text-xl font-extrabold text-white disabled:opacity-35">
-              {showGameInstructions ? `Start ${isWheel ? 'Spin the Wheel' : 'Beat the Bomb'} →` : showGameWinner ? 'Continue →' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
+            <button data-host-navigation="forward" onClick={showingShowGameInstructions ? startPreparedShowGame : handleAdvanceShowGame} disabled={actionBusy || (!showingShowGameInstructions && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled)))} style={{ background: C.violet }} className="mx-auto mt-8 rounded-2xl px-10 py-5 text-xl font-extrabold text-white disabled:opacity-35">
+              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
             </button>
           </section>
         </main>

@@ -535,6 +535,12 @@ export type Database = {
         Update: Partial<{ id: string; game_show_game_id: string; game_id: string; team_id: string; pressed_at: string }>
         Relationships: []
       }
+      game_show_game_choices: {
+        Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2'; submitted_at: string }
+        Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2'; submitted_at?: string }
+        Update: Partial<{ id: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2'; submitted_at: string }>
+        Relationships: []
+      }
       game_tiebreakers: {
         Row: TiebreakerRow & { game_id: string }
         Insert: TiebreakerInsert & { game_id: string }
@@ -1053,6 +1059,22 @@ export type Database = {
         Args: { p_game_show_game_id: string }
         Returns: LiveShowGameRow
       }
+      start_elimination_show_game: {
+        Args: { p_game_show_game_id: string }
+        Returns: LiveShowGameRow
+      }
+      submit_elimination_show_game_choice: {
+        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_choice: 'heads' | 'tails' | '0' | '1' | '2' }
+        Returns: LiveShowGameRow
+      }
+      resolve_elimination_show_game: {
+        Args: { p_game_show_game_id: string }
+        Returns: LiveShowGameRow
+      }
+      advance_elimination_show_game: {
+        Args: { p_game_show_game_id: string }
+        Returns: LiveShowGameRow
+      }
       finalize_question_scoring: {
         Args: {
           p_game_id: string
@@ -1309,7 +1331,7 @@ type ShowGameRow = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock'
   title: string
   settings: Json
   created_at: string
@@ -1321,7 +1343,7 @@ type ShowGameInsert = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock'
   title: string
   settings?: Json
   created_at?: string

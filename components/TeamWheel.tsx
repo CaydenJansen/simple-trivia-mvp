@@ -8,6 +8,7 @@ type TeamWheelProps = {
   winnerName?: string | null
   landingKey?: string | null
   dark?: boolean
+  compact?: boolean
   onSettled?: () => void
 }
 
@@ -24,7 +25,7 @@ export function wheelLandingFraction(key: string) {
   return 0.04 + ((hash >>> 0) / 4294967295) * 0.92
 }
 
-export default function TeamWheel({ teamNames, spinning = false, winnerName = null, landingKey = null, dark = false, onSettled }: TeamWheelProps) {
+export default function TeamWheel({ teamNames, spinning = false, winnerName = null, landingKey = null, dark = false, compact = false, onSettled }: TeamWheelProps) {
   // Every device derives the same slice order, independent of Realtime row order.
   const names = teamNames.length > 0
     ? [...teamNames].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
@@ -115,11 +116,11 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
 
   return (
     <div className="flex flex-col items-center">
-      <div style={{ background: dark ? '#211A38' : '#F3EEFF', color: dark ? '#F4F1FF' : '#4C1D95' }} className="mb-5 min-h-14 w-full max-w-sm rounded-2xl px-5 py-3 text-center shadow-sm">
+      <div style={{ background: dark ? '#211A38' : '#F3EEFF', color: dark ? '#F4F1FF' : '#4C1D95' }} className={`${compact ? 'mb-3 min-h-11 max-w-xs px-4 py-2' : 'mb-5 min-h-14 max-w-sm px-5 py-3'} w-full rounded-2xl text-center shadow-sm`}>
         <p style={{ color: dark ? '#A9A4BF' : '#77738C' }} className="text-[10px] font-black uppercase tracking-[0.18em]">Under the pointer</p>
-        <p className="mt-1 truncate text-xl font-black">{selectedName}</p>
+        <p className={`${compact ? 'text-base' : 'mt-1 text-xl'} truncate font-black`}>{selectedName}</p>
       </div>
-      <div className="relative h-72 w-72 sm:h-96 sm:w-96">
+      <div className={`relative ${compact ? 'h-56 w-56 sm:h-64 sm:w-64' : 'h-72 w-72 sm:h-96 sm:w-96'}`}>
         <div className="absolute left-1/2 top-[-10px] z-20 -translate-x-1/2 border-x-[14px] border-t-[24px] border-x-transparent border-t-rose-500 drop-shadow-lg" />
         <div
           ref={wheelRef}
@@ -143,7 +144,7 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
             )
           })}
         </div>
-        <div style={{ background: dark ? '#181329' : '#FFFFFF', color: '#7C3AED' }} className="absolute left-1/2 top-1/2 z-10 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-4 border-violet-500 text-2xl shadow-xl">★</div>
+        <div style={{ background: dark ? '#181329' : '#FFFFFF', color: '#7C3AED' }} className={`absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-4 border-violet-500 shadow-xl ${compact ? 'h-12 w-12 text-lg' : 'h-16 w-16 text-2xl'}`}>★</div>
       </div>
     </div>
   )
