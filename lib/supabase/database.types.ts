@@ -478,6 +478,27 @@ export type Database = {
           referencedColumns: ['id']
         }]
       }
+      host_preferences: {
+        Row: {
+          user_id: string
+          game_settings: Json
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          user_id: string
+          game_settings?: Json
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          user_id?: string
+          game_settings?: Json
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       game_questions: {
         Row: QuestionRow & { game_id: string }
         Insert: QuestionInsert & { game_id: string }

@@ -220,6 +220,14 @@ create table if not exists public.games (
   settings jsonb not null default '{}'::jsonb
 );
 
+create table if not exists public.host_preferences (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  game_settings jsonb not null default '{}'::jsonb
+    check (jsonb_typeof(game_settings) = 'object'),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.game_questions (
   id uuid primary key default gen_random_uuid(),
   game_id uuid not null references public.games(id) on delete cascade,

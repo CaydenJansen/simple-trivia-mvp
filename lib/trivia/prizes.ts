@@ -5,7 +5,7 @@ export type PrizeAward = {
   message: string
 }
 
-type PrizeSetting = {
+export type PrizeSetting = {
   enabled: boolean
   msg: string
 }
@@ -13,7 +13,7 @@ type PrizeSetting = {
 const TOP_PLACEMENTS: PrizePlacement[] = ['1st', '2nd', '3rd']
 const BOTTOM_PLACEMENTS: PrizePlacement[] = ['Last', '2nd Last', '3rd Last']
 
-function prizeSettings(value: unknown): PrizeSetting[] {
+export function prizeSettings(value: unknown): PrizeSetting[] {
   if (!Array.isArray(value)) return []
 
   return value.map(item => {

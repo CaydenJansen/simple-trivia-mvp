@@ -45,7 +45,7 @@ import {
   showsLeaderboardAfterQuestion,
   type LeaderboardVisibility,
 } from "@/lib/trivia/leaderboard-visibility";
-import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
+import { prizeAwardsFromJson, prizeSettings, type PrizeAward } from "@/lib/trivia/prizes";
 import { correctnessSummary } from "@/lib/trivia/correctness-rate";
 import { hostRecoveryScreen } from "@/lib/trivia/session-recovery";
 import { buildGameJoinUrl } from "@/lib/trivia/join-code";
@@ -102,6 +102,7 @@ import { playerScoreVisibilityFromSettings, type PlayerScoreVisibility } from "@
 import { teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { quizExitPrompt } from "@/lib/trivia/quiz-exit";
 import { submittedAnswersEditableFromSettings } from "@/lib/trivia/answer-editing";
+import { hostGameSettingsRecord, persistentHostGameSettings } from "@/lib/trivia/host-preferences";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -111,6 +112,35 @@ type Screen =
 type Go = (s: Screen) => void
 type AutoBuildSourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"]
 type AutoBuildSourceTiebreaker = Database["public"]["Tables"]["source_tiebreakers"]["Row"]
+type PrizePlace = { enabled: boolean; msg: string }
+
+function normalizedPrizePlaces(value: Json | undefined): PrizePlace[] {
+  const parsed = prizeSettings(value)
+  return Array.from({ length: 3 }, (_, index) => parsed[index] ?? { enabled: false, msg: '' })
+}
+
+async function loadHostDefaultGameSettings() {
+  const { data: authData } = await supabase.auth.getUser()
+  if (!authData.user) return {}
+  const { data, error } = await supabase
+    .from('host_preferences')
+    .select('game_settings')
+    .eq('user_id', authData.user.id)
+    .maybeSingle()
+  if (error) throw error
+  return hostGameSettingsRecord(data?.game_settings)
+}
+
+async function saveHostDefaultGameSettings(settings: Record<string, Json>) {
+  const { data: authData } = await supabase.auth.getUser()
+  if (!authData.user) return
+  const { error } = await supabase.from('host_preferences').upsert({
+    user_id: authData.user.id,
+    game_settings: persistentHostGameSettings(settings),
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'user_id' })
+  if (error) throw error
+}
 
 function getHostGameCode() {
   if (typeof window === 'undefined') return ''
@@ -5177,7 +5207,7 @@ function HostSetup({ go }: { go: Go }) {
   const [scoreVisibility, setScoreVisibility] = useState<PlayerScoreVisibility>('live')
   const [showCorrectnessPercentage, setShowCorrectnessPercentage] = useState(false)
   const [submittedAnswersEditable, setSubmittedAnswersEditable] = useState(false)
-  type PrizePlace = { enabled: boolean; msg: string }
+  const [approvalRequired, setApprovalRequired] = useState(true)
   const topPlaces = ['1st', '2nd', '3rd']
   const bottomPlaces = ['Last', '2nd Last', '3rd Last']
   const initPrize = (msg = ''): PrizePlace => ({ enabled: false, msg })
@@ -5191,6 +5221,30 @@ function HostSetup({ go }: { go: Go }) {
   const [loadingQuiz, setLoadingQuiz] = useState(true)
   const [openingLobby, setOpeningLobby] = useState(false)
   const [setupError, setSetupError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    async function loadPreferences() {
+      try {
+        const settings = await loadHostDefaultGameSettings()
+        if (!active || Object.keys(settings).length === 0) return
+        setReveal(answerRevealModeFromSettings(settings))
+        setLb(leaderboardVisibilityFromSettings(settings))
+        setAutoRunMode(autoRunModeFromSettings(settings))
+        setScoreVisibility(playerScoreVisibilityFromSettings(settings))
+        setShowCorrectnessPercentage(settings.show_correctness_percentage_to_players === true)
+        setSubmittedAnswersEditable(submittedAnswersEditableFromSettings(settings))
+        setApprovalRequired(teamApprovalRequiredFromSettings(settings))
+        setTopPrizes(normalizedPrizePlaces(settings.top_prizes))
+        setBotPrizes(normalizedPrizePlaces(settings.bottom_prizes))
+      } catch (error) {
+        console.error('Could not load host defaults:', error)
+        if (active) setSetupError('Your saved hosting defaults could not be loaded. The standard settings are shown instead.')
+      }
+    }
+    void loadPreferences()
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -5235,25 +5289,31 @@ function HostSetup({ go }: { go: Go }) {
     setSetupError(null)
 
     try {
+      const gameSettings: Record<string, Json> = {
+        answer_reveal: reveal,
+        leaderboard_visibility: lb,
+        auto_run_mode: autoRunMode,
+        team_approval_required: approvalRequired,
+        player_score_visibility: scoreVisibility,
+        scores_visible_to_players: scoreVisibility === 'live',
+        show_correctness_percentage_to_players: showCorrectnessPercentage,
+        submitted_answers_editable: submittedAnswersEditable,
+        top_prizes: topPrizes,
+        bottom_prizes: botPrizes,
+      }
       const { data: game, error: gameError } = await supabase
         .rpc('create_game_from_quiz_with_show_games', {
           p_quiz_id: quiz.id,
-          p_settings: {
-            answer_reveal: reveal,
-            leaderboard_visibility: lb,
-            auto_run_mode: autoRunMode,
-            team_approval_required: true,
-            player_score_visibility: scoreVisibility,
-            scores_visible_to_players: scoreVisibility === 'live',
-            show_correctness_percentage_to_players: showCorrectnessPercentage,
-            submitted_answers_editable: submittedAnswersEditable,
-            top_prizes: topPrizes,
-            bottom_prizes: botPrizes,
-          },
+          p_settings: gameSettings,
         })
         .single()
 
       if (gameError) throw gameError
+      try {
+        await saveHostDefaultGameSettings(gameSettings)
+      } catch (preferenceError) {
+        console.error('Could not save host defaults:', preferenceError)
+      }
       localStorage.setItem('simple-trivia-host-game-id', game.game_id)
       localStorage.setItem('simple-trivia-host-game-code', game.game_code)
       localStorage.setItem('simple-trivia-host-game-title', game.game_title)
@@ -5296,6 +5356,28 @@ function HostSetup({ go }: { go: Go }) {
         )}
 
         <div className="space-y-4">
+          <SCard title="Team Entry">
+            <p style={{ color: C.sub }} className="mb-3 text-xs leading-5">
+              Choose whether teams enter immediately or wait for your approval.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { required: true, label: 'Review each team' },
+                { required: false, label: 'Auto-join' },
+              ].map(option => (
+                <button key={option.label} type="button" onClick={() => setApprovalRequired(option.required)}
+                  style={{
+                    border: `1.5px solid ${approvalRequired === option.required ? C.violet : C.line}`,
+                    background: approvalRequired === option.required ? C.violetMist : 'white',
+                    color: approvalRequired === option.required ? C.violet : C.sub,
+                  }}
+                  className="rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-all">
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </SCard>
+
           <SCard title="Auto-Run">
             <p style={{ color: C.sub }} className="mb-3 text-xs leading-5">
               Run each round automatically, then stop so you can review and finalize it before starting the next round.
@@ -5478,10 +5560,9 @@ function HostSetup({ go }: { go: Go }) {
                   ))}
                 </div>
               </div>
-              <label className="flex items-center gap-3 cursor-pointer pt-1" style={{ borderTop: `1px solid ${C.line}` }}>
-                <input type="checkbox" style={{ accentColor: C.violet }} />
-                <span style={{ color: C.sub }} className="text-xs font-semibold">Save as default prize settings</span>
-              </label>
+              <p style={{ color: C.sub, borderTop: `1px solid ${C.line}` }} className="pt-3 text-xs">
+                These prize settings will be remembered for your next game.
+              </p>
             </div>
           </SCard>
 
@@ -5540,6 +5621,12 @@ function Lobby({ go }: { go: Go }) {
 
     setLobbySettings(settings)
     setApprovalRequired(required)
+    try {
+      await saveHostDefaultGameSettings(settings)
+    } catch (preferenceError) {
+      console.error('Could not save team-entry default:', preferenceError)
+      setLobbyError('Team entry changed for this game, but the default could not be saved.')
+    }
 
     if (!required) {
       const { data: pending, error: pendingError } = await supabase
@@ -6025,6 +6112,7 @@ function ReviewBadge({
 function LiveQuestion({ go }: { go: Go }) {
   const [phase, setPhase] = useState<'open' | 'closed' | 'revealed'>('open')
   const [answerEditingAllowed, setAnswerEditingAllowed] = useState(false)
+  const [submittedAnswersEditableDefault, setSubmittedAnswersEditableDefault] = useState(false)
   const [questionStage, setQuestionStage] = useState<'core' | 'bonus'>('core')
   const [gameScreen, setGameScreen] = useState('round-start')
   const [emergency, setEmergency] = useState(false)
@@ -6046,6 +6134,8 @@ function LiveQuestion({ go }: { go: Go }) {
   const [playerScoreVisibility, setPlayerScoreVisibility] = useState<PlayerScoreVisibility>('live')
   const [showCorrectnessPercentage, setShowCorrectnessPercentage] = useState(false)
   const [approvalRequired, setApprovalRequired] = useState(true)
+  const [topPrizes, setTopPrizes] = useState<PrizePlace[]>(normalizedPrizePlaces(undefined))
+  const [botPrizes, setBotPrizes] = useState<PrizePlace[]>(normalizedPrizePlaces(undefined))
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
@@ -6053,6 +6143,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const [autoRunPaused, setAutoRunPaused] = useState(false)
   const [autoRunRemaining, setAutoRunRemaining] = useState(0)
   const autoRunInitializedRef = useRef(false)
+  const prizesInitializedRef = useRef(false)
   const autoRunActionRef = useRef<() => void>(() => {})
   const autoRunPublishedKeyRef = useRef('')
   const liveGameSettingsRef = useRef<Record<string, Json>>({})
@@ -6087,7 +6178,13 @@ function LiveQuestion({ go }: { go: Go }) {
       setPlayerScoreVisibility(playerScoreVisibilityFromSettings(game.settings))
       setShowCorrectnessPercentage(liveGameSettingsRef.current.show_correctness_percentage_to_players === true)
       setApprovalRequired(teamApprovalRequiredFromSettings(game.settings))
+      if (!prizesInitializedRef.current) {
+        prizesInitializedRef.current = true
+        setTopPrizes(normalizedPrizePlaces(liveGameSettingsRef.current.top_prizes))
+        setBotPrizes(normalizedPrizePlaces(liveGameSettingsRef.current.bottom_prizes))
+      }
       setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
+      setSubmittedAnswersEditableDefault(submittedAnswersEditableFromSettings(game.settings))
       const configuredAutoRun = autoRunModeFromSettings(game.settings)
       setAutoRunMode(configuredAutoRun)
       if (!autoRunInitializedRef.current) {
@@ -7042,6 +7139,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       return false
     }
     liveGameSettingsRef.current = settings
+    try {
+      await saveHostDefaultGameSettings(settings)
+    } catch (preferenceError) {
+      console.error('Could not save live settings as defaults:', preferenceError)
+      setLiveError('That setting changed for this game, but the default could not be saved.')
+    }
     setSettingsBusy(false)
     return true
   }
@@ -7067,6 +7170,23 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     autoRunPublishedKeyRef.current = ''
   }
 
+  async function setLiveSubmittedAnswersEditable(enabled: boolean) {
+    if (!await updateLiveSettings({ submitted_answers_editable: enabled })) return
+    setSubmittedAnswersEditableDefault(enabled)
+    if (!liveGameId || phase !== 'open') return
+    const { error } = await supabase.from('games').update({ answer_editing_allowed: enabled }).eq('id', liveGameId)
+    if (error) {
+      console.error('Could not update current answer editing:', error)
+      setLiveError('The default changed, but the current question could not be updated.')
+      return
+    }
+    setAnswerEditingAllowed(enabled)
+  }
+
+  async function saveLivePrizes() {
+    await updateLiveSettings({ top_prizes: topPrizes, bottom_prizes: botPrizes })
+  }
+
   const autoRunClockTone = autoRunClockColor(autoRunRemaining)
   const liveSettingsMenu = (
     <div className="relative">
@@ -7078,6 +7198,16 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       {emergency && (
         <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, right: 0, top: '100%', marginTop: 6, width: 340, zIndex: 60 }} className="absolute max-h-[calc(100dvh-72px)] space-y-3 overflow-y-auto rounded-xl p-4 text-left shadow-2xl">
           <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Live game settings</p>
+          <p style={{ color: C.liveDim }} className="text-xs leading-5">Changes apply to this game and become your defaults for future games.</p>
+          <label className="block text-xs font-bold" style={{ color: C.liveText }}>Answer reveal
+            <select value={answerRevealMode} disabled={settingsBusy} onChange={event => {
+              const value = event.target.value as AnswerRevealMode
+              setAnswerRevealMode(value)
+              void updateLiveSettings({ answer_reveal: value })
+            }} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-1.5 w-full cursor-pointer rounded-lg px-3 py-2 text-sm">
+              <option value="each">After every question</option><option value="round">At the end of each round</option>
+            </select>
+          </label>
           <label className="block text-xs font-bold" style={{ color: C.liveText }}>Player scores
             <select value={playerScoreVisibility} disabled={settingsBusy} onChange={event => {
               const value = event.target.value as PlayerScoreVisibility
@@ -7100,6 +7230,9 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             <span>Show % correct to players</span><input type="checkbox" checked={showCorrectnessPercentage} disabled={settingsBusy} onChange={event => { const checked = event.target.checked; setShowCorrectnessPercentage(checked); void updateLiveSettings({ show_correctness_percentage_to_players: checked }) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
           </label>
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-sm font-bold" style={{ color: C.liveText }}>
+            <span>Allow answer changes after submitting</span><input type="checkbox" checked={submittedAnswersEditableDefault} disabled={settingsBusy} onChange={event => { void setLiveSubmittedAnswersEditable(event.target.checked) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
+          </label>
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-sm font-bold" style={{ color: C.liveText }}>
             <span>Auto-join</span><input type="checkbox" checked={!approvalRequired} disabled={settingsBusy} onChange={event => { void setLiveAutoJoin(event.target.checked) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
           </label>
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-sm font-bold" style={{ color: C.liveText }}>
@@ -7107,6 +7240,29 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           </label>
           {approvalRequired && <p style={{ color: C.liveDim }} className="text-xs">Review each team before they enter the game.</p>}
           {autoRunMode === 'round' && playerScoreVisibility === 'live' && <p style={{ color: C.caution }} className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold">Auto-Run holds points until the round review. We recommend “After each round” for player scores.</p>}
+          <details style={{ borderTop: `1px solid ${C.liveLine}` }} className="group pt-3">
+            <summary style={{ color: C.liveText }} className="cursor-pointer text-sm font-bold">Prize places & messages</summary>
+            <div className="mt-3 space-y-3">
+              {[
+                { title: 'Top places', labels: ['1st', '2nd', '3rd'], values: topPrizes, setValues: setTopPrizes },
+                { title: 'Bottom places', labels: ['Last', '2nd Last', '3rd Last'], values: botPrizes, setValues: setBotPrizes },
+              ].map(group => (
+                <div key={group.title} className="space-y-2">
+                  <p style={{ color: C.liveDim }} className="text-[10px] font-black uppercase tracking-wider">{group.title}</p>
+                  {group.labels.map((label, index) => (
+                    <div key={label} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-lg p-2">
+                      <label style={{ color: C.liveText }} className="flex cursor-pointer items-center gap-2 text-xs font-bold">
+                        <input type="checkbox" checked={group.values[index].enabled} onChange={event => group.setValues(current => current.map((place, placeIndex) => placeIndex === index ? { ...place, enabled: event.target.checked } : place))} className="accent-violet-600" />
+                        {label}
+                      </label>
+                      {group.values[index].enabled && <input value={group.values[index].msg} onChange={event => group.setValues(current => current.map((place, placeIndex) => placeIndex === index ? { ...place, msg: event.target.value } : place))} placeholder="Prize message…" style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-2 w-full rounded-md px-2 py-1.5 text-xs placeholder:text-[#7E7AA0]" />}
+                    </div>
+                  ))}
+                </div>
+              ))}
+              <button type="button" onClick={() => { void saveLivePrizes() }} disabled={settingsBusy} style={{ background: C.violet, color: 'white' }} className="w-full cursor-pointer rounded-lg px-3 py-2 text-xs font-black disabled:opacity-50">Save prize settings</button>
+            </div>
+          </details>
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="pt-2">
             <button onClick={() => exitHostSession(go)} style={{ color: C.liveText }} className="w-full cursor-pointer rounded-lg px-3 py-2 text-left text-sm font-semibold hover:bg-white/5">Exit to My Quizzes<span style={{ color: C.liveDim }} className="mt-0.5 block text-[10px]">Game keeps running</span></button>
             <CancelGameButton go={go} dark className="w-full" description="Ends the game for everyone" />
