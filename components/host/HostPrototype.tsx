@@ -3024,7 +3024,7 @@ function QuizBuilder({ go }: { go: Go }) {
             {saveError && <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{saveError}</p>}
             <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button disabled={saving || discarding} onClick={() => setPendingExit(null)} className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Keep Editing</button>
-              <button disabled={saving || discarding} onClick={() => void discardAndExit()} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">{discarding ? 'Discarding…' : newQuiz ? 'Discard Quiz' : 'Discard Changes'}</button>
+              <button disabled={saving || discarding} onClick={() => void discardAndExit()} className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-600 transition-colors hover:border-red-300 hover:bg-red-50 disabled:opacity-50">{discarding ? 'Discarding…' : newQuiz ? 'Discard Quiz' : 'Discard Changes'}</button>
               <button disabled={saving || discarding} onClick={() => void saveAndExit()} className="rounded-xl bg-violet px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-hover disabled:opacity-50">{saving ? 'Saving…' : newQuiz ? 'Save Quiz & Leave' : 'Save & Leave'}</button>
             </div>
           </section>
