@@ -2470,12 +2470,22 @@ function PendingReview() {
         <PlayerQuestionCard prompt={snapshot.prompt || 'Question result'} />
         <div className="flex flex-col items-center gap-4 text-center">
           <div style={{ background: C.violetPale, border: `2px solid #C4B5FD` }} className="flex h-16 w-16 items-center justify-center rounded-full text-2xl">…</div>
-          <h1 style={{ color: C.violet }} className="text-3xl font-black">Pending review</h1>
+          <h1 style={{ color: C.violet }} className="text-3xl font-black">Answers recorded</h1>
           <div style={{ background: C.ground, border: `1px solid ${C.line}` }} className="w-full rounded-2xl px-5 py-4 text-left">
             <p style={{ color: C.sub }} className="text-xs font-bold uppercase tracking-wider">Your answer</p>
             <p style={{ color: C.ink }} className="mt-1 text-lg font-extrabold">{snapshot.answer || 'Submitted'}</p>
+            {snapshot.bonusAnswer && (
+              <><p style={{ color: C.violet }} className="mt-3 text-xs font-bold uppercase tracking-wider">Your bonus answer</p><p style={{ color: C.ink }} className="mt-1 text-lg font-extrabold">{snapshot.bonusAnswer}</p></>
+            )}
           </div>
-          <p style={{ color: C.sub }} className="text-sm leading-6">The host will settle this answer at the end of the round.</p>
+          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="w-full rounded-2xl px-5 py-4 text-left">
+            <p style={{ color: C.go }} className="text-xs font-bold uppercase tracking-wider">Correct answer</p>
+            <p style={{ color: C.ink }} className="mt-1 text-lg font-extrabold">{snapshot.correctAnswer}</p>
+            {snapshot.bonusCorrectAnswer && (
+              <><p style={{ color: C.violet }} className="mt-3 text-xs font-bold uppercase tracking-wider">Bonus answer</p><p style={{ color: C.ink }} className="mt-1 text-lg font-extrabold">{snapshot.bonusCorrectAnswer}</p></>
+            )}
+          </div>
+          <p style={{ color: C.sub }} className="text-sm leading-6">Your result and points will be finalized at the end of the round.</p>
           <WaitMsg msg="The round is continuing…" />
         </div>
       </div>

@@ -84,6 +84,7 @@ import {
   autoRunAnswerSeconds,
   autoRunClockLabel,
   autoRunModeFromSettings,
+  autoRunRemainingAfterAllLocked,
   autoRunRevealSeconds,
   type AutoRunMode,
 } from "@/lib/trivia/auto-run";
@@ -5982,7 +5983,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     setActionBusy(true)
     setLiveError(null)
     try {
-      await scoreCurrentQuestion(true, true)
+      await updateLiveGame({ answer_phase: 'revealed' })
       setPhase('revealed')
     } catch (error) {
       console.error('Could not Auto-Run scoring and reveal:', error)
@@ -6272,6 +6273,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     0,
   )
   const reviewCount = coreReviewCount + bonusReviewCount
+  const allActivePlayersLocked = phase === 'open' && teams.length > 0 && (
+    questionStage === 'bonus'
+      ? bonusAnsweredCount >= teams.length
+      : answeredCount >= teams.length
+  )
   const coreCorrectness = correctnessSummary(teams.length, submissions)
   const bonusCorrectness = correctnessSummary(teams.length, bonusSubmissions)
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
@@ -6338,6 +6344,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     }, 1000)
     return () => window.clearTimeout(timer)
   }, [actionBusy, autoRunMode, autoRunOperating, autoRunPaused, autoRunRemaining, autoRunTimer.key])
+
+  useEffect(() => {
+    if (autoRunMode !== 'round' || !autoRunOperating || !allActivePlayersLocked) return
+    // Submission Realtime events shorten, but never lengthen, the live countdown.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAutoRunRemaining(current => autoRunRemainingAfterAllLocked(current, true))
+  }, [allActivePlayersLocked, autoRunMode, autoRunOperating])
 
   const autoRunControls = autoRunMode === 'round' ? (
     <section style={{ background: C.livePanel, borderBottom: `1px solid ${C.liveLine}` }} className="flex flex-wrap items-center justify-center gap-3 px-5 py-2.5">
@@ -6786,7 +6799,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               </span>
             </div>
             <div className="flex items-center gap-3">
-              {phase === 'revealed' && teams.length > 0 && (
+              {phase === 'revealed' && autoRunMode === 'off' && teams.length > 0 && (
                 <div className="flex items-center gap-2">
                   <span
                     style={{ background: `${C.go}20`, color: C.go, border: `1px solid ${C.go}45` }}
@@ -7269,6 +7282,7 @@ function EndOfRound({ go }: { go: Go }) {
   const [currentBonusSubmissions, setCurrentBonusSubmissions] = useState<Pick<LiveBonusSubmission, 'is_correct'>[]>([])
   const [roundSubmissions, setRoundSubmissions] = useState<LiveSubmission[]>([])
   const [roundBonusSubmissions, setRoundBonusSubmissions] = useState<LiveBonusSubmission[]>([])
+  const [reviewAllAnswers, setReviewAllAnswers] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -7678,6 +7692,66 @@ function EndOfRound({ go }: { go: Go }) {
                 }} style={{ color: '#FCA5A5' }} className="cursor-pointer text-xs font-bold hover:underline disabled:cursor-not-allowed disabled:opacity-50">
                   Mark all pending incorrect &amp; finalize
                 </button>
+              </div>
+            )}
+
+            {!roundFinalized && (
+              <div className="mt-4" style={{ borderTop: `1px solid ${C.liveLine}` }}>
+                <button
+                  type="button"
+                  onClick={() => setReviewAllAnswers(value => !value)}
+                  style={{ background: reviewAllAnswers ? C.livePanel : C.violet, color: 'white' }}
+                  className="mt-4 w-full cursor-pointer rounded-xl px-5 py-3 text-sm font-extrabold transition-all hover:brightness-110"
+                >
+                  {reviewAllAnswers ? 'Hide all answers' : 'Check all other answers'}
+                </button>
+
+                {reviewAllAnswers && (
+                  <div className="mt-4 space-y-4">
+                    {roundQuestions.slice().sort((a, b) => a.round_position - b.round_position).map(auditQuestion => {
+                      const auditBonus = runtimeBonusFromJson(auditQuestion.bonus)
+                      return (
+                        <section key={auditQuestion.question_key} style={{ background: C.livePanel, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-4">
+                          <p style={{ color: '#C4B5FD' }} className="text-[10px] font-black uppercase tracking-wider">Question {auditQuestion.round_position}</p>
+                          <h3 className="mt-1 text-sm font-extrabold leading-5">{auditQuestion.prompt}</h3>
+                          <p style={{ color: C.go }} className="mt-1 text-xs font-bold">Answer: {correctAnswerDisplay(auditQuestion)}</p>
+                          <div className="mt-3 space-y-2">
+                            {teams.map(team => {
+                              const coreSubmission = roundSubmissions.find(item => item.question_key === auditQuestion.question_key && item.team_id === team.id) ?? null
+                              const bonusSubmission = roundBonusSubmissions.find(item => item.question_key === auditQuestion.question_key && item.team_id === team.id) ?? null
+                              const coreGrading = coreSubmission ? storedSubmissionGrading(auditQuestion, coreSubmission) : null
+                              const bonusGrading = bonusSubmission && auditBonus ? storedBonusGrading(auditBonus, bonusSubmission) : null
+                              return (
+                                <div key={team.id} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-xl p-3">
+                                  <p style={{ color: C.liveText }} className="mb-2 text-xs font-extrabold">{team.name}</p>
+                                  {!coreSubmission ? (
+                                    <p style={{ color: C.liveDim }} className="text-xs italic">No answer submitted</p>
+                                  ) : coreGrading?.items.map((item, itemIndex) => (
+                                    <div key={`core-${itemIndex}`} className="mb-1.5 grid items-center gap-2 last:mb-0" style={{ gridTemplateColumns: 'minmax(0, 1fr) auto' }}>
+                                      <p className="min-w-0 truncate text-xs font-semibold" title={item.submitted}>{item.label ? `${item.label}: ` : ''}{item.submitted || '—'}{item.expected && item.status !== 'correct' ? <span style={{ color: C.go }}> → {item.expected}</span> : null}</p>
+                                      <ReviewBadge status={item.status} onCorrect={() => { void reviewRoundSubmission(coreSubmission, itemIndex, 'correct') }} onIncorrect={() => { void reviewRoundSubmission(coreSubmission, itemIndex, 'incorrect') }} />
+                                    </div>
+                                  ))}
+                                  {auditBonus && (
+                                    <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.liveLine}` }}>
+                                      <p style={{ color: '#C4B5FD' }} className="mb-1 text-[10px] font-black uppercase">Bonus</p>
+                                      {!bonusSubmission || !bonusGrading ? <p style={{ color: C.liveDim }} className="text-xs italic">No bonus answer submitted</p> : bonusGrading.items.map((item, itemIndex) => (
+                                        <div key={`bonus-${itemIndex}`} className="grid items-center gap-2" style={{ gridTemplateColumns: 'minmax(0, 1fr) auto' }}>
+                                          <p className="min-w-0 truncate text-xs font-semibold">{item.submitted || '—'}{item.expected && item.status !== 'correct' ? <span style={{ color: C.go }}> → {item.expected}</span> : null}</p>
+                                          <ReviewBadge status={item.status} onCorrect={() => { void reviewRoundSubmission(bonusSubmission, itemIndex, 'correct', true) }} onIncorrect={() => { void reviewRoundSubmission(bonusSubmission, itemIndex, 'incorrect', true) }} />
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </section>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </section>

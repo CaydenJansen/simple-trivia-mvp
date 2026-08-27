@@ -5,6 +5,7 @@ import {
   autoRunAnswerSeconds,
   autoRunClockLabel,
   autoRunModeFromSettings,
+  autoRunRemainingAfterAllLocked,
   autoRunRevealSeconds,
 } from './auto-run'
 
@@ -22,7 +23,13 @@ describe('Auto-Run rules', () => {
   })
 
   it('times ranking questions by item count', () => {
-    expect(autoRunAnswerSeconds({ question_type: 'ranking', points_max: 1, correct_answer: ['A', 'B', 'C', 'D'] })).toBe(75)
+    expect(autoRunAnswerSeconds({ question_type: 'ranking', points_max: 1, correct_answer: ['A', 'B', 'C', 'D'] })).toBe(45)
+  })
+
+  it('drops an open countdown to five seconds when every player is locked in', () => {
+    expect(autoRunRemainingAfterAllLocked(42, true)).toBe(5)
+    expect(autoRunRemainingAfterAllLocked(3, true)).toBe(3)
+    expect(autoRunRemainingAfterAllLocked(42, false)).toBe(42)
   })
 
   it('allows longer reveals for compound questions', () => {

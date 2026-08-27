@@ -22,10 +22,16 @@ export function rankingItemCount(question: TimedQuestion) {
 }
 
 export function autoRunAnswerSeconds(question: TimedQuestion) {
-  const workload = question.question_type === 'ranking'
-    ? Math.max(1, rankingItemCount(question))
-    : Math.max(1, Math.trunc(question.points_max ?? 1))
+  if (question.question_type === 'ranking') {
+    return 30 + ((Math.max(1, rankingItemCount(question)) - 1) * 5)
+  }
+  const workload = Math.max(1, Math.trunc(question.points_max ?? 1))
   return 30 + ((workload - 1) * 15)
+}
+
+export function autoRunRemainingAfterAllLocked(remaining: number, allPlayersLocked: boolean) {
+  const safe = Math.max(0, Math.trunc(remaining))
+  return allPlayersLocked ? Math.min(safe, 5) : safe
 }
 
 export function autoRunRevealSeconds(question: TimedQuestion) {
