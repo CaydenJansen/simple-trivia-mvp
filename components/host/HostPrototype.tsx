@@ -90,13 +90,18 @@ import {
 import {
   AUTO_RUN_CONTENT_SECONDS,
   AUTO_RUN_EXTENSION_SECONDS,
+  AUTO_RUN_SHOW_GAME_INSTRUCTIONS_SECONDS,
+  AUTO_RUN_SHOW_GAME_RESULT_SECONDS,
   autoRunAnswerSeconds,
   autoRunClockColor,
   autoRunClockLabel,
   autoRunModeFromSettings,
+  autoRunScaledSeconds,
+  autoRunSpeedFromSettings,
   autoRunRemainingAfterAllLocked,
   autoRunRevealSeconds,
   type AutoRunMode,
+  type AutoRunSpeed,
 } from "@/lib/trivia/auto-run";
 import { playerScoreVisibilityFromSettings, type PlayerScoreVisibility } from "@/lib/trivia/score-visibility";
 import { teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
@@ -1663,9 +1668,9 @@ function QuizBuilder({ go }: { go: Go }) {
   const [dirty, setDirty] = useState(false)
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
   const [editingTiebreakerId, setEditingTiebreakerId] = useState<string | null>(null)
-  const [newQuestionRoundId, setNewQuestionRoundId] = useState<number | null>(null)
-  const [addMenuRoundId, setAddMenuRoundId] = useState<number | null>(null)
-  const [picker, setPicker] = useState<{ roundId: number; origin: 'user' | 'platform' } | null>(null)
+  const [newQuestionTarget, setNewQuestionTarget] = useState<{ roundId: number; itemPosition: number } | null>(null)
+  const [addMenuTarget, setAddMenuTarget] = useState<{ roundId: number; itemPosition: number } | null>(null)
+  const [picker, setPicker] = useState<{ roundId: number; itemPosition: number; origin: 'user' | 'platform' } | null>(null)
   const [replaceTarget, setReplaceTarget] = useState<{ roundId: number; questionId: string } | null>(null)
   const [replaceOrigin, setReplaceOrigin] = useState<'user' | 'platform' | null>(null)
   const [replacingLibraryQuestionId, setReplacingLibraryQuestionId] = useState<string | null>(null)
@@ -1673,6 +1678,8 @@ function QuizBuilder({ go }: { go: Go }) {
   const [replacementError, setReplacementError] = useState<string | null>(null)
   const [tiebreakerReplacementError, setTiebreakerReplacementError] = useState<string | null>(null)
   const replacementHistoryRef = useRef(new Map<string, Set<string>>())
+  const replacementBackStackRef = useRef(new Map<string, BuilderQuestionData[]>())
+  const [replacementBackCounts, setReplacementBackCounts] = useState<Record<string, number>>({})
   const tiebreakerReplacementHistoryRef = useRef(new Map<string, Set<string>>())
   const [draggedRoundId, setDraggedRoundId] = useState<number | null>(null)
   const [roundDropTarget, setRoundDropTarget] = useState<{ id: number; placement: DropPlacement } | null>(null)
@@ -1907,10 +1914,13 @@ function QuizBuilder({ go }: { go: Go }) {
     return () => { active = false }
   }, [])
 
-  function addQuestionToRound(roundId: number, question: BuilderQuestionData) {
-    setRounds(current => current.map(round => round.id === roundId
-      ? { ...round, questions: [...round.questions, { ...question, itemPosition: nextRoundItemPosition(round) }] }
-      : round))
+  function addQuestionToRound(roundId: number, question: BuilderQuestionData, itemPosition: number) {
+    setRounds(current => current.map(round => round.id === roundId ? {
+      ...round,
+      questions: [...round.questions.map(item => item.itemPosition >= itemPosition ? { ...item, itemPosition: item.itemPosition + 1 } : item), { ...question, itemPosition }],
+      contentScreens: round.contentScreens.map(item => item.itemPosition >= itemPosition ? { ...item, itemPosition: item.itemPosition + 1 } : item),
+      showGames: round.showGames.map(item => item.itemPosition >= itemPosition ? { ...item, itemPosition: item.itemPosition + 1 } : item),
+    } : round))
     setDirty(true)
   }
 
@@ -1969,6 +1979,10 @@ function QuizBuilder({ go }: { go: Go }) {
 
     history.add(replacement.id)
     replacementHistoryRef.current.set(currentQuestion.questionKey, history)
+    const backStack = replacementBackStackRef.current.get(currentQuestion.questionKey) ?? []
+    backStack.push(currentQuestion)
+    replacementBackStackRef.current.set(currentQuestion.questionKey, backStack)
+    setReplacementBackCounts(current => ({ ...current, [currentQuestion.questionKey]: backStack.length }))
     const replacementSnapshot = sourceToBuilderQuestion(replacement)
     setRounds(current => current.map(round => round.id === roundId ? {
       ...round,
@@ -1981,6 +1995,26 @@ function QuizBuilder({ go }: { go: Go }) {
     } : round))
     setDirty(true)
     setReplacingLibraryQuestionId(null)
+  }
+
+  function cycleLibraryQuestionBack(roundId: number, questionId: string) {
+    const currentQuestion = rounds.find(round => round.id === roundId)?.questions.find(question => question.id === questionId)
+    if (!currentQuestion) return
+    const backStack = replacementBackStackRef.current.get(currentQuestion.questionKey) ?? []
+    const previous = backStack.pop()
+    if (!previous) return
+    replacementBackStackRef.current.set(currentQuestion.questionKey, backStack)
+    setReplacementBackCounts(current => ({ ...current, [currentQuestion.questionKey]: backStack.length }))
+    setRounds(current => current.map(round => round.id === roundId ? {
+      ...round,
+      questions: round.questions.map(question => question.id === questionId ? {
+        ...previous,
+        id: question.id,
+        questionKey: question.questionKey,
+        itemPosition: question.itemPosition,
+      } : question),
+    } : round))
+    setDirty(true)
   }
 
   async function cycleLibraryTiebreaker(tiebreakerId: string) {
@@ -2417,40 +2451,46 @@ function QuizBuilder({ go }: { go: Go }) {
               onReplace={questionId => setReplaceTarget({ roundId: round.id, questionId })}
               replacingLibraryQuestionId={replacingLibraryQuestionId}
               onCycleLibrary={questionId => void cycleLibraryQuestion(round.id, questionId)}
+              onCycleLibraryBack={questionId => cycleLibraryQuestionBack(round.id, questionId)}
+              replacementBackCounts={replacementBackCounts}
               onRoundPointerDown={event => startRoundDrag(round.id, event)}
               onTitleChange={nextTitle => {
                 setRounds(current => current.map(item => item.id === round.id ? { ...item, title: nextTitle } : item))
                 setDirty(true)
               }}
-              onAddQuestion={() => setAddMenuRoundId(round.id)}
-              onAddContentScreen={() => {
+              onAddQuestion={itemPosition => setAddMenuTarget({ roundId: round.id, itemPosition })}
+              onAddContentScreen={itemPosition => {
                 setRounds(current => current.map(item => item.id === round.id ? {
                   ...item,
-                  contentScreens: [...item.contentScreens, {
+                  questions: item.questions.map(question => question.itemPosition >= itemPosition ? { ...question, itemPosition: question.itemPosition + 1 } : question),
+                  showGames: item.showGames.map(game => game.itemPosition >= itemPosition ? { ...game, itemPosition: game.itemPosition + 1 } : game),
+                  contentScreens: item.contentScreens.map(screen => screen.itemPosition >= itemPosition ? { ...screen, itemPosition: screen.itemPosition + 1 } : screen).concat({
                     id: `content-${crypto.randomUUID()}`,
                     screenKey: `content-${crypto.randomUUID()}`,
-                    itemPosition: nextRoundItemPosition(item),
+                    itemPosition,
                     title: 'New content screen',
                     body: '',
                     imageUrl: null,
-                  }],
+                  }),
                 } : item))
                 setDirty(true)
               }}
-              onAddShowGame={() => {
+              onAddShowGame={itemPosition => {
                 setRounds(current => current.map(item => item.id === round.id ? {
                   ...item,
-                  showGames: [...item.showGames, {
+                  questions: item.questions.map(question => question.itemPosition >= itemPosition ? { ...question, itemPosition: question.itemPosition + 1 } : question),
+                  contentScreens: item.contentScreens.map(screen => screen.itemPosition >= itemPosition ? { ...screen, itemPosition: screen.itemPosition + 1 } : screen),
+                  showGames: item.showGames.map(game => game.itemPosition >= itemPosition ? { ...game, itemPosition: game.itemPosition + 1 } : game).concat({
                     id: `show-game-${crypto.randomUUID()}`,
                     showGameKey: `show-game-${crypto.randomUUID()}`,
-                    itemPosition: nextRoundItemPosition(item),
+                    itemPosition,
                     gameType: 'spin-the-wheel',
                     title: 'Spin the Wheel',
                     rewardType: DEFAULT_SHOW_GAME_REWARD.type,
                     rewardPoints: DEFAULT_SHOW_GAME_REWARD.points,
                     rewardDescription: DEFAULT_SHOW_GAME_REWARD.description,
                     winnerMessage: DEFAULT_SHOW_GAME_REWARD.winnerMessage,
-                  }],
+                  }),
                 } : item))
                 setDirty(true)
               }}
@@ -2635,20 +2675,20 @@ function QuizBuilder({ go }: { go: Go }) {
         ) : null
       })()}
 
-      {addMenuRoundId !== null && (
+      {addMenuTarget !== null && (
         <AddQuestionMenu
-          onClose={() => setAddMenuRoundId(null)}
+          onClose={() => setAddMenuTarget(null)}
           onWriteNew={() => {
-            setNewQuestionRoundId(addMenuRoundId)
-            setAddMenuRoundId(null)
+            setNewQuestionTarget(addMenuTarget)
+            setAddMenuTarget(null)
           }}
           onPickMine={() => {
-            setPicker({ roundId: addMenuRoundId, origin: 'user' })
-            setAddMenuRoundId(null)
+            setPicker({ ...addMenuTarget, origin: 'user' })
+            setAddMenuTarget(null)
           }}
           onPickLibrary={() => {
-            setPicker({ roundId: addMenuRoundId, origin: 'platform' })
-            setAddMenuRoundId(null)
+            setPicker({ ...addMenuTarget, origin: 'platform' })
+            setAddMenuTarget(null)
           }}
         />
       )}
@@ -2658,7 +2698,7 @@ function QuizBuilder({ go }: { go: Go }) {
           origin={picker.origin}
           onClose={() => setPicker(null)}
           onSelect={source => {
-            addQuestionToRound(picker.roundId, sourceToBuilderQuestion(source))
+            addQuestionToRound(picker.roundId, sourceToBuilderQuestion(source), picker.itemPosition)
             setPicker(null)
           }}
         />
@@ -2675,6 +2715,7 @@ function QuizBuilder({ go }: { go: Go }) {
       {replaceTarget && replaceOrigin !== null && (
         <BuilderQuestionPicker
           origin={replaceOrigin}
+          mode="replace"
           onClose={() => { setReplaceOrigin(null); setReplaceTarget(null) }}
           onSelect={source => {
             const replacement = sourceToBuilderQuestion(source)
@@ -2688,17 +2729,22 @@ function QuizBuilder({ go }: { go: Go }) {
               } : question),
             } : round))
             setDirty(true)
+            const replacedQuestion = rounds.find(round => round.id === replaceTarget.roundId)?.questions.find(question => question.id === replaceTarget.questionId)
+            if (replacedQuestion) {
+              replacementBackStackRef.current.delete(replacedQuestion.questionKey)
+              setReplacementBackCounts(current => ({ ...current, [replacedQuestion.questionKey]: 0 }))
+            }
             setReplaceOrigin(null)
             setReplaceTarget(null)
           }}
         />
       )}
 
-      {newQuestionRoundId !== null && (
+      {newQuestionTarget !== null && (
         <QuestionEditor
           question={blankBuilderQuestion()}
           title="Write New Question"
-          onClose={() => setNewQuestionRoundId(null)}
+          onClose={() => setNewQuestionTarget(null)}
           onSave={async question => {
             const { data: authData, error: authError } = await supabase.auth.getUser()
             if (authError || !authData.user) throw new Error('Your host session has expired.')
@@ -2752,8 +2798,8 @@ function QuizBuilder({ go }: { go: Go }) {
               .eq('id', sourceId)
               .single()
             if (sourceError || !source) throw sourceError ?? new Error('Could not load saved source question')
-            addQuestionToRound(newQuestionRoundId, sourceToBuilderQuestion(source))
-            setNewQuestionRoundId(null)
+            addQuestionToRound(newQuestionTarget.roundId, sourceToBuilderQuestion(source), newQuestionTarget.itemPosition)
+            setNewQuestionTarget(null)
           }}
         />
       )}
@@ -3396,18 +3442,20 @@ function QuizPreview({ title, rounds, onClose }: {
   )
 }
 
-function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, onReplace, onCycleLibrary, onRoundPointerDown, onTitleChange, onAddQuestion, onAddContentScreen, onAddShowGame, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onDeleteShowGame, onReorderItems }: {
+function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacementBackCounts, onEdit, onReplace, onCycleLibrary, onCycleLibraryBack, onRoundPointerDown, onTitleChange, onAddQuestion, onAddContentScreen, onAddShowGame, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onDeleteShowGame, onReorderItems }: {
   round: BuilderRoundData
   roundNumber: number
   replacingLibraryQuestionId: string | null
   onEdit: (questionId: string) => void
   onReplace: (questionId: string) => void
   onCycleLibrary: (questionId: string) => void
+  onCycleLibraryBack: (questionId: string) => void
+  replacementBackCounts: Record<string, number>
   onRoundPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
   onTitleChange: (title: string) => void
-  onAddQuestion: () => void
-  onAddContentScreen: () => void
-  onAddShowGame: () => void
+  onAddQuestion: (itemPosition: number) => void
+  onAddContentScreen: (itemPosition: number) => void
+  onAddShowGame: (itemPosition: number) => void
   onDeleteQuestion: (questionId: string) => void
   onDuplicateQuestion: (questionId: string) => void
   onUpdateContentScreen: (screenId: string, updates: Partial<BuilderContentScreenData>) => void
@@ -3475,32 +3523,45 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
     const otherItems = itemBounds.filter(item => item.key !== itemKey)
     const startX = event.clientX
     const startY = event.clientY
+    const startScrollY = window.scrollY
     let latestPointerY = startY
     let latestInsertionIndex = originalIndex
     let moved = false
     let animationFrame: number | null = null
-    const otherItemCentres = otherItems.map(item => item.bounds.top + item.bounds.height / 2)
+    let autoScrollVelocity = 0
+
+    const currentOtherItemCentres = () => {
+      const scrollDelta = window.scrollY - startScrollY
+      return otherItems.map(item => item.bounds.top - scrollDelta + item.bounds.height / 2)
+    }
 
     const insertionIndexForY = (pointerY: number) => {
       const draggedCentreY = draggedItemCentreY(draggedBounds.top, draggedBounds.height, startY, pointerY)
-      return insertionIndexWithHysteresis(otherItemCentres, latestInsertionIndex, draggedCentreY)
+      return insertionIndexWithHysteresis(currentOtherItemCentres(), latestInsertionIndex, draggedCentreY)
     }
 
     const updatePreview = () => {
-      animationFrame = null
+      if (autoScrollVelocity !== 0) window.scrollBy(0, autoScrollVelocity)
       const insertionIndex = insertionIndexForY(latestPointerY)
       latestInsertionIndex = insertionIndex
       setItemDragPreview({
         key: itemKey,
-        offsetY: latestPointerY - startY,
+        offsetY: latestPointerY - startY + (window.scrollY - startScrollY),
         originalIndex,
         insertionIndex,
         itemHeight: draggedBounds.height,
       })
+      animationFrame = autoScrollVelocity !== 0 ? window.requestAnimationFrame(updatePreview) : null
     }
     const move = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return
       latestPointerY = moveEvent.clientY
+      const edge = 90
+      autoScrollVelocity = latestPointerY < edge
+        ? -Math.ceil(((edge - latestPointerY) / edge) * 18)
+        : latestPointerY > window.innerHeight - edge
+          ? Math.ceil(((latestPointerY - (window.innerHeight - edge)) / edge) * 18)
+          : 0
       if (Math.hypot(moveEvent.clientX - startX, latestPointerY - startY) > 4) moved = true
       if (animationFrame === null) animationFrame = window.requestAnimationFrame(updatePreview)
     }
@@ -3511,6 +3572,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
         animationFrame = null
       }
       latestPointerY = finishEvent.clientY
+      autoScrollVelocity = 0
       if (Math.hypot(finishEvent.clientX - startX, latestPointerY - startY) > 4) moved = true
       latestInsertionIndex = insertionIndexForY(latestPointerY)
       if (moved) {
@@ -3589,7 +3651,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
       </div>
       {open && (
         <div data-builder-item-list className="p-3 space-y-2">
-          {items.map(item => {
+          {items.map((item, itemIndex) => {
             const itemKey = item.kind === 'question'
               ? `question:${item.question.id}`
               : item.kind === 'content' ? `content:${item.screen.id}` : `show-game:${item.showGame.id}`
@@ -3602,6 +3664,14 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
               style={{ transform: itemDragTransform(itemKey) }}
               className={`relative rounded-xl will-change-transform ${dragged ? 'z-20 cursor-grabbing opacity-90 shadow-xl ring-2 ring-violet/25 transition-[opacity,box-shadow] duration-150' : isSettlingAfterDrop ? 'transition-none' : 'transition-transform duration-150 ease-out'}`}
             >
+              <div className="group absolute -top-3 left-3 right-3 z-30 flex h-4 items-center justify-center">
+                <div className="flex items-center gap-1 rounded-full bg-white px-2 shadow-sm opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                  <span style={{ color: C.violet }} className="text-xs font-black">＋</span>
+                  <button type="button" onClick={() => onAddQuestion(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2 py-0.5 text-[10px] font-bold hover:text-violet">Question</button>
+                  <button type="button" onClick={() => onAddContentScreen(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2 py-0.5 text-[10px] font-bold hover:text-violet">Content</button>
+                  <button type="button" onClick={() => onAddShowGame(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2 py-0.5 text-[10px] font-bold hover:text-violet">Game</button>
+                </div>
+              </div>
               {item.kind === 'question' ? (
               <BuilderQuestion
               q={item.question}
@@ -3611,6 +3681,8 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
               }}
               onReplace={() => onReplace(item.question.id)}
               onCycleLibrary={() => onCycleLibrary(item.question.id)}
+              onCycleLibraryBack={() => onCycleLibraryBack(item.question.id)}
+              canCycleLibraryBack={(replacementBackCounts[item.question.questionKey] ?? 0) > 0}
               replacing={replacingLibraryQuestionId === item.question.id}
               onDelete={() => onDeleteQuestion(item.question.id)}
               onDuplicate={() => onDuplicateQuestion(item.question.id)}
@@ -3634,15 +3706,15 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, onEdit, 
             </div>
           )})}
           <div className="flex gap-1 pt-1">
-            <button onClick={onAddQuestion} style={{ color: C.sub }}
+            <button onClick={() => onAddQuestion(items.length + 1)} style={{ color: C.sub }}
               className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
               <I.plus /> Add Question
             </button>
-            <button onClick={onAddContentScreen} style={{ color: C.sub }}
+            <button onClick={() => onAddContentScreen(items.length + 1)} style={{ color: C.sub }}
               className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
               <I.plus /> Add Content Screen
             </button>
-            <button onClick={onAddShowGame} style={{ color: C.sub }}
+            <button onClick={() => onAddShowGame(items.length + 1)} style={{ color: C.sub }}
               className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
               <I.plus /> Add Game
             </button>
@@ -3825,13 +3897,15 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
   )
 }
 
-function BuilderQuestion({ q, idx, replacing, onEdit, onReplace, onCycleLibrary, onDelete, onDuplicate, onPointerDown }: {
+function BuilderQuestion({ q, idx, replacing, canCycleLibraryBack, onEdit, onReplace, onCycleLibrary, onCycleLibraryBack, onDelete, onDuplicate, onPointerDown }: {
   q: BuilderQuestionData
   idx: number
   replacing: boolean
   onEdit: () => void
   onReplace: () => void
   onCycleLibrary: () => void
+  onCycleLibraryBack: () => void
+  canCycleLibraryBack: boolean
   onDelete: () => void
   onDuplicate: () => void
   onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
@@ -3888,6 +3962,17 @@ function BuilderQuestion({ q, idx, replacing, onEdit, onReplace, onCycleLibrary,
         <BuilderQuestionAnswerPreview question={q} />
       </div>
       <div className="flex items-center gap-1 shrink-0 mt-0.5" onClick={e => e.stopPropagation()}>
+        {isLibraryQuestion && (
+          <button
+            type="button"
+            disabled={replacing || !canCycleLibraryBack}
+            onClick={onCycleLibraryBack}
+            title="Go back to the previous library question"
+            className="flex items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-600 shadow-sm transition hover:border-violet-300 hover:text-violet-700 disabled:hidden"
+          >
+            ← Back
+          </button>
+        )}
         {isLibraryQuestion && (
           <button
             type="button"
@@ -5204,6 +5289,7 @@ function HostSetup({ go }: { go: Go }) {
   const [reveal, setReveal] = useState<'each' | 'round'>('each')
   const [lb, setLb] = useState<LeaderboardVisibility>('round')
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
+  const [autoRunSpeed, setAutoRunSpeed] = useState<AutoRunSpeed>('fast')
   const [scoreVisibility, setScoreVisibility] = useState<PlayerScoreVisibility>('live')
   const [showCorrectnessPercentage, setShowCorrectnessPercentage] = useState(false)
   const [submittedAnswersEditable, setSubmittedAnswersEditable] = useState(false)
@@ -5231,6 +5317,7 @@ function HostSetup({ go }: { go: Go }) {
         setReveal(answerRevealModeFromSettings(settings))
         setLb(leaderboardVisibilityFromSettings(settings))
         setAutoRunMode(autoRunModeFromSettings(settings))
+        setAutoRunSpeed(autoRunSpeedFromSettings(settings))
         setScoreVisibility(playerScoreVisibilityFromSettings(settings))
         setShowCorrectnessPercentage(settings.show_correctness_percentage_to_players === true)
         setSubmittedAnswersEditable(submittedAnswersEditableFromSettings(settings))
@@ -5293,6 +5380,7 @@ function HostSetup({ go }: { go: Go }) {
         answer_reveal: reveal,
         leaderboard_visibility: lb,
         auto_run_mode: autoRunMode,
+        auto_run_speed: autoRunSpeed,
         team_approval_required: approvalRequired,
         player_score_visibility: scoreVisibility,
         scores_visible_to_players: scoreVisibility === 'live',
@@ -5401,6 +5489,12 @@ function HostSetup({ go }: { go: Go }) {
                 </button>
               ))}
             </div>
+            {autoRunMode === 'round' && <div className="mt-4">
+              <p style={{ color: C.sub }} className="mb-2 text-xs font-bold">Speed</p>
+              <div className="grid grid-cols-3 gap-2">
+                {(['fast', 'medium', 'slow'] as AutoRunSpeed[]).map(speed => <button key={speed} type="button" onClick={() => setAutoRunSpeed(speed)} style={{ border: `1.5px solid ${autoRunSpeed === speed ? C.violet : C.line}`, background: autoRunSpeed === speed ? C.violetMist : 'white', color: autoRunSpeed === speed ? C.violet : C.sub }} className="rounded-xl px-3 py-2 text-sm font-semibold capitalize">{speed}</button>)}
+              </div>
+            </div>}
           </SCard>
 
           {/* Answer reveal */}
@@ -5604,6 +5698,21 @@ function Lobby({ go }: { go: Go }) {
   const [lobbySettings, setLobbySettings] = useState<Record<string, Json>>({})
   const [approvalRequired, setApprovalRequired] = useState(true)
   const [approvalBusy, setApprovalBusy] = useState(false)
+  const [removingTeamId, setRemovingTeamId] = useState<string | null>(null)
+
+  async function handleRemoveTeam(team: LobbyTeam) {
+    if (removingTeamId || !window.confirm(`Remove ${team.name} from this game?`)) return
+    setRemovingTeamId(team.id)
+    setLobbyError(null)
+    const { error } = await supabase.rpc('remove_team_from_game', { p_team_id: team.id })
+    if (error) {
+      console.error('Could not remove team:', error)
+      setLobbyError('Could not remove that team. Please try again.')
+    } else {
+      setTeams(current => current.filter(item => item.id !== team.id))
+    }
+    setRemovingTeamId(null)
+  }
 
   async function handleApprovalRequiredChange(required: boolean) {
     if (!lobbyGameId || approvalBusy) return
@@ -5764,21 +5873,21 @@ function Lobby({ go }: { go: Go }) {
         .on(
           "postgres_changes",
           {
-            event: "INSERT",
+            event: "*",
             schema: "public",
             table: "teams",
             filter: `game_id=eq.${game.id}`,
           },
           (payload) => {
-            const newTeam = payload.new as LobbyTeam
-
-            setTeams((current) => {
-              if (current.some((team) => team.id === newTeam.id)) {
-                return current
-              }
-
-              return [...current, newTeam]
-            })
+            if (payload.eventType === 'DELETE') {
+              const removed = payload.old as { id?: string }
+              if (removed.id) setTeams(current => current.filter(team => team.id !== removed.id))
+              return
+            }
+            const changedTeam = payload.new as LobbyTeam
+            setTeams(current => current.some(team => team.id === changedTeam.id)
+              ? current.map(team => team.id === changedTeam.id ? changedTeam : team)
+              : [...current, changedTeam])
           }
         )
         .subscribe()
@@ -5875,6 +5984,9 @@ function Lobby({ go }: { go: Go }) {
                   </div>
                   <span style={{ color: C.ink }} className="text-sm font-semibold flex-1 truncate">{t.name}</span>
                   <span style={{ background: C.go }} className="w-2 h-2 rounded-full shrink-0" />
+                  <button type="button" onClick={() => { void handleRemoveTeam(t) }} disabled={removingTeamId === t.id} style={{ color: C.stop }} className="cursor-pointer rounded-lg px-2 py-1 text-xs font-bold hover:bg-red-50 disabled:opacity-50">
+                    {removingTeamId === t.id ? 'Removing…' : 'Remove'}
+                  </button>
                 </div>
               ))}
             </div>
@@ -6139,6 +6251,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
+  const [autoRunSpeed, setAutoRunSpeed] = useState<AutoRunSpeed>('fast')
   const [autoRunOperating, setAutoRunOperating] = useState(false)
   const [autoRunPaused, setAutoRunPaused] = useState(false)
   const [autoRunRemaining, setAutoRunRemaining] = useState(0)
@@ -6149,6 +6262,21 @@ function LiveQuestion({ go }: { go: Go }) {
   const liveGameSettingsRef = useRef<Record<string, Json>>({})
   const [liveError, setLiveError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
+  const [removingLiveTeamId, setRemovingLiveTeamId] = useState<string | null>(null)
+
+  async function removeLiveTeam(team: LiveTeam) {
+    if (removingLiveTeamId || !window.confirm(`Remove ${team.name} from this game?`)) return
+    setRemovingLiveTeamId(team.id)
+    setLiveError(null)
+    const { error } = await supabase.rpc('remove_team_from_game', { p_team_id: team.id })
+    if (error) {
+      console.error('Could not remove live team:', error)
+      setLiveError('Could not remove that team. Please try again.')
+    } else {
+      setTeams(current => current.filter(item => item.id !== team.id))
+    }
+    setRemovingLiveTeamId(null)
+  }
 
   useEffect(() => {
     let active = true
@@ -6187,6 +6315,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setSubmittedAnswersEditableDefault(submittedAnswersEditableFromSettings(game.settings))
       const configuredAutoRun = autoRunModeFromSettings(game.settings)
       setAutoRunMode(configuredAutoRun)
+      setAutoRunSpeed(autoRunSpeedFromSettings(game.settings))
       if (!autoRunInitializedRef.current) {
         autoRunInitializedRef.current = true
         setAutoRunOperating(configuredAutoRun === 'round')
@@ -6348,7 +6477,7 @@ function LiveQuestion({ go }: { go: Go }) {
     return () => { window.clearInterval(interval); window.clearTimeout(timeout) }
   }, [activeShowGameExplodeAt, activeShowGameId, activeShowGameStatus, showGame?.game_type])
 
-  async function openShowGame(nextShowGame: LiveShowGameDefinition) {
+  async function prepareShowGame(nextShowGame: LiveShowGameDefinition) {
     setWheelSettled(false)
     await updateLiveGame({
       status: 'live',
@@ -6357,13 +6486,28 @@ function LiveQuestion({ go }: { go: Go }) {
       current_content_screen_key: null,
       current_show_game_key: nextShowGame.show_game_key,
     })
-    const rpc = nextShowGame.game_type === 'spin-the-wheel' ? 'start_spin_the_wheel' : 'start_beat_the_bomb'
-    const { data, error } = await supabase.rpc(rpc, { p_game_show_game_id: nextShowGame.id })
-    if (error) throw error
-    setShowGame(data as LiveShowGameDefinition)
+    setShowGame(nextShowGame)
     setShowGamePresses([])
     setGameScreen('show-game')
     setPhase('closed')
+  }
+
+  async function startPreparedShowGame() {
+    if (!showGame || showGame.status !== 'ready' || actionBusy) return
+    setActionBusy(true)
+    setLiveError(null)
+    try {
+      const rpc = showGame.game_type === 'spin-the-wheel' ? 'start_spin_the_wheel' : 'start_beat_the_bomb'
+      const { data, error } = await supabase.rpc(rpc, { p_game_show_game_id: showGame.id })
+      if (error) throw error
+      setShowGame(data as LiveShowGameDefinition)
+      setShowGamePresses([])
+    } catch (error) {
+      console.error('Could not start show game:', error)
+      setLiveError('Could not start the game. Please try again.')
+    } finally {
+      setActionBusy(false)
+    }
   }
 
   async function handleOpenQuestion() {
@@ -6389,7 +6533,7 @@ function LiveQuestion({ go }: { go: Go }) {
       }
 
       if (firstRoundItem?.kind === 'show-game') {
-        await openShowGame(firstRoundItem.showGame)
+        await prepareShowGame(firstRoundItem.showGame)
         return
       }
 
@@ -6709,7 +6853,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         return
       }
       if (nextItem.kind === 'show-game') {
-        await openShowGame(nextItem.showGame)
+        await prepareShowGame(nextItem.showGame)
         return
       }
 
@@ -6796,7 +6940,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         return
       }
       if (nextItem.kind === 'show-game') {
-        await openShowGame(nextItem.showGame)
+        await prepareShowGame(nextItem.showGame)
         return
       }
 
@@ -6886,7 +7030,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         return
       }
       if (nextItem.kind === 'show-game') {
-        await openShowGame(nextItem.showGame)
+        await prepareShowGame(nextItem.showGame)
         return
       }
 
@@ -6945,7 +7089,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         return
       }
       if (nextItem.kind === 'show-game') {
-        await openShowGame(nextItem.showGame)
+        await prepareShowGame(nextItem.showGame)
         return
       }
       await updateLiveGame({
@@ -7039,9 +7183,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     || question?.question_type === 'multi-part'
     || question?.question_type === 'ranking'
 
-  const autoRunTimer = (() => {
+  const baseAutoRunTimer = (() => {
     if (gameScreen === 'round-start') return { key: `round-${question?.round_number ?? 0}`, seconds: 5, label: 'First question opens in' }
     if (gameScreen === 'content-screen') return { key: `content-${contentScreen?.screen_key ?? ''}`, seconds: AUTO_RUN_CONTENT_SECONDS, label: 'Content advances in' }
+    if (gameScreen === 'show-game' && showGame?.status === 'ready') return { key: `show-game-instructions-${showGame.id}`, seconds: AUTO_RUN_SHOW_GAME_INSTRUCTIONS_SECONDS, label: 'Game starts in' }
+    if (gameScreen === 'show-game' && showGame?.status === 'open') return { key: `show-game-playing-${showGame.id}`, seconds: 0, label: 'Game in progress' }
+    if (gameScreen === 'show-game' && showGame?.status === 'exploded') return { key: `show-game-result-${showGame.id}`, seconds: AUTO_RUN_SHOW_GAME_RESULT_SECONDS, label: 'Show continues in' }
     if (gameScreen === 'question-results') return { key: `leaderboard-${question?.question_key ?? ''}`, seconds: 10, label: 'Next question opens in' }
     if (phase === 'open') {
       const bonus = runtimeBonusFromJson(question?.bonus)
@@ -7054,6 +7201,10 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const revealSeconds = Math.min(10, autoRunRevealSeconds(question ?? {}) + (activeBonus ? 2 : 0))
     return { key: `reveal-${question?.question_key ?? ''}`, seconds: revealSeconds, label: 'Next question opens in' }
   })()
+  const autoRunTimer = {
+    ...baseAutoRunTimer,
+    seconds: baseAutoRunTimer.seconds > 0 ? autoRunScaledSeconds(baseAutoRunTimer.seconds, autoRunSpeed) : 0,
+  }
 
   async function publishAutoRunClock(remaining: number, paused = false) {
     if (!liveGameId || autoRunMode !== 'round') return
@@ -7077,6 +7228,9 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       if (actionBusy) return
       if (gameScreen === 'round-start') { void handleOpenQuestion(); return }
       if (gameScreen === 'content-screen') { void handleAdvanceContentScreen(); return }
+      if (gameScreen === 'show-game' && showGame?.status === 'ready') { void startPreparedShowGame(); return }
+      if (gameScreen === 'show-game' && showGame?.status === 'exploded') { void handleAdvanceShowGame(); return }
+      if (gameScreen === 'show-game') return
       if (gameScreen === 'question-results') { void handleAdvance(); return }
       if (phase === 'open') { void handleCloseAnswers(); return }
       if (phase === 'closed' && activeBonus && questionStage === 'core') { void handleShowBonus(); return }
@@ -7238,6 +7392,16 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-sm font-bold" style={{ color: C.liveText }}>
             <span>Auto-Run</span><input type="checkbox" checked={autoRunMode === 'round'} disabled={settingsBusy} onChange={event => { void setLiveAutoRun(event.target.checked) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
           </label>
+          {autoRunMode === 'round' && <label className="block text-xs font-bold" style={{ color: C.liveText }}>Auto-Run speed
+            <select value={autoRunSpeed} disabled={settingsBusy} onChange={event => {
+              const value = event.target.value as AutoRunSpeed
+              setAutoRunSpeed(value)
+              autoRunPublishedKeyRef.current = ''
+              void updateLiveSettings({ auto_run_speed: value, auto_run_clock: null })
+            }} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-1.5 w-full cursor-pointer rounded-lg px-3 py-2 text-sm">
+              <option value="fast">Fast</option><option value="medium">Medium (+20%)</option><option value="slow">Slow (+40%)</option>
+            </select>
+          </label>}
           {approvalRequired && <p style={{ color: C.liveDim }} className="text-xs">Review each team before they enter the game.</p>}
           {autoRunMode === 'round' && playerScoreVisibility === 'live' && <p style={{ color: C.caution }} className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold">Auto-Run holds points until the round review. We recommend “After each round” for player scores.</p>}
           <details style={{ borderTop: `1px solid ${C.liveLine}` }} className="group pt-3">
@@ -7317,6 +7481,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   if (gameScreen === 'show-game') {
     const winner = teams.find(team => team.id === showGame?.winner_team_id) ?? null
     const isWheel = showGame?.game_type === 'spin-the-wheel'
+    const showGameInstructions = showGame?.status === 'ready'
     const eligibleIds = showGameEligibleTeamIds(showGame?.settings)
     const wheelTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : teams
     const showGameWinner = showGame?.status === 'exploded' && (!isWheel || wheelSettled)
@@ -7332,6 +7497,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <JoinCodeButton dark />{liveSettingsMenu}
           <span style={{ background: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">GAME LIVE</span>
         </header>
+        {autoRunControls}
         <main className="flex flex-1 items-center justify-center px-6 py-10">
           <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-8 text-center shadow-2xl">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{isWheel ? 'Spin the Wheel' : 'Beat the Bomb'}</p>
@@ -7339,26 +7505,33 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             <p style={{ color: C.liveDim }} className="mx-auto mt-4 max-w-xl text-lg font-semibold">
               {showGameRewardDescription(activeShowGameReward)}
             </p>
-            {isWheel ? (
+            {showGameInstructions ? (
+              <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}` }} className="mx-auto mt-7 max-w-2xl rounded-2xl px-6 py-6 text-left">
+                <p className="text-xs font-black uppercase tracking-widest text-violet-300">How it works</p>
+                <p style={{ color: C.liveText }} className="mt-3 text-lg font-semibold leading-7">{isWheel
+                  ? 'Every joined team is placed on the wheel. It will spin, slow down, and randomly select one winner.'
+                  : 'Each team can press once. Be the last team to press before the randomly timed bomb explodes.'}</p>
+              </div>
+            ) : isWheel ? (
               <div className="mt-7"><TeamWheel dark teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} onSettled={handleWheelSettled} /></div>
             ) : (
               <><div className={`mt-7 text-9xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
               <div style={{ background: C.liveLine }} className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full"><div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" /></div></>
             )}
-            {showGameWinner ? (
+            {!showGameInstructions && (showGameWinner ? (
               <div className="mt-7">
                 <p className="text-sm font-bold uppercase tracking-widest text-violet-300">Winner</p>
                 <p className="mt-2 text-4xl font-black text-emerald-400">{winner?.name ?? '—'}</p>
               </div>
             ) : (
               <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`) : `Fuse burning… ${showGamePresses.length} of ${teams.length} teams have pressed.`}</p>
-            )}
-            {!isWheel && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
+            ))}
+            {!showGameInstructions && !isWheel && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
               {teams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
             </div>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
-            <button data-host-navigation="forward" onClick={handleAdvanceShowGame} disabled={actionBusy || showGame?.status !== 'exploded' || (isWheel && !wheelSettled)} style={{ background: C.violet }} className="mx-auto mt-8 rounded-2xl px-10 py-5 text-xl font-extrabold text-white disabled:opacity-35">
-              {showGameWinner ? 'Continue →' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
+            <button data-host-navigation="forward" onClick={showGameInstructions ? startPreparedShowGame : handleAdvanceShowGame} disabled={actionBusy || (!showGameInstructions && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled)))} style={{ background: C.violet }} className="mx-auto mt-8 rounded-2xl px-10 py-5 text-xl font-extrabold text-white disabled:opacity-35">
+              {showGameInstructions ? `Start ${isWheel ? 'Spin the Wheel' : 'Beat the Bomb'} →` : showGameWinner ? 'Continue →' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
             </button>
           </section>
         </main>
@@ -7376,7 +7549,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         ? 'End Round →'
         : nextContentItem.kind === 'content'
           ? 'Next Content Screen →'
-          : nextContentItem.kind === 'show-game' ? `Start ${nextContentItem.showGame.title} →` : 'Open Next Question →'
+          : nextContentItem.kind === 'show-game' ? `Show ${nextContentItem.showGame.title} →` : 'Open Next Question →'
 
     return (
       <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
@@ -8110,6 +8283,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     className="rounded-full flex items-center justify-center text-xs font-bold shrink-0 tabular-nums">{leaderboardPlacements[i]}</div>
                   <span style={{ color: leaderboardPlacements[i] === 1 ? C.liveText : `${C.liveText}99` }} className={`text-sm flex-1 truncate ${leaderboardPlacements[i] === 1 ? 'font-bold' : 'font-medium'}`}>{team.name}</span>
                   <span style={{ color: leaderboardPlacements[i] === 1 ? C.liveText : `${C.liveText}99` }} className="text-sm font-bold tabular-nums">{team.score}</span>
+                  <button type="button" onClick={() => { void removeLiveTeam(team) }} disabled={removingLiveTeamId === team.id} title={`Remove ${team.name}`} style={{ color: C.liveDim }} className="cursor-pointer rounded px-1 text-xs hover:text-red-400 disabled:opacity-40">×</button>
                 </div>
               ))}
             </div>
@@ -8140,14 +8314,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     : firstRoundItem?.kind === 'content'
                       ? 'Show First Content Screen →'
                       : firstRoundItem?.kind === 'show-game'
-                        ? `Start ${firstRoundItem.showGame.title} →`
+                        ? `Show ${firstRoundItem.showGame.title} →`
                       : `Show Question ${question?.round_position ?? 1} →`}
                 </button>
               ) : gameScreen === 'question-results' ? (
                 <button data-host-navigation="forward" onClick={handleAdvance} disabled={actionBusy}
                   style={{ background: C.violet, color: 'white', boxShadow: `0 8px 32px ${C.violet}60` }}
                   className="w-full rounded-2xl py-6 text-xl font-extrabold transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
-                  {actionBusy ? 'Advancing…' : nextLiveItem?.kind === 'content' ? 'Show Content Screen →' : nextLiveItem?.kind === 'show-game' ? `Start ${nextLiveItem.showGame.title} →` : 'Next Question →'}
+                  {actionBusy ? 'Advancing…' : nextLiveItem?.kind === 'content' ? 'Show Content Screen →' : nextLiveItem?.kind === 'show-game' ? `Show ${nextLiveItem.showGame.title} →` : 'Next Question →'}
                 </button>
               ) : phase === 'open' ? (
                 <>
@@ -8239,7 +8413,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                         : nextLiveItem?.kind === 'content'
                           ? 'Show Content Screen →'
                           : nextLiveItem?.kind === 'show-game'
-                            ? `Start ${nextLiveItem.showGame.title} →`
+                            ? `Show ${nextLiveItem.showGame.title} →`
                           : 'Next Question →'}
                 </button>
               )}

@@ -70,6 +70,7 @@
 - During live play, pending team requests appear in a separate approval panel beside the host leaderboard. Keep approval controls out of the QR/join-code dialog so that dialog remains compact and easy to dismiss on short screens.
 - Player-facing denial copy stays neutral and does not assume why the host denied entry; the host handles any explanation in the room.
 - Games accept new zero-score teams while they are in the lobby or actively running, subject to the game’s approval setting. Finished and cancelled games are never joinable.
+- A pending player can withdraw and change their proposed team name. The owning host can remove a joined team from an active lobby or live game; removal must also remove that team from submissions and active-team counts through database-enforced ownership and cascading references.
 - Host live controls and question content must remain usable on small laptop screens.
 - Player live screens use a compact two-line mobile header: brand with Leave Game, then round/question with team/score. Present question prompts as clear, prominent reading surfaces without centering long question text.
 - Quiz readiness is derived automatically when saving: complete quizzes become Ready, incomplete quizzes remain Draft with specific blockers. Do not reintroduce a manual readiness step or preparation progress wizard.
@@ -78,6 +79,8 @@
 - My Quizzes supports direct renaming and independent duplication. A duplicated quiz copies its question, content-screen, bonus, provenance, and prepared-tiebreaker snapshots without linking future edits between the two quizzes.
 - Quiz Preview supports Space or Right Arrow to advance and Left Arrow to go back, while keeping the visible Previous and Next controls.
 - Quiz Builder overview cards expose the complete question and answer information needed for review, including accepted alternatives, choices, multi-part clues, ranking order, and bonuses. Omit absent optional category/difficulty metadata instead of showing placeholder labels such as Uncategorised or Unrated.
+- Question replacement is replacement language: manual library selection says **Choose**, not **Add**. Automatic **Try another** cycling keeps a reversible back history for accidental overshooting.
+- Quiz Builder supports inserting questions, content screens, and show games between existing round items. Dragging near the viewport edge must auto-scroll so long rounds remain reorderable.
 - Prepared tiebreakers are optional for manually built quizzes; recommend at least two without blocking save or hosting. Automatically built quizzes must prepare exactly three.
 - Auto-Build must fail clearly when active source content cannot satisfy the requested count, topics, difficulty range, or three-tiebreaker requirement. Never silently duplicate questions or reduce the requested quiz.
 - Auto-Build is conceptually two-stage: select an eligible candidate set using hard requirements, then sequence it with soft diversity penalties. Its diversity fingerprint includes part and bonus metadata.
@@ -85,6 +88,8 @@
 - Tiebreakers are numeric closest-answer questions used only to resolve a consequential final-placement tie. Normal round and in-game ties are allowed.
 - Show games are ordered, reusable show modules that remain separate from ordinary questions, content screens, bonuses, and tiebreakers. New game types extend the show-game model rather than adding one-off columns to questions.
 - Beat the Bomb is a random-chance interlude: each team can press once, the server chooses a 10–30 second fuse, the bomb cannot resolve before the first press, all teams pressing resolves immediately, and the latest server-timestamped press wins. Spin the Wheel freezes all joined teams when it starts, shows the team currently under the pointer, decelerates to exactly the server-selected team, and withholds every winner/result message until that landing animation finishes. Both use the same frozen reward model: either bonus points applied exactly once to the winner's score or a custom prize that never alters score; show the configured reward before play and custom winner copy only to the winning team.
+- Every show game has an instruction stage before play. Manual hosts start it explicitly; Auto-Run shows instructions for about 20 seconds before starting. Auto-Run must wait through playing and result states rather than treating a show game as a closed trivia question.
+- Wheel slice order and colours are deterministic across host and player devices. Its landing animation begins at the current cruise speed and then decelerates continuously; it must not speed up during the landing phase.
 - Do not include tiebreakers in normal question counts, running-time estimates, or game points. Resolving a tie must never change a team's trivia score.
 - Tiebreaker resolution choices require an explicit host selection and confirmation. Player numeric submissions lock immediately after submission and cannot be edited.
 - Calculate tiebreaker distance as each answer is submitted so the host can see the current closest team live. Keep distances and outcomes hidden from players until reveal; the revealed player screen shows whether they won, lost, or remain tied together with the correct answer, their submitted answer, and its distance from correct.
@@ -99,6 +104,7 @@
 - Hosts always see a prominent correct-answer percentage after grading. Player result screens show it only when the host enabled the pre-game setting, and never before answer reveal.
 - Player score visibility can be changed live between `live`, `round`, `final`, or `hidden`. Auto-Run defaults to round-finalized scores. Never expose provisional in-round scores when round-finalized visibility is selected.
 - Hosting preferences are owner-scoped and persistent. Answer reveal, leaderboard and score visibility, player correctness percentage, submitted-answer editing, team admission, Auto-Run, and prize settings can be changed during a show; changes apply to the active game and become that host's defaults for future games. Never persist transient runtime state such as the current Auto-Run clock as a default.
+- Auto-Run speed is a persistent host setting: Fast uses the established timings, Medium is approximately 20% longer, and Slow approximately 40% longer.
 - Auto-Run timing is workload-based: 30 seconds for the first point and 15 seconds for each additional point. Ranking starts at 30 seconds and adds 5 seconds per additional item. When every active team has locked the current answer stage, reduce any longer countdown to 5 seconds. Content screens default to 30 seconds. Answer reveals last 5 seconds plus 2 seconds per additional revealed answer, capped at 10 seconds.
 - Keep the synchronized Auto-Run clock visible to hosts and players. It is purple normally, orange at 10 seconds or less, and red at 5 seconds or less. Host Auto-Run controls remain pinned below the live header while the page scrolls.
 - Auto-Run must preserve host intervention: pause/resume preserves remaining time, +15 seconds extends the current state, Close Now closes safely, and manual control stops progression without changing pre-game rules.
@@ -126,6 +132,7 @@ Normalize typed answers case-insensitively and ignore non-semantic punctuation a
 - Configured accepted aliases grade as correct for their specific answer or part.
 - Conservative near-match signals such as plausible spelling slips, reordered identical characters, article-only differences, and very close phrases may flag an answer for host review.
 - A near-match signal must never award points automatically. The host decides whether every reviewable answer is correct or incorrect.
+- Treat `and`, `&`, and `+` substitutions as reviewable connector variants. Plausible local transpositions and spelling slips are reviewable; wholesale anagrams or broadly scrambled answers are incorrect rather than reviewable.
 
 ### Multi-answer
 

@@ -1,4 +1,5 @@
 export type AutoRunMode = 'off' | 'round'
+export type AutoRunSpeed = 'fast' | 'medium' | 'slow'
 
 type TimedQuestion = {
   question_type?: string | null
@@ -14,6 +15,16 @@ function settingsRecord(settings: unknown): Record<string, unknown> | null {
 
 export function autoRunModeFromSettings(settings: unknown): AutoRunMode {
   return settingsRecord(settings)?.auto_run_mode === 'round' ? 'round' : 'off'
+}
+
+export function autoRunSpeedFromSettings(settings: unknown): AutoRunSpeed {
+  const value = settingsRecord(settings)?.auto_run_speed
+  return value === 'medium' || value === 'slow' ? value : 'fast'
+}
+
+export function autoRunScaledSeconds(seconds: number, speed: AutoRunSpeed) {
+  const multiplier = speed === 'slow' ? 1.4 : speed === 'medium' ? 1.2 : 1
+  return Math.max(1, Math.round(seconds * multiplier))
 }
 
 export function rankingItemCount(question: TimedQuestion) {
@@ -40,6 +51,8 @@ export function autoRunRevealSeconds(question: TimedQuestion) {
 }
 
 export const AUTO_RUN_CONTENT_SECONDS = 30
+export const AUTO_RUN_SHOW_GAME_INSTRUCTIONS_SECONDS = 20
+export const AUTO_RUN_SHOW_GAME_RESULT_SECONDS = 10
 export const AUTO_RUN_ROUND_CHECKPOINT_SECONDS = 60
 export const AUTO_RUN_EXTENSION_SECONDS = 15
 

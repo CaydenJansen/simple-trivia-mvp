@@ -13,7 +13,10 @@ type TeamWheelProps = {
 const WHEEL_COLORS = ['#7C3AED', '#F59E0B', '#10B981', '#EC4899', '#2563EB', '#F97316']
 
 export default function TeamWheel({ teamNames, spinning = false, winnerName = null, dark = false, onSettled }: TeamWheelProps) {
-  const names = teamNames.length > 0 ? teamNames : ['Waiting for teams…']
+  // Every device derives the same slice order, independent of Realtime row order.
+  const names = teamNames.length > 0
+    ? [...teamNames].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+    : ['Waiting for teams…']
   const namesKey = names.join('\u0000')
   const slice = 360 / names.length
   const winnerIndex = winnerName ? names.indexOf(winnerName) : -1
@@ -45,9 +48,11 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
     if (spinning) {
       wasSpinningRef.current = true
       wheel.style.transition = 'none'
-      let previous = performance.now()
+      let previous: number | null = null
+      const cruisingSpeed = 0.62
       const animate = (now: number) => {
-        const nextRotation = rotationRef.current + (Math.min(40, now - previous) * 0.62)
+        const elapsed = previous === null ? 16 : Math.min(40, now - previous)
+        const nextRotation = rotationRef.current + (elapsed * cruisingSpeed)
         previous = now
         updateWheel(nextRotation)
         frame = requestAnimationFrame(animate)
@@ -58,7 +63,14 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
       const currentMod = ((current % 360) + 360) % 360
       const targetMod = ((restingRotation % 360) + 360) % 360
       const shouldSettle = wasSpinningRef.current
-      const target = current + ((targetMod - currentMod + 360) % 360) + (360 * (shouldSettle ? 5 : 0))
+      const duration = 8000
+      const cruisingSpeed = 0.62
+      // A cubic ease starts at 3 * distance / duration. Choose the number of
+      // turns so settling begins at the existing cruise speed, then only slows.
+      const idealDistance = cruisingSpeed * duration / 3
+      const targetOffset = (targetMod - currentMod + 360) % 360
+      const fullTurns = shouldSettle ? Math.max(2, Math.round((idealDistance - targetOffset) / 360)) : 0
+      const target = current + targetOffset + (360 * fullTurns)
       wasSpinningRef.current = false
       wheel.style.transition = 'none'
       if (!shouldSettle) {
@@ -66,11 +78,11 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
         setSelectedName(animatedNames[winnerIndex])
         onSettled?.()
       } else {
-        const duration = 5600
-        const started = performance.now()
+        let started: number | null = null
         const settle = (now: number) => {
+          if (started === null) started = now
           const progress = Math.min(1, (now - started) / duration)
-          const eased = 1 - ((1 - progress) ** 5)
+          const eased = 1 - ((1 - progress) ** 3)
           updateWheel(current + ((target - current) * eased))
           if (progress < 1) frame = requestAnimationFrame(settle)
           else {

@@ -43,9 +43,9 @@ describe('bonus grading', () => {
     expect(buildBonusGrading(runtime, 'Ottowa').items[0]?.status).toBe('review')
   })
 
-  it('keeps reordered letters reviewable and explains why', () => {
+  it('keeps a plausible local transposition reviewable and explains why', () => {
     const runtime = runtimeBonusFromJson(bonus)!
-    expect(buildBonusGrading(runtime, 'awatot').items[0]).toMatchObject({
+    expect(buildBonusGrading(runtime, 'Otawta').items[0]).toMatchObject({
       status: 'review',
       review_reason: 'same_characters',
     })

@@ -7,6 +7,7 @@ export type ReviewReason =
   | 'same_characters'
   | 'article_difference'
   | 'close_phrase'
+  | 'connector_variant'
 
 export type ReviewItem = {
   label?: string
@@ -90,6 +91,10 @@ function sortedCharacters(value: string) {
   return [...compactAnswer(value)].sort().join('')
 }
 
+function normaliseConnectors(value: string) {
+  return normaliseTriviaAnswer(value.replace(/\s*(?:&|\+)\s*/gu, ' and '))
+}
+
 function withoutLeadingArticle(value: string) {
   return value.replace(/^(?:the|a|an)\s+/u, '')
 }
@@ -117,9 +122,10 @@ function reviewReasonForPair(normalizedSubmitted: string, normalizedExpected: st
   const longestLength = Math.max(submittedCompact.length, expectedCompact.length)
 
   if (
-    shortestLength >= 3
+    shortestLength >= 6
     && submittedCompact.length === expectedCompact.length
     && sortedCharacters(normalizedSubmitted) === sortedCharacters(normalizedExpected)
+    && editDistance(submittedCompact, expectedCompact, 3) <= 3
   ) return 'same_characters'
 
   const maximumEdits = longestLength >= 10 ? 2 : 1
@@ -153,6 +159,7 @@ export function reviewReasonLabel(reason: ReviewReason) {
   if (reason === 'same_characters') return 'Same letters, different order'
   if (reason === 'article_difference') return 'Only “the”, “a” or “an” differs'
   if (reason === 'close_phrase') return 'Very close phrase'
+  if (reason === 'connector_variant') return '“And”, “&” or “+” differs'
   return 'Possible spelling mistake'
 }
 
@@ -161,6 +168,11 @@ export function reviewMatchForPair(submitted: string, expected: string): Pick<Re
   const normalizedExpected = normaliseTriviaAnswer(expected)
 
   if (normalizedSubmitted && normalizedSubmitted === normalizedExpected) return { status: 'correct' }
+  if (
+    normalizedSubmitted
+    && normalizedExpected
+    && normaliseConnectors(submitted) === normaliseConnectors(expected)
+  ) return { status: 'review', review_reason: 'connector_variant' }
   const reviewReason = reviewReasonForPair(normalizedSubmitted, normalizedExpected)
   return reviewReason
     ? { status: 'review', review_reason: reviewReason }

@@ -22,10 +22,12 @@ type TagAlias = Database["public"]["Tables"]["tag_aliases"]["Row"];
 
 export default function BuilderQuestionPicker({
   origin,
+  mode = "add",
   onSelect,
   onClose,
 }: {
   origin: "user" | "platform";
+  mode?: "add" | "replace";
   onSelect: (question: PickerSourceQuestion) => void;
   onClose: () => void;
 }) {
@@ -131,7 +133,7 @@ export default function BuilderQuestionPicker({
       <section className="flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
         <header className="flex items-start justify-between border-b border-zinc-200 px-6 py-5">
           <div>
-            <h2 className="text-xl font-bold text-zinc-900">Add from {title}</h2>
+            <h2 className="text-xl font-bold text-zinc-900">{mode === "replace" ? "Choose from" : "Add from"} {title}</h2>
             <p className="mt-1 text-sm text-zinc-500">The quiz receives an independent snapshot you can edit freely.</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-semibold text-zinc-500 hover:bg-zinc-100">Close</button>
@@ -181,7 +183,7 @@ export default function BuilderQuestionPicker({
                     <QuestionUsageIndicator usages={usageByQuestion ? usageByQuestion[question.id] ?? [] : null} />
                     {question.tag_names.length > 0 ? <p className="mt-2 text-xs text-zinc-500">{question.tag_names.join(" · ")}</p> : null}
                   </div>
-                  <button type="button" onClick={() => onSelect(question)} className="shrink-0 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700">Add</button>
+                  <button type="button" onClick={() => onSelect(question)} className="shrink-0 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700">{mode === "replace" ? "Choose" : "Add"}</button>
                 </article>
               ))}
             </div>

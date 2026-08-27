@@ -13,6 +13,7 @@ const PERSISTENT_GAME_SETTING_KEYS = [
   'answer_reveal',
   'leaderboard_visibility',
   'auto_run_mode',
+  'auto_run_speed',
   'team_approval_required',
   'player_score_visibility',
   'scores_visible_to_players',

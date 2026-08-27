@@ -286,6 +286,12 @@ function useLivePlayerSync(
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => {
         void applyGameState(payload.new as RemoteGameState)
       })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'teams', filter: `id=eq.${teamId}` }, () => {
+        localStorage.removeItem('simple-trivia-team-id')
+        localStorage.removeItem('simple-trivia-team-name')
+        localStorage.removeItem('simple-trivia-last-answer')
+        if (active) setScreen('team-setup')
+      })
       .subscribe(status => {
         if (!active) return
         if (status === 'SUBSCRIBED') void loadGameState()
@@ -1783,6 +1789,7 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
   const [teamName, setTeamName] = useState('Your team')
   const [denied, setDenied] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
+  const [withdrawing, setWithdrawing] = useState(false)
 
   useEffect(() => {
     const requestId = localStorage.getItem('simple-trivia-join-request-id')
@@ -1857,6 +1864,25 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
     go('team-setup')
   }
 
+  async function changeTeamName() {
+    const requestId = localStorage.getItem('simple-trivia-join-request-id')
+    const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+    if (!requestId || !requestToken || withdrawing) return
+    setWithdrawing(true)
+    const { error } = await supabase.rpc('withdraw_team_join_request', {
+      p_request_id: requestId,
+      p_request_token: requestToken,
+    })
+    if (error) {
+      setStatusError('Could not go back right now. Please try again.')
+      setWithdrawing(false)
+      return
+    }
+    localStorage.removeItem('simple-trivia-join-request-id')
+    localStorage.removeItem('simple-trivia-join-request-token')
+    go('team-setup')
+  }
+
   return (
     <div className="flex flex-col items-center justify-center px-6 py-14 text-center" style={{ minHeight: '100%' }}>
       <div
@@ -1887,7 +1913,12 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
       </div>
 
       {statusError && <p role="alert" style={{ color: C.stop }} className="mb-5 max-w-xs text-sm font-semibold">{statusError}</p>}
-      {denied ? <Btn onClick={tryAnotherName}>Try again</Btn> : <WaitMsg msg="Waiting for the host…" />}
+      {denied ? <Btn onClick={tryAnotherName}>Try again</Btn> : <>
+        <WaitMsg msg="Waiting for the host…" />
+        <button type="button" onClick={() => { void changeTeamName() }} disabled={withdrawing} style={{ color: C.violet }} className="mt-6 cursor-pointer text-sm font-bold underline disabled:opacity-50">
+          {withdrawing ? 'Going back…' : '← Change team name'}
+        </button>
+      </>}
     </div>
   )
 }
@@ -2703,6 +2734,7 @@ function ShowGame() {
   const won = exploded && showGame?.winner_team_id === teamId
   const reward = showGameRewardFromSettings(showGame?.settings)
   const isWheel = showGame?.game_type === 'spin-the-wheel'
+  const showingInstructions = showGame?.status === 'ready'
   const eligibleIds = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings)
     ? (showGame.settings as Record<string, Json>).eligible_team_ids
     : null
@@ -2718,6 +2750,15 @@ function ShowGame() {
         <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-[0.18em]">{isWheel ? 'Spin the Wheel' : 'Beat the Bomb'}</p>
         <h1 style={{ color: C.ink }} className="mt-2 text-3xl font-black">{showGame?.title ?? (isWheel ? 'Spin the Wheel' : 'Beat the Bomb')}</h1>
         <p style={{ color: C.sub }} className="mt-3 max-w-sm text-base font-semibold">{showGameRewardDescription(reward)}</p>
+        {showingInstructions ? (
+          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-7 w-full max-w-sm rounded-2xl px-5 py-5 text-left">
+            <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-widest">How it works</p>
+            <p style={{ color: C.ink }} className="mt-3 text-base font-semibold leading-6">{isWheel
+              ? 'Every team is on the wheel. It will spin, slow down, and select one winner at random.'
+              : 'Press once. Be the last team to press before the randomly timed bomb explodes.'}</p>
+            <div className="mt-5"><WaitMsg msg="The host will start the game…" /></div>
+          </div>
+        ) : <>
         {isWheel && <div className="mt-7"><TeamWheel teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} onSettled={handleWheelSettled} /></div>}
         {!isWheel && <div className={`mt-7 text-8xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
         {showWheelOutcome ? (
@@ -2739,7 +2780,7 @@ function ShowGame() {
             <p style={{ color: C.sub }} className="mb-5 text-base leading-6">Press once. Be the last team to press before the bomb explodes.</p>
             <button onClick={() => void press()} disabled={pressing || !showGame || showGame.status !== 'open'} style={{ background: C.violet, boxShadow: '0 12px 30px rgba(124,58,237,.35)' }} className="w-full rounded-3xl px-8 py-7 text-2xl font-black text-white active:scale-95 disabled:opacity-50">{pressing ? 'PRESSING…' : 'PRESS ME'}</button>
           </div>
-        )}
+        )}</>}
         {error && <p style={{ color: C.stop }} className="mt-5 text-sm font-bold">{error}</p>}
       </div>
     </div>

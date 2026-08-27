@@ -934,6 +934,14 @@ export type Database = {
           name: string
         }[]
       }
+      withdraw_team_join_request: {
+        Args: { p_request_id: string; p_request_token: string }
+        Returns: boolean
+      }
+      remove_team_from_game: {
+        Args: { p_team_id: string }
+        Returns: string
+      }
       submit_player_answer: {
         Args: {
           p_game_id: string

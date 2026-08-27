@@ -7,6 +7,8 @@ import {
   autoRunClockFromSettings,
   autoRunClockLabel,
   autoRunModeFromSettings,
+  autoRunScaledSeconds,
+  autoRunSpeedFromSettings,
   autoRunRemainingAfterAllLocked,
   autoRunRevealSeconds,
 } from './auto-run'
@@ -16,6 +18,15 @@ describe('Auto-Run rules', () => {
     expect(autoRunModeFromSettings(null)).toBe('off')
     expect(autoRunModeFromSettings({ auto_run_mode: 'off' })).toBe('off')
     expect(autoRunModeFromSettings({ auto_run_mode: 'round' })).toBe('round')
+  })
+
+  it('uses persistent fast, medium, and slow pacing', () => {
+    expect(autoRunSpeedFromSettings(null)).toBe('fast')
+    expect(autoRunSpeedFromSettings({ auto_run_speed: 'medium' })).toBe('medium')
+    expect(autoRunSpeedFromSettings({ auto_run_speed: 'slow' })).toBe('slow')
+    expect(autoRunScaledSeconds(20, 'fast')).toBe(20)
+    expect(autoRunScaledSeconds(20, 'medium')).toBe(24)
+    expect(autoRunScaledSeconds(20, 'slow')).toBe(28)
   })
 
   it('adds 15 seconds for every point beyond the first', () => {

@@ -42,13 +42,17 @@ describe('single-answer grading', () => {
     expect(buildSubmissionGrading(single, 'Cannada').items[0].status).toBe('review')
   })
 
-  it('marks the same letters in a different order for host review', () => {
-    expect(buildSubmissionGrading(single, 'adnaca').items[0]).toMatchObject({
-      submitted: 'adnaca',
-      expected: 'Canada',
+  it('reviews plausible transpositions but rejects wholesale anagrams', () => {
+    expect(buildSubmissionGrading(question({ correct_answer: 'George Clooney' }), 'George Clooeny').items[0].status).toBe('review')
+    expect(buildSubmissionGrading(question({ correct_answer: 'George Clooney' }), 'Egreog nyoolce').items[0].status).toBe('incorrect')
+  })
+
+  it('flags and, ampersand, and plus variants for review', () => {
+    expect(buildSubmissionGrading(question({ correct_answer: 'Fast and Furious' }), 'Fast & Furious').items[0]).toMatchObject({
       status: 'review',
-      review_reason: 'same_characters',
+      review_reason: 'connector_variant',
     })
+    expect(buildSubmissionGrading(question({ correct_answer: 'Fast and Furious' }), 'Fast + Furious').items[0].status).toBe('review')
   })
 
   it('accepts configured alternative answers', () => {
@@ -148,16 +152,16 @@ describe('multi-answer grading', () => {
         accepted_answers: [['Belgique'], ['The Netherlands']],
         points_max: 2,
       }),
-      JSON.stringify(['Belgique', 'slandnether']),
+      JSON.stringify(['Belgique', 'Netherlans']),
     )
 
     expect(result.items).toEqual([
       { submitted: 'Belgique', expected: 'Belgium', status: 'correct' },
       {
-        submitted: 'slandnether',
+        submitted: 'Netherlans',
         expected: 'Netherlands',
         status: 'review',
-        review_reason: 'same_characters',
+        review_reason: 'minor_typo',
       },
     ])
     expect(result.missing).toEqual([])
