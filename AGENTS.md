@@ -66,7 +66,7 @@
 - Multi-part Parts and Bonuses inherit parent category, difficulty, audience, and locality when their override is absent. Part tags are additive. Blank Bonus tags inherit; populated Bonus tags replace, and replacement intent must survive even while every supplied tag is unresolved.
 - Effective package Adult Content is true when any content shown to players is adult. Any country-specific child makes the package not fully international-friendly.
 - Prevent duplicate team names within a game.
-- Auto-join is enabled by default for every new game. The host may disable it before or during play to review each team before entry; when re-enabled, new and already-waiting teams enter automatically. Keep pending/denied requests out of teams, scoring, submissions, leaderboards, and joined-team counts.
+- Auto-join is disabled by default for every new game, so the host reviews each team before entry. The host may enable it before or during play; then new and already-waiting teams enter automatically. Keep pending/denied requests out of teams, scoring, submissions, leaderboards, and joined-team counts.
 - During live play, pending team requests appear in a separate approval panel beside the host leaderboard. Keep approval controls out of the QR/join-code dialog so that dialog remains compact and easy to dismiss on short screens.
 - Player-facing denial copy stays neutral and does not assume why the host denied entry; the host handles any explanation in the room.
 - Games accept new zero-score teams while they are in the lobby or actively running, subject to the game’s approval setting. Finished and cancelled games are never joinable.
@@ -175,7 +175,7 @@ Preserve and verify:
 
 - Supabase game-code lookup.
 - Fresh six-digit game creation.
-- Default-on Auto-join, optional host approval/denial before team creation, neutral denied-player recovery, and live-game late joins.
+- Default-off Auto-join, host approval/denial before team creation, optional automatic entry, neutral denied-player recovery, and live-game late joins.
 - Team creation and duplicate-name prevention.
 - Realtime teams appearing in the host lobby.
 - Host start automatically advancing player screens.

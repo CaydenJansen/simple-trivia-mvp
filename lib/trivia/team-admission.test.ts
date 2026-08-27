@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from './team-admission'
 
 describe('team admission transitions', () => {
-  it('auto-joins by default and only requires approval explicitly', () => {
-    expect(teamApprovalRequiredFromSettings(null)).toBe(false)
-    expect(teamApprovalRequiredFromSettings({})).toBe(false)
+  it('requires approval by default and only auto-joins explicitly', () => {
+    expect(teamApprovalRequiredFromSettings(null)).toBe(true)
+    expect(teamApprovalRequiredFromSettings({})).toBe(true)
     expect(teamApprovalRequiredFromSettings({ team_approval_required: true })).toBe(true)
     expect(teamApprovalRequiredFromSettings({ team_approval_required: false })).toBe(false)
   })

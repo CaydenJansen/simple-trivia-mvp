@@ -486,7 +486,7 @@ function TeamAdmissionList({
             aria-checked={!approvalRequired}
             aria-label="Auto-join teams"
             disabled={approvalBusy}
-            onClick={() => onApprovalRequiredChange(approvalRequired)}
+            onClick={() => onApprovalRequiredChange(!approvalRequired)}
             style={{ background: !approvalRequired ? C.violet : C.line }}
             className="relative h-7 w-12 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
           >
@@ -2375,8 +2375,8 @@ function QuizBuilder({ go }: { go: Go }) {
                     id: `show-game-${crypto.randomUUID()}`,
                     showGameKey: `show-game-${crypto.randomUUID()}`,
                     itemPosition: nextRoundItemPosition(item),
-                    gameType: 'beat-the-bomb',
-                    title: 'Beat the Bomb',
+                    gameType: 'spin-the-wheel',
+                    title: 'Spin the Wheel',
                     rewardType: DEFAULT_SHOW_GAME_REWARD.type,
                     rewardPoints: DEFAULT_SHOW_GAME_REWARD.points,
                     rewardDescription: DEFAULT_SHOW_GAME_REWARD.description,
@@ -3691,8 +3691,8 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Game</label>
             <div className="grid grid-cols-2 gap-2">
               {([
-                { type: 'beat-the-bomb' as const, label: '💣 Beat the Bomb' },
                 { type: 'spin-the-wheel' as const, label: '🎡 Spin the Wheel' },
+                { type: 'beat-the-bomb' as const, label: '💣 Beat the Bomb' },
               ]).map(option => (
                 <button key={option.type} type="button" onClick={() => onChange({ gameType: option.type, title: option.type === 'spin-the-wheel' ? 'Spin the Wheel' : 'Beat the Bomb' })}
                   style={{ border: `1px solid ${showGame.gameType === option.type ? C.violet : C.line}`, background: showGame.gameType === option.type ? C.violetMist : 'white', color: showGame.gameType === option.type ? C.violet : C.ink }}
@@ -3702,6 +3702,9 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
               ))}
             </div>
           </div>
+          <p style={{ color: C.sub }} className="text-xs leading-5">{showGame.gameType === 'spin-the-wheel'
+            ? 'Every team in the game is placed on one large wheel. The wheel spins, slows down, and randomly selects one winner.'
+            : 'Each team presses once. The fuse lasts a random 10–30 seconds, and the last team to press before it explodes wins.'}</p>
           <div>
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Title</label>
             <input value={showGame.title} onChange={event => onChange({ title: event.target.value })}
@@ -3744,9 +3747,6 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
                 style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full resize-none rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
             </div>
           )}
-          <p style={{ color: C.sub }} className="text-xs leading-5">{showGame.gameType === 'spin-the-wheel'
-            ? 'Every team in the game is placed on one large wheel. The wheel spins and randomly selects one winner.'
-            : 'Each team presses once. The fuse lasts a random 10–30 seconds, and the last team to press before it explodes wins.'}</p>
           <div className="flex justify-end"><button onClick={() => setExpanded(false)} style={{ color: C.violet }} className="text-xs font-semibold">Done</button></div>
         </div>
       )}
@@ -5199,7 +5199,7 @@ function HostSetup({ go }: { go: Go }) {
             answer_reveal: reveal,
             leaderboard_visibility: lb,
             auto_run_mode: autoRunMode,
-            team_approval_required: false,
+            team_approval_required: true,
             player_score_visibility: scoreVisibility,
             scores_visible_to_players: scoreVisibility === 'live',
             show_correctness_percentage_to_players: showCorrectnessPercentage,
@@ -5455,7 +5455,7 @@ function Lobby({ go }: { go: Go }) {
   const [startError, setStartError] = useState<string | null>(null)
   const [lobbyGameId, setLobbyGameId] = useState<string | null>(null)
   const [lobbySettings, setLobbySettings] = useState<Record<string, Json>>({})
-  const [approvalRequired, setApprovalRequired] = useState(false)
+  const [approvalRequired, setApprovalRequired] = useState(true)
   const [approvalBusy, setApprovalBusy] = useState(false)
 
   async function handleApprovalRequiredChange(required: boolean) {
@@ -5976,7 +5976,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
   const [playerScoreVisibility, setPlayerScoreVisibility] = useState<PlayerScoreVisibility>('live')
   const [showCorrectnessPercentage, setShowCorrectnessPercentage] = useState(false)
-  const [approvalRequired, setApprovalRequired] = useState(false)
+  const [approvalRequired, setApprovalRequired] = useState(true)
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
@@ -7121,7 +7121,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         ? 'End Round →'
         : nextContentItem.kind === 'content'
           ? 'Next Content Screen →'
-          : nextContentItem.kind === 'show-game' ? 'Start Game →' : 'Open Next Question →'
+          : nextContentItem.kind === 'show-game' ? `Start ${nextContentItem.showGame.title} →` : 'Open Next Question →'
 
     return (
       <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
@@ -7885,7 +7885,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     : firstRoundItem?.kind === 'content'
                       ? 'Show First Content Screen →'
                       : firstRoundItem?.kind === 'show-game'
-                        ? 'Start Beat the Bomb →'
+                        ? `Start ${firstRoundItem.showGame.title} →`
                       : `Show Question ${question?.round_position ?? 1} →`}
                 </button>
               ) : gameScreen === 'question-results' ? (

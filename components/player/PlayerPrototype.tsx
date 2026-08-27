@@ -1442,7 +1442,7 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   const [joinError, setJoinError] = useState<string | null>(null)
   const [joining, setJoining] = useState(false)
   const [gameTitle, setGameTitle] = useState('Trivia game')
-  const [approvalRequired, setApprovalRequired] = useState(false)
+  const [approvalRequired, setApprovalRequired] = useState(true)
 
   useEffect(() => {
     const storedTitle = localStorage.getItem('simple-trivia-game-title')
