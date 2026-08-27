@@ -30,6 +30,7 @@ import {
   type TeamPinMode,
 } from "@/lib/trivia/team-pin";
 import { teamAdmissionTransition } from "@/lib/trivia/team-admission";
+import { autoRunClockColor, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -294,6 +295,49 @@ function useLivePlayerSync(
       void supabase.removeChannel(channel)
     }
   }, [joined, setScreen])
+}
+
+function usePlayerAutoRunClock() {
+  const [settings, setSettings] = useState<Json | null>(null)
+  const [now, setNow] = useState<number | null>(null)
+
+  useEffect(() => {
+    const gameId = localStorage.getItem('simple-trivia-game-id')
+    if (!gameId) return
+    const activeGameId = gameId
+    let active = true
+
+    async function load() {
+      const { data, error } = await supabase.from('games').select('settings').eq('id', activeGameId).maybeSingle()
+      if (!active) return
+      if (error) return console.error('Could not load the Auto-Run clock:', error)
+      setSettings(data?.settings ?? null)
+      setNow(Date.now())
+    }
+
+    void load()
+    const channel = supabase
+      .channel(`player-auto-run-clock-${activeGameId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, payload => {
+        if (!active) return
+        setSettings((payload.new as { settings?: Json }).settings ?? null)
+        setNow(Date.now())
+      })
+      .subscribe()
+
+    return () => {
+      active = false
+      void supabase.removeChannel(channel)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!settings) return
+    const interval = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(interval)
+  }, [settings])
+
+  return now === null ? null : autoRunClockFromSettings(settings, now)
 }
 
 function useLiveQuestionDefinition() {
@@ -1050,16 +1094,28 @@ function TopBar({
   const answerRevealMode = useAnswerRevealMode()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   const showScore = scoresVisible && score !== undefined && answerRevealMode === 'each'
+  const autoRunClock = usePlayerAutoRunClock()
+  const clockTone = autoRunClock ? autoRunClockColor(autoRunClock.remaining) : C.violet
+  const clockLabel = autoRunClock?.label.startsWith('Answers') ? 'Answers' : 'Next'
 
   return (
     <header style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }} className="shrink-0 px-4 py-2.5">
       {(round || question || team) && (
-        <div className="flex items-end justify-between gap-3">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
             {round && <span style={{ color: C.sub, fontSize: 12 }} className="truncate font-medium">{round}</span>}
             {round && question && <span style={{ color: C.line, fontSize: 12 }}>·</span>}
             {question && <span style={{ color: C.sub, fontSize: 12 }} className="truncate font-medium">{question}</span>}
           </div>
+          {autoRunClock && (
+            <div
+              title={autoRunClock.label}
+              style={{ color: clockTone, border: `1px solid ${clockTone}55`, background: `${clockTone}10` }}
+              className="shrink-0 rounded-lg px-2 py-1 text-[11px] font-black tabular-nums transition-colors"
+            >
+              {autoRunClock.paused ? 'Paused' : clockLabel} · {autoRunClockLabel(autoRunClock.remaining)}
+            </div>
+          )}
           {team && (
             <div className="shrink-0 text-right">
               <div style={{ color: C.ink, fontSize: 13 }} className="font-bold leading-tight">{team}</div>

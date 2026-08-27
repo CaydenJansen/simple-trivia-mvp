@@ -36,10 +36,7 @@ export function autoRunRemainingAfterAllLocked(remaining: number, allPlayersLock
 
 export function autoRunRevealSeconds(question: TimedQuestion) {
   const parts = Array.isArray(question.correct_answer) ? question.correct_answer.length : 1
-  const compound = question.question_type === 'multi-answer'
-    || question.question_type === 'multi-part'
-    || question.question_type === 'ranking'
-  return compound ? 15 + (Math.max(1, parts) - 1) * 5 : 15
+  return Math.min(10, 5 + ((Math.max(1, parts) - 1) * 2))
 }
 
 export const AUTO_RUN_CONTENT_SECONDS = 30
@@ -49,4 +46,34 @@ export const AUTO_RUN_EXTENSION_SECONDS = 15
 export function autoRunClockLabel(seconds: number) {
   const safe = Math.max(0, Math.trunc(seconds))
   return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`
+}
+
+export type AutoRunSharedClock = {
+  key: string
+  label: string
+  deadline_ms: number | null
+  paused_remaining: number | null
+}
+
+export function autoRunClockFromSettings(settings: unknown, now = Date.now()) {
+  const raw = settingsRecord(settings)?.auto_run_clock
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const clock = raw as Record<string, unknown>
+  const key = typeof clock.key === 'string' ? clock.key : ''
+  const label = typeof clock.label === 'string' ? clock.label : ''
+  const deadline = typeof clock.deadline_ms === 'number' && Number.isFinite(clock.deadline_ms)
+    ? clock.deadline_ms
+    : null
+  const paused = typeof clock.paused_remaining === 'number' && Number.isFinite(clock.paused_remaining)
+    ? Math.max(0, Math.trunc(clock.paused_remaining))
+    : null
+  const remaining = paused ?? (deadline === null ? 0 : Math.max(0, Math.ceil((deadline - now) / 1000)))
+  if (!key || !label || remaining <= 0) return null
+  return { key, label, remaining, paused: paused !== null }
+}
+
+export function autoRunClockColor(seconds: number) {
+  if (seconds <= 5) return '#DC2626'
+  if (seconds <= 10) return '#D97706'
+  return '#7C3AED'
 }

@@ -82,6 +82,7 @@ import {
   AUTO_RUN_CONTENT_SECONDS,
   AUTO_RUN_EXTENSION_SECONDS,
   autoRunAnswerSeconds,
+  autoRunClockColor,
   autoRunClockLabel,
   autoRunModeFromSettings,
   autoRunRemainingAfterAllLocked,
@@ -5589,6 +5590,8 @@ function LiveQuestion({ go }: { go: Go }) {
   const [autoRunRemaining, setAutoRunRemaining] = useState(0)
   const autoRunInitializedRef = useRef(false)
   const autoRunActionRef = useRef<() => void>(() => {})
+  const autoRunPublishedKeyRef = useRef('')
+  const liveGameSettingsRef = useRef<Record<string, Json>>({})
   const [liveError, setLiveError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
 
@@ -5612,6 +5615,9 @@ function LiveQuestion({ go }: { go: Go }) {
       }
 
       setLiveGameId(game.id)
+      liveGameSettingsRef.current = game.settings && typeof game.settings === 'object' && !Array.isArray(game.settings)
+        ? game.settings as Record<string, Json>
+        : {}
       setGameScreen(game.current_screen ?? '')
       setLeaderboardVisibility(leaderboardVisibilityFromSettings(game.settings))
       setAnswerRevealMode(answerRevealModeFromSettings(game.settings))
@@ -6300,7 +6306,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   const autoRunTimer = (() => {
     if (gameScreen === 'round-start') return { key: `round-${question?.round_number ?? 0}`, seconds: 5, label: 'First question opens in' }
     if (gameScreen === 'content-screen') return { key: `content-${contentScreen?.screen_key ?? ''}`, seconds: AUTO_RUN_CONTENT_SECONDS, label: 'Content advances in' }
-    if (gameScreen === 'question-results') return { key: `leaderboard-${question?.question_key ?? ''}`, seconds: 15, label: 'Next question opens in' }
+    if (gameScreen === 'question-results') return { key: `leaderboard-${question?.question_key ?? ''}`, seconds: 10, label: 'Next question opens in' }
     if (phase === 'open') {
       const bonus = runtimeBonusFromJson(question?.bonus)
       const seconds = questionStage === 'bonus' && bonus
@@ -6309,8 +6315,26 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       return { key: `open-${question?.question_key ?? ''}-${questionStage}`, seconds, label: 'Answers close in' }
     }
     if (phase === 'closed') return { key: `closed-${question?.question_key ?? ''}-${questionStage}`, seconds: 1, label: 'Scoring answers' }
-    return { key: `reveal-${question?.question_key ?? ''}`, seconds: autoRunRevealSeconds(question ?? {}), label: 'Next question opens in' }
+    const revealSeconds = Math.min(10, autoRunRevealSeconds(question ?? {}) + (activeBonus ? 2 : 0))
+    return { key: `reveal-${question?.question_key ?? ''}`, seconds: revealSeconds, label: 'Next question opens in' }
   })()
+
+  async function publishAutoRunClock(remaining: number, paused = false) {
+    if (!liveGameId || autoRunMode !== 'round') return
+    const safeRemaining = Math.max(0, Math.trunc(remaining))
+    const autoRunClock: Json = safeRemaining > 0
+      ? {
+          key: autoRunTimer.key,
+          label: autoRunTimer.label,
+          deadline_ms: paused ? null : Date.now() + (safeRemaining * 1000),
+          paused_remaining: paused ? safeRemaining : null,
+        }
+      : null
+    const settings: Record<string, Json> = { ...liveGameSettingsRef.current, auto_run_clock: autoRunClock }
+    liveGameSettingsRef.current = settings
+    const { error } = await supabase.from('games').update({ settings }).eq('id', liveGameId)
+    if (error) console.error('Could not publish Auto-Run clock:', error)
+  }
 
   useEffect(() => {
     autoRunActionRef.current = () => {
@@ -6332,6 +6356,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }, [autoRunTimer.key, autoRunTimer.seconds])
 
   useEffect(() => {
+    if (autoRunMode !== 'round' || !autoRunOperating || !liveGameId || autoRunPublishedKeyRef.current === autoRunTimer.key) return
+    autoRunPublishedKeyRef.current = autoRunTimer.key
+    void publishAutoRunClock(autoRunTimer.seconds, autoRunPaused)
+    // The state key deliberately controls publication; the deadline is not rewritten each second.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunMode, autoRunOperating, autoRunPaused, autoRunTimer.key, autoRunTimer.seconds, liveGameId])
+
+  useEffect(() => {
     if (autoRunMode !== 'round' || !autoRunOperating || autoRunPaused || actionBusy || autoRunRemaining <= 0) return
     const timer = window.setTimeout(() => {
       setAutoRunRemaining(current => {
@@ -6349,20 +6381,35 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     if (autoRunMode !== 'round' || !autoRunOperating || !allActivePlayersLocked) return
     // Submission Realtime events shorten, but never lengthen, the live countdown.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAutoRunRemaining(current => autoRunRemainingAfterAllLocked(current, true))
+    setAutoRunRemaining(current => {
+      const next = autoRunRemainingAfterAllLocked(current, true)
+      if (next !== current) void publishAutoRunClock(next, autoRunPaused)
+      return next
+    })
+    // The clock publisher is intentionally keyed by the observable lock state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allActivePlayersLocked, autoRunMode, autoRunOperating])
 
+  const autoRunClockTone = autoRunClockColor(autoRunRemaining)
   const autoRunControls = autoRunMode === 'round' ? (
-    <section style={{ background: C.livePanel, borderBottom: `1px solid ${C.liveLine}` }} className="flex flex-wrap items-center justify-center gap-3 px-5 py-2.5">
+    <section style={{ background: C.livePanel, borderBottom: `1px solid ${C.liveLine}` }} className="sticky top-[52px] z-30 flex flex-wrap items-center justify-center gap-3 px-5 py-2.5 shadow-lg">
       <span style={{ color: autoRunOperating && !autoRunPaused ? '#C4B5FD' : C.caution }} className="text-xs font-black uppercase tracking-wider">
         {autoRunOperating ? autoRunPaused ? 'Auto-Run paused' : 'Auto-Run on' : 'Manual control'}
       </span>
-      <span style={{ color: C.liveText }} className="min-w-40 text-sm font-bold tabular-nums">
+      <span style={{ color: autoRunClockTone }} className="min-w-40 text-sm font-black tabular-nums transition-colors">
         {autoRunTimer.label}: {autoRunClockLabel(autoRunRemaining)}
       </span>
-      <button type="button" onClick={() => setAutoRunRemaining(value => value + AUTO_RUN_EXTENSION_SECONDS)} style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-bold hover:bg-white/5">+15 sec</button>
+      <button type="button" onClick={() => setAutoRunRemaining(value => {
+        const next = value + AUTO_RUN_EXTENSION_SECONDS
+        if (autoRunOperating) void publishAutoRunClock(next, autoRunPaused)
+        return next
+      })} style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-bold hover:bg-white/5">+15 sec</button>
       {autoRunOperating && (
-        <button type="button" onClick={() => setAutoRunPaused(value => !value)} style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-bold hover:bg-white/5">
+        <button type="button" onClick={() => setAutoRunPaused(value => {
+          const next = !value
+          void publishAutoRunClock(autoRunRemaining, next)
+          return next
+        })} style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-bold hover:bg-white/5">
           {autoRunPaused ? 'Resume' : 'Pause'}
         </button>
       )}
@@ -6373,9 +6420,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         if (autoRunOperating) {
           setAutoRunOperating(false)
           setAutoRunPaused(false)
+          autoRunPublishedKeyRef.current = ''
+          void publishAutoRunClock(0)
         } else {
           setAutoRunOperating(true)
           setAutoRunPaused(false)
+          autoRunPublishedKeyRef.current = autoRunTimer.key
+          void publishAutoRunClock(autoRunRemaining)
         }
       }} style={{ border: `1px solid ${C.violet}`, color: '#C4B5FD' }} className="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-bold hover:bg-white/5">
         {autoRunOperating ? 'Take manual control' : 'Resume Auto-Run'}
@@ -6397,7 +6448,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
     return (
       <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
-        <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }} className="flex items-center px-6 gap-4 shrink-0">
+        <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }} className="sticky top-0 z-40 flex items-center px-6 gap-4 shrink-0">
           <span className="font-bold text-sm" style={{ color: C.liveDim }}>Simple Trivia</span>
           <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>
             Round {contentScreen?.round_number ?? question?.round_number ?? 1} · {contentScreen?.round_title ?? question?.round_title ?? 'Content Screen'}
@@ -7661,17 +7712,12 @@ function EndOfRound({ go }: { go: Go }) {
 
         {autoRunMode === 'round' && (
           <section style={{ background: C.liveSurface, border: `1px solid ${roundFinalized ? `${C.go}55` : `${C.violet}70`}` }} className="mb-7 rounded-2xl p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-4">
+            <div>
               <div>
                 <p style={{ color: roundFinalized ? C.go : '#C4B5FD' }} className="text-xs font-black uppercase tracking-wider">Host checkpoint</p>
                 <h2 className="mt-1 text-xl font-extrabold">{roundFinalized ? 'Round finalized' : `${pendingRoundItems.length} answer${pendingRoundItems.length === 1 ? '' : 's'} need review`}</h2>
                 <p style={{ color: C.liveDim }} className="mt-1 text-xs">{roundFinalized ? 'Scores for this round are now official.' : 'Auto-Run is stopped. Resolve these answers, then finalize the round.'}</p>
               </div>
-              {!roundFinalized && (
-                <button type="button" disabled={busy || pendingRoundItems.length > 0} onClick={() => { void finalizeRound(false) }} style={{ background: pendingRoundItems.length > 0 ? C.livePanel : C.go, color: pendingRoundItems.length > 0 ? C.liveDim : 'white' }} className="cursor-pointer rounded-xl px-4 py-2.5 text-sm font-extrabold disabled:cursor-not-allowed">
-                  Finalize Round
-                </button>
-              )}
             </div>
 
             {!roundFinalized && pendingRoundItems.length > 0 && (
@@ -7752,6 +7798,21 @@ function EndOfRound({ go }: { go: Go }) {
                     })}
                   </div>
                 )}
+
+                <div className="mt-5 border-t pt-4" style={{ borderColor: C.liveLine }}>
+                  <button
+                    type="button"
+                    disabled={busy || pendingRoundItems.length > 0}
+                    onClick={() => { void finalizeRound(false) }}
+                    style={{ background: pendingRoundItems.length > 0 ? C.livePanel : C.go, color: pendingRoundItems.length > 0 ? C.liveDim : 'white' }}
+                    className="w-full cursor-pointer rounded-xl px-5 py-3 text-sm font-extrabold disabled:cursor-not-allowed"
+                  >
+                    {busy ? 'Finalizing…' : 'Finalize Round'}
+                  </button>
+                  {pendingRoundItems.length > 0 && (
+                    <p style={{ color: C.liveDim }} className="mt-2 text-center text-xs">Resolve the highlighted answers before finalizing.</p>
+                  )}
+                </div>
               </div>
             )}
           </section>

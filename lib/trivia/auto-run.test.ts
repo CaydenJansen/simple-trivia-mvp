@@ -3,6 +3,8 @@ import {
   AUTO_RUN_CONTENT_SECONDS,
   AUTO_RUN_ROUND_CHECKPOINT_SECONDS,
   autoRunAnswerSeconds,
+  autoRunClockColor,
+  autoRunClockFromSettings,
   autoRunClockLabel,
   autoRunModeFromSettings,
   autoRunRemainingAfterAllLocked,
@@ -32,14 +34,31 @@ describe('Auto-Run rules', () => {
     expect(autoRunRemainingAfterAllLocked(42, false)).toBe(42)
   })
 
-  it('allows longer reveals for compound questions', () => {
-    expect(autoRunRevealSeconds({ question_type: 'single-answer', correct_answer: 'A' })).toBe(15)
-    expect(autoRunRevealSeconds({ question_type: 'multi-part', correct_answer: ['A', 'B', 'C'] })).toBe(25)
+  it('uses short workload-based reveals capped at ten seconds', () => {
+    expect(autoRunRevealSeconds({ question_type: 'single-answer', correct_answer: 'A' })).toBe(5)
+    expect(autoRunRevealSeconds({ question_type: 'multi-part', correct_answer: ['A', 'B', 'C'] })).toBe(9)
+    expect(autoRunRevealSeconds({ question_type: 'multi-answer', correct_answer: ['A', 'B', 'C', 'D', 'E'] })).toBe(10)
   })
 
   it('keeps fixed content and checkpoint defaults', () => {
     expect(AUTO_RUN_CONTENT_SECONDS).toBe(30)
     expect(AUTO_RUN_ROUND_CHECKPOINT_SECONDS).toBe(60)
     expect(autoRunClockLabel(37)).toBe('00:37')
+  })
+
+  it('reads a synchronized running or paused player clock', () => {
+    expect(autoRunClockFromSettings({ auto_run_clock: { key: 'q1', label: 'Answers close in', deadline_ms: 15_000, paused_remaining: null } }, 10_000)).toEqual({
+      key: 'q1', label: 'Answers close in', remaining: 5, paused: false,
+    })
+    expect(autoRunClockFromSettings({ auto_run_clock: { key: 'q1', label: 'Answers close in', deadline_ms: null, paused_remaining: 8 } }, 10_000)).toEqual({
+      key: 'q1', label: 'Answers close in', remaining: 8, paused: true,
+    })
+    expect(autoRunClockFromSettings({ auto_run_clock: { key: 'q1', label: 'Answers close in', deadline_ms: 9_000, paused_remaining: null } }, 10_000)).toBeNull()
+  })
+
+  it('uses orange for the final ten seconds and red for the final five', () => {
+    expect(autoRunClockColor(11)).toBe('#7C3AED')
+    expect(autoRunClockColor(10)).toBe('#D97706')
+    expect(autoRunClockColor(5)).toBe('#DC2626')
   })
 })
