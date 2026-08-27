@@ -93,6 +93,7 @@
 - Do not add post-reveal undo without safely reversing awarded points.
 - Review-required answers sort first, then graded submissions, then waiting teams. Keep ordering stable within each group.
 - Leaderboard visibility rules must not leak prohibited team names, scores, or ranks. A team sees point totals only when the host enables player score visibility; this setting is independent from leaderboard visibility.
+- Hosts always see a prominent correct-answer percentage after grading. Player result screens show it only when the host enabled the pre-game setting, and never before answer reveal.
 - Player score visibility is fixed before play as `live`, `round`, `final`, or `hidden`. Auto-Run defaults to round-finalized scores. Never expose provisional in-round scores when round-finalized visibility is selected.
 - Auto-Run timing is workload-based: 30 seconds for the first point and 15 seconds for each additional point. Ranking starts at 30 seconds and adds 5 seconds per additional item. When every active team has locked the current answer stage, reduce any longer countdown to 5 seconds. Content screens default to 30 seconds. Answer reveals last 5 seconds plus 2 seconds per additional revealed answer, capped at 10 seconds.
 - Keep the synchronized Auto-Run clock visible to hosts and players. It is purple normally, orange at 10 seconds or less, and red at 5 seconds or less. Host Auto-Run controls remain pinned below the live header while the page scrolls.

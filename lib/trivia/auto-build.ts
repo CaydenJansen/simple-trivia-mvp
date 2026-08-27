@@ -19,7 +19,7 @@ export type AutoBuildTiebreaker = {
 }
 
 export type AutoBuildAudienceFit = 'broad' | 'kids' | 'young_adults' | 'older_adults'
-export type AutoBuildAudiencePreference = AutoBuildAudienceFit | 'all'
+export type AutoBuildAudiencePreference = AutoBuildAudienceFit | 'all' | 'guys_wearing_hats'
 export type AutoBuildScopeMode = 'global_only' | 'include_locale'
 
 export type AutoBuildContentSettings = {
@@ -98,6 +98,7 @@ function matchesContentSettings(
   settings?: AutoBuildContentSettings,
 ) {
   if (!settings) return true
+  if (settings.audienceFit === 'guys_wearing_hats') return false
   if (!settings.allowAdultContent && item.adult_content === true) return false
 
   const scope = item.audience_scope ?? 'global'

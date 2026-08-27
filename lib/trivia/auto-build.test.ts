@@ -156,6 +156,20 @@ describe('Auto-Build selection semantics', () => {
     expect(plan.rounds[0].questions.map(question => question.id)).toEqual(['kids', 'older-adults', 'broad'])
   })
 
+  it('returns no matches for the playful guys-wearing-hats option', () => {
+    const settings = { ...allAudienceSettings, audienceFit: 'guys_wearing_hats' as const }
+    const availability = getAutoBuildAvailability({
+      questions: [{ id: 'broad', category: 'Music', difficulty: 'Easy', audience_fit: 'broad' }],
+      questionCount: 1,
+      roundTopics: ['Music'],
+      difficulties: ['Easy'],
+      contentSettings: settings,
+    })
+
+    expect(availability).toMatchObject({ canBuild: false, matchingQuestionCount: 0 })
+    expect(getEligibleAutoBuildTiebreakers(tiebreakers, settings)).toHaveLength(0)
+  })
+
   it('applies adult-content and locale rules to prepared tiebreakers', () => {
     const eligible = getEligibleAutoBuildTiebreakers([
       { id: 'global', adult_content: false, audience_scope: 'global' },

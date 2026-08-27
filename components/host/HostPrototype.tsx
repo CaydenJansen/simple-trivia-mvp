@@ -1186,7 +1186,7 @@ function Dashboard({ go }: { go: Go }) {
               <div style={{ background: C.violetMist }} className="w-10 h-10 rounded-xl flex items-center justify-center transition-colors group-hover:bg-violet-pale">
                 <I.plus />
               </div>
-              <span style={{ color: C.sub }} className="text-sm font-semibold group-hover:text-violet transition-colors">New Quiz</span>
+              <span style={{ color: C.sub }} className="text-sm font-semibold group-hover:text-violet transition-colors">Create Quiz</span>
             </button>
           </div>
         )}
@@ -4318,6 +4318,8 @@ function AutoBuild({ go }: { go: Go }) {
         ? 'Checking Question Library availability…'
         : sourcesError
           ? sourcesError
+          : audienceFit === 'guys_wearing_hats'
+            ? 'No questions found matching these settings.'
           : firstShortage
             ? `Not enough ${firstShortage.topic ?? 'matching'} questions: ${firstShortage.available} available, ${firstShortage.required} needed.`
             : eligibleTiebreakerCount < AUTO_BUILD_TIEBREAKER_COUNT
@@ -4580,6 +4582,7 @@ function AutoBuild({ go }: { go: Go }) {
                     <option value="kids">Kids</option>
                     <option value="young_adults">Young adults</option>
                     <option value="older_adults">Older adults</option>
+                    <option value="guys_wearing_hats">Guys wearing hats</option>
                   </select>
                 </div>
 
@@ -4866,6 +4869,7 @@ function HostSetup({ go }: { go: Go }) {
   const [lb, setLb] = useState<LeaderboardVisibility>('round')
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
   const [scoreVisibility, setScoreVisibility] = useState<PlayerScoreVisibility>('live')
+  const [showCorrectnessPercentage, setShowCorrectnessPercentage] = useState(false)
   type PrizePlace = { enabled: boolean; msg: string }
   const topPlaces = ['1st', '2nd', '3rd']
   const bottomPlaces = ['Last', '2nd Last', '3rd Last']
@@ -4934,6 +4938,7 @@ function HostSetup({ go }: { go: Go }) {
             team_approval_required: true,
             player_score_visibility: scoreVisibility,
             scores_visible_to_players: scoreVisibility === 'live',
+            show_correctness_percentage_to_players: showCorrectnessPercentage,
             top_prizes: topPrizes,
             bottom_prizes: botPrizes,
           },
@@ -5074,6 +5079,22 @@ function HostSetup({ go }: { go: Go }) {
                 Recommended for Auto-Run. Scores update after you review and finalize each round.
               </p>
             )}
+          </SCard>
+
+          <SCard title="Correct Answer Percentage">
+            <p style={{ color: C.sub }} className="mb-3 text-xs leading-5">
+              Hosts always see how many teams got the answer right. You can also show that percentage on player result screens.
+            </p>
+            <label className="flex cursor-pointer items-center justify-between gap-4 rounded-xl p-2.5 transition-colors hover:bg-ground">
+              <span style={{ color: C.ink }} className="text-sm font-semibold">Show percentage correct to players</span>
+              <input
+                type="checkbox"
+                checked={showCorrectnessPercentage}
+                onChange={event => setShowCorrectnessPercentage(event.target.checked)}
+                style={{ accentColor: C.violet }}
+                className="h-5 w-5"
+              />
+            </label>
           </SCard>
 
           {/* Prizes */}
@@ -6931,16 +6952,18 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 <div className="flex items-center gap-2">
                   <span
                     style={{ background: `${C.go}20`, color: C.go, border: `1px solid ${C.go}45` }}
-                    className="px-3 py-1.5 rounded-lg text-xs font-extrabold tabular-nums"
+                    className="rounded-xl px-5 py-3 text-center tabular-nums shadow-lg"
                   >
-                    Main: {coreCorrectness.correct} of {coreCorrectness.total} · {coreCorrectness.percentage}%
+                    <strong className="block text-2xl font-black leading-none">{coreCorrectness.percentage}%</strong>
+                    <span className="mt-1 block text-[11px] font-extrabold uppercase tracking-wide">{coreCorrectness.correct} of {coreCorrectness.total} teams correct</span>
                   </span>
                   {activeBonus && (
                     <span
                       style={{ background: `${C.violet}20`, color: '#C4B5FD', border: `1px solid ${C.violet}45` }}
-                      className="px-3 py-1.5 rounded-lg text-xs font-extrabold tabular-nums"
+                      className="rounded-xl px-4 py-3 text-center tabular-nums"
                     >
-                      Bonus: {bonusCorrectness.correct} of {bonusCorrectness.total} · {bonusCorrectness.percentage}%
+                      <strong className="block text-xl font-black leading-none">{bonusCorrectness.percentage}%</strong>
+                      <span className="mt-1 block text-[10px] font-extrabold uppercase tracking-wide">Bonus · {bonusCorrectness.correct} of {bonusCorrectness.total}</span>
                     </span>
                   )}
                 </div>
@@ -7733,15 +7756,20 @@ function EndOfRound({ go }: { go: Go }) {
               <p style={{ color: C.go }} className="mt-2 text-2xl font-extrabold">{correctAnswerDisplay(currentQuestion)}</p>
             </div>
             {teams.length > 0 && (
-              <div className="mx-auto mt-4 flex max-w-xl flex-wrap justify-center gap-2">
-                <span style={{ background: `${C.go}18`, color: C.go, border: `1px solid ${C.go}40` }} className="rounded-xl px-4 py-2 text-sm font-extrabold tabular-nums">
-                  {revealCorrectness.correct} of {revealCorrectness.total} teams correct · {revealCorrectness.percentage}%
-                </span>
-                {revealBonus && (
-                  <span style={{ background: `${C.caution}18`, color: C.caution, border: `1px solid ${C.caution}40` }} className="rounded-xl px-4 py-2 text-sm font-extrabold tabular-nums">
-                    Bonus: {revealBonusCorrectness.correct} of {revealBonusCorrectness.total} · {revealBonusCorrectness.percentage}%
+              <div className="mt-5">
+                <p style={{ color: C.liveDim }} className="text-[10px] font-extrabold uppercase tracking-[0.18em]">Host insight</p>
+                <div className="mx-auto mt-2 flex max-w-xl flex-wrap justify-center gap-3">
+                  <span style={{ background: `${C.go}18`, color: C.go, border: `1px solid ${C.go}40` }} className="rounded-2xl px-7 py-4 text-center tabular-nums shadow-lg">
+                    <strong className="block text-4xl font-black leading-none">{revealCorrectness.percentage}%</strong>
+                    <span className="mt-2 block text-xs font-extrabold uppercase tracking-wide">{revealCorrectness.correct} of {revealCorrectness.total} teams correct</span>
                   </span>
-                )}
+                  {revealBonus && (
+                    <span style={{ background: `${C.violet}18`, color: C.liveViolet, border: `1px solid ${C.violet}40` }} className="rounded-2xl px-6 py-4 text-center tabular-nums">
+                      <strong className="block text-3xl font-black leading-none">{revealBonusCorrectness.percentage}%</strong>
+                      <span className="mt-2 block text-[11px] font-extrabold uppercase tracking-wide">Bonus · {revealBonusCorrectness.correct} of {revealBonusCorrectness.total}</span>
+                    </span>
+                  )}
+                </div>
               </div>
             )}
             <p style={{ color: C.liveDim }} className="mt-5 text-sm">Each team also sees its own submitted answer, result, and points.</p>

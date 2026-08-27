@@ -32,6 +32,8 @@ import {
 import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { autoRunClockColor, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
 import { suggestedTeamName } from "@/lib/trivia/team-name-suggestions";
+import { correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
+import { playersSeeCorrectnessPercentage } from "@/lib/trivia/correctness-visibility";
 import BrandWordmark from "@/components/BrandWordmark";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -550,6 +552,7 @@ type PlayerSnapshot = {
   bonusCorrectAnswer: string
   bonusPointsAwarded: number
   bonusPointsMax: number
+  correctness: CorrectnessSummary | null
 }
 
 function playerReviewItemsFromJson(value: unknown): PlayerReviewItem[] {
@@ -838,6 +841,15 @@ function PlayerQuestionResultSummary({ snapshot }: { snapshot: PlayerSnapshot })
           </div>
         )}
       </section>
+
+      {snapshot.correctness && (
+        <section style={{ background: C.violetPale, border: `1px solid #C4B5FD` }} className="w-full rounded-2xl px-5 py-4 text-center">
+          <p style={{ color: C.violet }} className="text-3xl font-black tabular-nums">{snapshot.correctness.percentage}%</p>
+          <p style={{ color: C.sub }} className="mt-1 text-sm font-bold">
+            {snapshot.correctness.correct} of {snapshot.correctness.total} teams got it right
+          </p>
+        </section>
+      )}
     </>
   )
 }
@@ -849,7 +861,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
     isCorrect: null, pointsAwarded: 0, pointsMax: 1,
     prompt: '', correctAnswer: '—', roundLabel: '', questionLabel: '', questionType: null,
     reviewItems: [], missingAnswers: [], prizeAwards: [], bonusAnswer: '', hasBonusSubmission: false, bonusCorrectAnswer: '',
-    bonusPointsAwarded: 0, bonusPointsMax: 0,
+    bonusPointsAwarded: 0, bonusPointsMax: 0, correctness: null,
   })
 
   useEffect(() => {
@@ -864,13 +876,14 @@ function usePlayerSnapshot(): PlayerSnapshot {
     async function loadSnapshot() {
       const [{ data: team }, { data: game }] = await Promise.all([
         supabase.from('teams').select('name, score, prize_awards').eq('id', activeTeamId).maybeSingle(),
-        supabase.from('games').select('current_question_key').eq('id', activeGameId).maybeSingle(),
+        supabase.from('games').select('current_question_key, current_screen, answer_phase, settings').eq('id', activeGameId).maybeSingle(),
       ])
       if (!active) return
 
       let question: LiveQuestionDefinition | null = null
       let submission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
       let bonusSubmission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
+      let correctness: CorrectnessSummary | null = null
 
       if (game?.current_question_key) {
         const [{ data: questionRow }, { data: submissionRow }, { data: bonusSubmissionRow }] = await Promise.all([
@@ -893,6 +906,18 @@ function usePlayerSnapshot(): PlayerSnapshot {
         question = questionRow as LiveQuestionDefinition | null
         submission = submissionRow
         bonusSubmission = bonusSubmissionRow
+
+        if (game.answer_phase === 'revealed' && playersSeeCorrectnessPercentage(game.settings)) {
+          const [{ count: teamCount }, { data: allSubmissions, error: correctnessError }] = await Promise.all([
+            supabase.from('teams').select('id', { count: 'exact', head: true }).eq('game_id', activeGameId),
+            supabase.from('submissions').select('is_correct').eq('game_id', activeGameId).eq('question_key', game.current_question_key),
+          ])
+          if (correctnessError) {
+            console.error('Could not load the player correctness percentage:', correctnessError)
+          } else {
+            correctness = correctnessSummary(teamCount ?? 0, allSubmissions ?? [])
+          }
+        }
       }
 
       if (!active) return
@@ -924,6 +949,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
         bonusCorrectAnswer: revealedBonus?.correctAnswer ?? '',
         bonusPointsAwarded: bonusSubmission?.points_awarded ?? 0,
         bonusPointsMax: revealedBonus?.points ?? playerBonusFromJson(question?.bonus)?.points ?? 0,
+        correctness,
       })
     }
 
