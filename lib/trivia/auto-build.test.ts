@@ -5,6 +5,7 @@ import {
   distributeQuestionCount,
   getAutoBuildAvailability,
   getEligibleAutoBuildTiebreakers,
+  matchesAutoBuildVibe,
   type AutoBuildContentSettings,
 } from './auto-build'
 
@@ -156,18 +157,28 @@ describe('Auto-Build selection semantics', () => {
     expect(plan.rounds[0].questions.map(question => question.id)).toEqual(['kids', 'older-adults', 'broad'])
   })
 
-  it('returns no matches for the playful guys-wearing-hats option', () => {
-    const settings = { ...allAudienceSettings, audienceFit: 'guys_wearing_hats' as const }
+  it('filters the guys-wearing-hats vibe to blokey and sporting topics without restricting tiebreakers', () => {
+    const settings = { ...allAudienceSettings, vibe: 'guys_wearing_hats' as const }
     const availability = getAutoBuildAvailability({
-      questions: [{ id: 'broad', category: 'Music', difficulty: 'Easy', audience_fit: 'broad' }],
-      questionCount: 1,
-      roundTopics: ['Music'],
+      questions: [
+        { id: 'sport', category: 'Sport', difficulty: 'Easy', tags: [] },
+        { id: 'cars', category: 'General Knowledge', difficulty: 'Easy', tags: ['Cars'] },
+        { id: 'poetry', category: 'Literature', difficulty: 'Easy', tags: ['Poetry'] },
+      ],
+      questionCount: 2,
+      roundTopics: ['General Knowledge'],
       difficulties: ['Easy'],
       contentSettings: settings,
     })
 
-    expect(availability).toMatchObject({ canBuild: false, matchingQuestionCount: 0 })
-    expect(getEligibleAutoBuildTiebreakers(tiebreakers, settings)).toHaveLength(0)
+    expect(availability).toMatchObject({ canBuild: true, matchingQuestionCount: 2 })
+    expect(getEligibleAutoBuildTiebreakers(tiebreakers, settings)).toHaveLength(5)
+  })
+
+  it('filters the butterfly vibe to whimsical subject matter', () => {
+    expect(matchesAutoBuildVibe({ category: 'Science & Nature', tags: ['Animals'], prompt: 'Which tiny animal glows?' }, 'oh_look_a_butterfly')).toBe(true)
+    expect(matchesAutoBuildVibe({ category: 'Literature', tags: ['Poetry'], prompt: 'Name this poem.' }, 'oh_look_a_butterfly')).toBe(true)
+    expect(matchesAutoBuildVibe({ category: 'Sport', tags: ['Combat Sports'], prompt: 'Who won this bout?' }, 'oh_look_a_butterfly')).toBe(false)
   })
 
   it('applies adult-content and locale rules to prepared tiebreakers', () => {

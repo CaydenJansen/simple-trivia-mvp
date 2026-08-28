@@ -67,6 +67,7 @@ import {
   getEligibleAutoBuildTiebreakers,
   type AutoBuildAudiencePreference,
   type AutoBuildScopeMode,
+  type AutoBuildVibe,
 } from "@/lib/trivia/auto-build";
 import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
@@ -1362,9 +1363,7 @@ function Dashboard({ go }: { go: Go }) {
           .from('quizzes')
           .select('id, title, status, round_count, question_count, estimated_minutes, updated_at')
           .order('updated_at', { ascending: false }),
-        supabase
-          .from('games')
-          .select('id', { count: 'exact', head: true }),
+        supabase.rpc('get_host_game_count'),
       ])
 
       if (!active) return
@@ -1377,7 +1376,7 @@ function Dashboard({ go }: { go: Go }) {
       }
 
       if (!gameCountResult.error) {
-        setGamesHosted(gameCountResult.count ?? 0)
+        setGamesHosted(gameCountResult.data ?? 0)
       }
 
       setLoading(false)
@@ -5021,6 +5020,7 @@ function AutoBuild({ go }: { go: Go }) {
   const [includeGames, setIncludeGames] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [audienceFit, setAudienceFit] = useState<AutoBuildAudiencePreference>('all')
+  const [vibe, setVibe] = useState<AutoBuildVibe>('none')
   const [allowAdultContent, setAllowAdultContent] = useState(false)
   const [scopeMode, setScopeMode] = useState<AutoBuildScopeMode>('global_only')
   const [audienceLocale, setAudienceLocale] = useState('')
@@ -5072,7 +5072,8 @@ function AutoBuild({ go }: { go: Go }) {
     allowAdultContent,
     scopeMode,
     locale: audienceLocale.trim(),
-  }), [allowAdultContent, audienceFit, audienceLocale, scopeMode])
+    vibe,
+  }), [allowAdultContent, audienceFit, audienceLocale, scopeMode, vibe])
   const availability = useMemo(() => getAutoBuildAvailability({
     questions: sourceQuestions,
     questionCount,
@@ -5149,8 +5150,6 @@ function AutoBuild({ go }: { go: Go }) {
         ? 'Checking Question Library availability…'
         : sourcesError
           ? sourcesError
-          : audienceFit === 'guys_wearing_hats'
-            ? 'No questions found matching these settings.'
           : firstShortage
             ? `Not enough ${firstShortage.topic ?? 'matching'} questions: ${firstShortage.available} available, ${firstShortage.required} needed.`
             : eligibleTiebreakerCount < AUTO_BUILD_TIEBREAKER_COUNT
@@ -5440,7 +5439,22 @@ function AutoBuild({ go }: { go: Go }) {
                     <option value="kids">Kids</option>
                     <option value="young_adults">Young adults</option>
                     <option value="older_adults">Older adults</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="auto-build-vibe" style={{ color: C.ink }} className="block text-sm font-bold">Vibe</label>
+                  <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">Optionally give the quiz a stronger personality by selecting questions with a matching theme.</p>
+                  <select
+                    id="auto-build-vibe"
+                    value={vibe}
+                    onChange={event => setVibe(event.target.value as AutoBuildVibe)}
+                    style={{ border: `1px solid ${C.line}`, color: C.ink }}
+                    className="mt-3 w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30"
+                  >
+                    <option value="none">No particular vibe</option>
                     <option value="guys_wearing_hats">Guys wearing hats</option>
+                    <option value="oh_look_a_butterfly">Oh look, a butterfly!</option>
                   </select>
                 </div>
 

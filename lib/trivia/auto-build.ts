@@ -2,8 +2,10 @@ import { AUTO_BUILD_TIEBREAKER_COUNT } from './tiebreakers'
 
 export type AutoBuildQuestion = {
   id: string
+  prompt?: string | null
   category: string | null
   difficulty: string | null
+  tags?: readonly string[] | null
   audience_fit?: AutoBuildAudienceFit | null
   adult_content?: boolean | null
   audience_scope?: 'global' | 'country_specific' | null
@@ -19,14 +21,16 @@ export type AutoBuildTiebreaker = {
 }
 
 export type AutoBuildAudienceFit = 'broad' | 'kids' | 'young_adults' | 'older_adults'
-export type AutoBuildAudiencePreference = AutoBuildAudienceFit | 'all' | 'guys_wearing_hats'
+export type AutoBuildAudiencePreference = AutoBuildAudienceFit | 'all'
 export type AutoBuildScopeMode = 'global_only' | 'include_locale'
+export type AutoBuildVibe = 'none' | 'guys_wearing_hats' | 'oh_look_a_butterfly'
 
 export type AutoBuildContentSettings = {
   audienceFit: AutoBuildAudiencePreference
   allowAdultContent: boolean
   scopeMode: AutoBuildScopeMode
   locale: string
+  vibe?: AutoBuildVibe
 }
 
 export type AutoBuildRound<TQuestion extends AutoBuildQuestion> = {
@@ -98,7 +102,6 @@ function matchesContentSettings(
   settings?: AutoBuildContentSettings,
 ) {
   if (!settings) return true
-  if (settings.audienceFit === 'guys_wearing_hats') return false
   if (!settings.allowAdultContent && item.adult_content === true) return false
 
   const scope = item.audience_scope ?? 'global'
@@ -107,6 +110,35 @@ function matchesContentSettings(
 
   const requestedLocale = normalizedLocale(settings.locale)
   return requestedLocale.length > 0 && normalizedLocale(item.audience_locale) === requestedLocale
+}
+
+const GUYS_WEARING_HATS_TAGS = new Set([
+  'alcohol', 'american football', 'baseball', 'basketball', 'cars', 'combat sports',
+  'cricket', 'golf', 'horse racing', 'military', 'olympics', 'rugby union', 'soccer',
+  'tennis', 'video games',
+])
+
+const BUTTERFLY_VIBE_TAGS = new Set([
+  'animals', 'animation', 'art', 'cartoons', "children's media", 'design', 'disney',
+  'festivals', 'holidays', 'mythology', 'plants', 'poetry', 'theatre', 'toys',
+])
+
+export function matchesAutoBuildVibe(
+  item: Pick<AutoBuildQuestion, 'category' | 'prompt' | 'tags'>,
+  vibe: AutoBuildVibe = 'none',
+) {
+  if (vibe === 'none') return true
+  const tags = (item.tags ?? []).map(tag => tag.trim().toLocaleLowerCase())
+  const category = item.category?.trim().toLocaleLowerCase() ?? ''
+  const prompt = item.prompt?.toLocaleLowerCase() ?? ''
+
+  if (vibe === 'guys_wearing_hats') {
+    return category === 'sport'
+      || tags.some(tag => GUYS_WEARING_HATS_TAGS.has(tag))
+  }
+
+  return tags.some(tag => BUTTERFLY_VIBE_TAGS.has(tag))
+    || /\b(butterfl(?:y|ies)|fairy|fairies|magical|unicorn|dragon|flower|whimsical)\b/.test(prompt)
 }
 
 function audiencePreferenceRank(
@@ -157,6 +189,7 @@ export function getAutoBuildAvailability({
   const eligibleQuestions = questions.filter(question => (
     question.difficulty && allowedDifficulties.has(question.difficulty.toLocaleLowerCase())
   )).filter(question => matchesContentSettings(question, contentSettings))
+    .filter(question => matchesAutoBuildVibe(question, contentSettings?.vibe))
   const requirements = new Map<string, { topic: string | null; required: number }>()
 
   distributeQuestionCount(questionCount, roundTopics.length).forEach((needed, roundIndex) => {
@@ -226,7 +259,8 @@ export function buildAutoQuizPlan<
   const eligibleQuestions = withAudiencePreference(shuffled(
     questions
       .filter(question => question.difficulty && allowedDifficulties.has(question.difficulty.toLocaleLowerCase()))
-      .filter(question => matchesContentSettings(question, contentSettings)),
+      .filter(question => matchesContentSettings(question, contentSettings))
+      .filter(question => matchesAutoBuildVibe(question, contentSettings?.vibe)),
     random,
   ), contentSettings)
   const counts = distributeQuestionCount(questionCount, roundTopics.length)

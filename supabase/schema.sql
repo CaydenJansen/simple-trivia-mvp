@@ -1319,3 +1319,19 @@ $$;
 
 revoke all on function public.touch_team_presence(uuid, uuid), public.send_game_reaction(uuid, uuid, text) from public;
 grant execute on function public.touch_team_presence(uuid, uuid), public.send_game_reaction(uuid, uuid, text) to anon, authenticated;
+
+create or replace function public.get_host_game_count()
+returns bigint
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select count(*)::bigint
+  from public.games
+  join public.quizzes on quizzes.id = games.quiz_id
+  where quizzes.owner_id = (select auth.uid());
+$$;
+
+revoke all on function public.get_host_game_count() from public, anon;
+grant execute on function public.get_host_game_count() to authenticated;

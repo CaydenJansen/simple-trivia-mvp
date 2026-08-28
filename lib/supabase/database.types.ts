@@ -1302,6 +1302,10 @@ export type Database = {
           recent_game_at: string | null
         }[]
       }
+      get_host_game_count: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
       resolve_question_library_proposed_tag: {
         Args: {
           p_proposed_tag_id: string
