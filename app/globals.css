@@ -176,7 +176,7 @@ button {
 .coin-waiting { animation: pulse 1.1s ease-in-out infinite alternate; }
 
 .live-reaction-float {
-  animation: live-reaction-float 3.6s ease-out forwards;
+  animation: live-reaction-float 2.2s ease-out forwards;
 }
 
 @keyframes rank-pop {

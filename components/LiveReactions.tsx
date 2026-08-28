@@ -39,11 +39,11 @@ export default function LiveReactions({
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'game_reactions', filter: `game_id=eq.${gameId}` }, payload => {
         const reaction = payload.new as ReactionEvent
         const localKey = `${reaction.id}-${crypto.randomUUID()}`
-        setEvents(current => [...current.slice(-7), { ...reaction, localKey }])
+        setEvents(current => [...current.slice(-4), { ...reaction, localKey }])
         const timer = setTimeout(() => {
           setEvents(current => current.filter(item => item.localKey !== localKey))
           timers.delete(localKey)
-        }, 3600)
+        }, 2200)
         timers.set(localKey, timer)
       })
       .subscribe()
@@ -66,7 +66,6 @@ export default function LiveReactions({
       p_reaction: reaction,
     })
     if (error) console.error('Could not send reaction:', error)
-    else setPickerOpen(false)
     window.setTimeout(() => setSending(false), 450)
   }
 
@@ -77,18 +76,18 @@ export default function LiveReactions({
       {events.length > 0 && (
         <div aria-live="polite" className={inlineHostPlacement
           ? 'pointer-events-none sticky bottom-0 z-20 ml-auto mt-3 flex w-full flex-col items-end gap-2'
-          : `pointer-events-none fixed right-4 z-[70] flex w-64 flex-col items-end gap-2 sm:right-5 ${hostPlacement ? 'top-20' : 'top-24'}`}>
+          : `pointer-events-none fixed right-3 z-[70] flex w-52 flex-col items-end gap-1.5 sm:right-4 ${hostPlacement ? 'top-20' : 'top-16'}`}>
           {events.map(event => (
-            <div key={event.localKey} className="live-reaction-float flex max-w-full items-center gap-2 rounded-full px-3 py-2 shadow-xl" style={{ background: dark ? '#211D39EE' : '#FFFFFFF2', border: `1px solid ${dark ? '#3A345B' : '#E8E5F4'}` }}>
-              <span className="text-2xl" aria-hidden="true">{event.reaction}</span>
-              <span className="truncate text-xs font-extrabold" style={{ color: dark ? '#F4F1FF' : '#18171F' }}>{event.team_name}</span>
+            <div key={event.localKey} className="live-reaction-float flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1.5 shadow-lg" style={{ background: dark ? '#211D39EE' : '#FFFFFFF2', border: `1px solid ${dark ? '#3A345B' : '#E8E5F4'}` }}>
+              <span className="text-lg" aria-hidden="true">{event.reaction}</span>
+              <span className="truncate text-[10px] font-extrabold" style={{ color: dark ? '#F4F1FF' : '#18171F' }}>{event.team_name}</span>
             </div>
           ))}
         </div>
       )}
 
       {canReact && (
-        <div className="fixed bottom-24 left-4 z-40 flex flex-col items-start gap-2 sm:left-5 md:bottom-4">
+        <div className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-3 z-40 flex flex-col items-start gap-2 sm:left-4">
           {pickerOpen && (
             <div aria-label="Send a reaction" className="flex gap-0.5 rounded-2xl border border-[#E8E5F4] bg-white/95 p-1.5 shadow-xl backdrop-blur">
               {REACTIONS.map(reaction => (

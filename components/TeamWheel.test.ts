@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { wheelLandingFraction } from './TeamWheel'
+import { wheelLandingFraction, wheelSpeedAtElapsed } from './TeamWheel'
 
 describe('wheelLandingFraction', () => {
   it('is deterministic across host and player devices', () => {
@@ -13,5 +13,15 @@ describe('wheelLandingFraction', () => {
       expect(position).toBeGreaterThanOrEqual(0.04)
       expect(position).toBeLessThanOrEqual(0.96)
     }
+  })
+})
+
+describe('wheelSpeedAtElapsed', () => {
+  it('pauses, accelerates, then holds its fast cruising speed', () => {
+    expect(wheelSpeedAtElapsed(999)).toBe(0)
+    expect(wheelSpeedAtElapsed(1600)).toBeGreaterThan(0)
+    expect(wheelSpeedAtElapsed(1600)).toBeLessThan(2.9)
+    expect(wheelSpeedAtElapsed(2200)).toBe(2.9)
+    expect(wheelSpeedAtElapsed(5000)).toBe(2.9)
   })
 })

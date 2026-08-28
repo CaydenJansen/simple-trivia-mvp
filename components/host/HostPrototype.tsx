@@ -664,8 +664,12 @@ function JoinCodeButton({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        style={{ border: `1px solid ${dark ? C.liveLine : C.line}`, color: dark ? C.liveText : C.ink }}
-        className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition-colors hover:border-violet hover:text-violet ${className}`}
+        style={{
+          background: dark ? '#2A2444' : 'transparent',
+          border: `1px solid ${dark ? '#8178A8' : C.line}`,
+          color: dark ? '#FFFFFF' : C.ink,
+        }}
+        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition hover:border-violet hover:brightness-110 ${className}`}
       >
         <svg aria-hidden="true" width="13" height="13" viewBox="0 0 13 13" fill="none" className="shrink-0">
           <rect x="0.75" y="0.75" width="4.25" height="4.25" rx="0.6" stroke="currentColor" strokeWidth="1.5" />

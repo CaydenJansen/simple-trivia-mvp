@@ -25,6 +25,16 @@ export function wheelLandingFraction(key: string) {
   return 0.04 + ((hash >>> 0) / 4294967295) * 0.92
 }
 
+export function wheelSpeedAtElapsed(elapsedMs: number) {
+  const pauseMs = 1000
+  const accelerationMs = 1200
+  const maximumSpeed = 2.9
+  if (elapsedMs <= pauseMs) return 0
+  const progress = Math.min(1, (elapsedMs - pauseMs) / accelerationMs)
+  const eased = progress * progress * (3 - (2 * progress))
+  return maximumSpeed * eased
+}
+
 export default function TeamWheel({ teamNames, spinning = false, winnerName = null, landingKey = null, dark = false, compact = false, onSettled }: TeamWheelProps) {
   // Every device derives the same slice order, independent of Realtime row order.
   const names = teamNames.length > 0
@@ -38,6 +48,8 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
   const wheelRef = useRef<HTMLDivElement>(null)
   const rotationRef = useRef(0)
   const wasSpinningRef = useRef(false)
+  const spinStartedAtRef = useRef<number | null>(null)
+  const spinKeyRef = useRef<string | null>(null)
   const [selectedName, setSelectedName] = useState(names[0])
   const background = names.map((_, index) => {
     const start = index * slice
@@ -62,11 +74,16 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
     if (spinning) {
       wasSpinningRef.current = true
       wheel.style.transition = 'none'
+      if (spinKeyRef.current !== landingKey || spinStartedAtRef.current === null) {
+        spinKeyRef.current = landingKey
+        spinStartedAtRef.current = null
+      }
       let previous: number | null = null
-      const cruisingSpeed = 1.45
       const animate = (now: number) => {
+        if (spinStartedAtRef.current === null) spinStartedAtRef.current = now
         const elapsed = previous === null ? 16 : Math.min(40, now - previous)
-        const nextRotation = rotationRef.current + (elapsed * cruisingSpeed)
+        const phaseElapsed = now - spinStartedAtRef.current
+        const nextRotation = rotationRef.current + (elapsed * wheelSpeedAtElapsed(phaseElapsed))
         previous = now
         updateWheel(nextRotation)
         frame = requestAnimationFrame(animate)
@@ -78,7 +95,7 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
       const targetMod = ((restingRotation % 360) + 360) % 360
       const shouldSettle = wasSpinningRef.current
       const duration = 8000
-      const cruisingSpeed = 1.45
+      const cruisingSpeed = 2.9
       // A cubic ease starts at 3 * distance / duration. Choose the number of
       // turns so settling begins at the existing cruise speed, then only slows.
       const idealDistance = cruisingSpeed * duration / 3
@@ -112,7 +129,7 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
     }
 
     return () => { cancelled = true; cancelAnimationFrame(frame) }
-  }, [namesKey, onSettled, restingRotation, slice, spinning, winnerIndex])
+  }, [landingKey, namesKey, onSettled, restingRotation, slice, spinning, winnerIndex])
 
   return (
     <div className="flex flex-col items-center">
