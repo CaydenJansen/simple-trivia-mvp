@@ -8,7 +8,7 @@ export default function BrandWordmark({ dark = false, compact = false, className
   return (
     <span
       aria-label="Good Trivia Company"
-      className={`inline-flex flex-col items-start whitespace-nowrap font-extrabold tracking-tight ${className}`}
+      className={`inline-flex flex-col items-center whitespace-nowrap font-extrabold tracking-tight ${className}`}
       style={{ color: dark ? '#F4F1FF' : '#18171F' }}
     >
       <span className="leading-none"><span style={{ color: '#7C3AED' }}>Good</span><span>&nbsp;Trivia</span></span>

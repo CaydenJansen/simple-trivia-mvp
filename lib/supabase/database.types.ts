@@ -929,6 +929,10 @@ export type Database = {
       }
     }
     Functions: {
+      start_live_game: {
+        Args: { p_game_id: string; p_answer_editing_allowed?: boolean }
+        Returns: Database['public']['Tables']['games']['Row']
+      }
       prepare_tie_show_game: {
         Args: { p_resolution_id: string; p_game_type: string; p_prompt?: string | null; p_correct_number?: number | null }
         Returns: Database['public']['Tables']['game_show_games']['Row']

@@ -6245,43 +6245,11 @@ function Lobby({ go }: { go: Go }) {
         throw gameError ?? new Error('Game not found')
       }
 
-      const [firstQuestionResult, firstContentResult, firstShowGameResult] = await Promise.all([
-        supabase.from('game_questions').select('question_key, item_position').eq('game_id', game.id).order('item_position', { ascending: true }).limit(1).maybeSingle(),
-        supabase.from('game_content_screens').select('screen_key, item_position').eq('game_id', game.id).order('item_position', { ascending: true }).limit(1).maybeSingle(),
-        supabase.from('game_show_games').select('show_game_key, item_position').eq('game_id', game.id).order('item_position', { ascending: true }).limit(1).maybeSingle(),
-      ])
-      const sequenceError = firstQuestionResult.error ?? firstContentResult.error ?? firstShowGameResult.error
-      if (sequenceError) throw sequenceError
-      const firstItem = [
-        firstQuestionResult.data ? { kind: 'question' as const, key: firstQuestionResult.data.question_key, position: firstQuestionResult.data.item_position } : null,
-        firstContentResult.data ? { kind: 'content' as const, key: firstContentResult.data.screen_key, position: firstContentResult.data.item_position } : null,
-        firstShowGameResult.data ? { kind: 'show-game' as const, key: firstShowGameResult.data.show_game_key, position: firstShowGameResult.data.item_position } : null,
-      ].filter((item): item is NonNullable<typeof item> => item !== null).sort((a, b) => a.position - b.position)[0]
-      if (!firstItem) throw new Error('This show has no playable content')
-
-      const { error: clearError } = await supabase
-        .from('submissions')
-        .delete()
-        .eq('game_id', game.id)
-
-      if (clearError) throw clearError
-
-      const { error: scoreError } = await supabase
-        .from('teams')
-        .update({ score: 0 })
-        .eq('game_id', game.id)
-
-      if (scoreError) throw scoreError
-
-      await updateLiveGame({
-        status: 'live',
-        current_screen: firstItem.kind === 'question' ? 'round-start' : firstItem.kind === 'content' ? 'content-screen' : 'show-game',
-        answer_phase: firstItem.kind === 'question' ? 'open' : 'closed',
-        answer_editing_allowed: firstItem.kind === 'question' && submittedAnswersEditableFromSettings(lobbySettings),
-        current_question_key: firstItem.kind === 'question' ? firstItem.key : null,
-        current_content_screen_key: firstItem.kind === 'content' ? firstItem.key : null,
-        current_show_game_key: firstItem.kind === 'show-game' ? firstItem.key : null,
+      const { error: startGameError } = await supabase.rpc('start_live_game', {
+        p_game_id: game.id,
+        p_answer_editing_allowed: submittedAnswersEditableFromSettings(lobbySettings),
       })
+      if (startGameError) throw startGameError
 
       go('live-question')
     } catch (error) {
