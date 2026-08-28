@@ -16,7 +16,7 @@ export function balloonProgress(sizeUnits: number) {
 }
 
 function balloonPixelSize(entry: BigBalloonEntry, hero = false) {
-  return (hero ? 112 : 42) + balloonProgress(entry.size_units) * (hero ? 152 : 54)
+  return (hero ? 96 : 38) + balloonProgress(entry.size_units) * (hero ? 126 : 48)
 }
 
 export function balloonComparisonSizes(own: BigBalloonEntry, winner: BigBalloonEntry) {
@@ -81,16 +81,16 @@ export default function BigBalloon({
     return (
       <div className="mt-6 flex w-full max-w-md flex-col items-center">
         <style>{BALLOON_KEYFRAMES}</style>
-        {showLosingComparison && winner ? <div className="flex h-[280px] w-full items-end justify-center gap-7 pb-5">
+        {showLosingComparison && winner ? <div className="flex h-[240px] w-full items-end justify-center gap-7 pb-4">
           <div className="flex min-w-0 flex-1 flex-col items-center">
-            <div className="flex h-52 items-end justify-center"><BalloonGraphic entry={own} dark={dark} hero sizeOverride={comparisonSizes?.own} /></div>
+            <div className="flex h-44 items-end justify-center"><BalloonGraphic entry={own} dark={dark} hero sizeOverride={comparisonSizes?.own} /></div>
             <p style={{ color: sub }} className="mt-3 text-xs font-black uppercase tracking-wider">Your balloon</p>
           </div>
           <div className="flex min-w-0 flex-1 flex-col items-center">
-            <div className="flex h-52 items-end justify-center"><BalloonGraphic entry={winner} dark={dark} hero sizeOverride={comparisonSizes?.winner} /></div>
+            <div className="flex h-44 items-end justify-center"><BalloonGraphic entry={winner} dark={dark} hero sizeOverride={comparisonSizes?.winner} /></div>
             <p style={{ color: '#059669' }} className="mt-3 text-xs font-black uppercase tracking-wider">Winning balloon</p>
           </div>
-        </div> : <div className="flex h-[310px] w-full items-end justify-center pb-5"><BalloonGraphic entry={own} dark={dark} hero /></div>}
+        </div> : <div className="flex h-[250px] w-full items-end justify-center pb-4"><BalloonGraphic entry={own} dark={dark} hero /></div>}
         {ownStatus === 'popped' ? <><h2 style={{ color: '#ef4444' }} className="text-3xl font-black">POP!</h2><p style={{ color: sub }} className="mt-2 font-semibold">Your balloon got too big. Watch the others finish.</p></>
           : ownStatus === 'locked' ? <><h2 style={{ color: text }} className="text-2xl font-black">Balloon locked in</h2><p style={{ color: sub }} className="mt-2 font-semibold">Hands off—now see if it’s big enough.</p></>
           : <button

@@ -2826,6 +2826,7 @@ function ShowGame() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load()
     const channel = supabase.channel(`player-show-game-${gameId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_games', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_presses', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_choices', filter: `game_id=eq.${gameId}` }, () => { void load() })
@@ -2839,7 +2840,7 @@ function ShowGame() {
   }, [load])
 
   useEffect(() => {
-    if (!showGame || (!isEliminationShowGame(showGame.game_type) && showGame.game_type !== 'big-balloon') || showGame.status !== 'open') return
+    if (!showGame?.explode_at || showGame.status !== 'open') return
     const timer = window.setInterval(() => setShowGameNow(Date.now()), 200)
     return () => window.clearInterval(timer)
   }, [showGame])
@@ -2960,6 +2961,7 @@ function ShowGame() {
   const latestBombPressTeam = liveTeams.find(team => team.id === latestBombPress?.team_id) ?? null
   const showGameOutcome = exploded && (!isWheel || wheelSettled)
   const eliminationSecondsRemaining = Math.max(0, Math.ceil(((showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow) - showGameNow) / 1000))
+  const bombSecondsRemaining = isBomb ? eliminationSecondsRemaining : 0
   const teamIsAlive = teamId ? eliminationState.aliveTeamIds.includes(teamId) : false
   const isTieShowGame = Boolean(showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) && typeof (showGame.settings as Record<string, Json>).tie_resolution_id === 'string')
 
@@ -3033,14 +3035,14 @@ function ShowGame() {
           choosing={choiceBusy}
           secondsRemaining={eliminationSecondsRemaining}
           onChoose={choice => { void chooseEliminationOption(choice) }}
-        /> : isWheel ? <div className="mt-7"><TeamWheel teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
+        /> : isWheel ? <div className="mt-5"><TeamWheel compact teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
           : isBigBalloon ? <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
-          : <div className={`mt-7 text-8xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
-        {isBomb && showGame?.status === 'open' && <div className="mt-6 w-full max-w-sm space-y-3">
-          <div style={{ background: '#fff1f2', border: '2px solid #fb7185', color: '#9f1239' }} className="rounded-2xl px-5 py-4 text-left">
-            <p className="text-sm font-black uppercase tracking-wider">The bomb could explode at any moment!</p>
-            <p className="mt-1 text-sm font-bold leading-5">Make sure you press soon or you won’t have any chance of winning.</p>
-          </div>
+          : <div className={`mt-5 text-6xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
+        {isBomb && showGame?.status === 'open' && <div className="mt-4 w-full max-w-sm space-y-2">
+          {bombSecondsRemaining <= 10 && <div style={{ background: '#fff1f2', border: '1px solid #fb7185', color: '#9f1239' }} className="rounded-xl px-4 py-2.5 text-left">
+            <p className="text-xs font-black uppercase tracking-wider">The bomb could explode at any moment!</p>
+            <p className="mt-0.5 text-xs font-bold leading-4">Press soon or you won’t have a chance of winning.</p>
+          </div>}
           {latestBombPress && latestBombPressTeam && <div key={latestBombPress.pressed_at} style={{ background: C.violetPale, border: `1px solid ${C.violet}40`, color: C.violet }} className="animate-pulse rounded-xl px-4 py-3 text-sm font-black">
             {latestBombPressTeam.name} has pressed it!
           </div>}
@@ -3070,9 +3072,9 @@ function ShowGame() {
             <p style={{ color: C.sub }} className="mt-2">Now hope nobody presses after you…</p>
           </div>
         ) : (
-          <div className="mt-7 w-full max-w-sm">
-            <p style={{ color: C.sub }} className="mb-5 text-base leading-6">Press once. Be the last team to press before the bomb explodes.</p>
-            <button onClick={() => void press()} disabled={pressing || !showGame || showGame.status !== 'open'} style={{ background: C.violet, boxShadow: '0 12px 30px rgba(124,58,237,.35)' }} className="w-full rounded-3xl px-8 py-7 text-2xl font-black text-white active:scale-95 disabled:opacity-50">{pressing ? 'PRESSING…' : 'PRESS ME'}</button>
+          <div className="mt-5 w-full max-w-sm">
+            <p style={{ color: C.sub }} className="mb-3 text-sm leading-5">Press once. Be the last team to press before the bomb explodes.</p>
+            <button onClick={() => void press()} disabled={pressing || !showGame || showGame.status !== 'open'} style={{ background: C.violet, boxShadow: '0 12px 30px rgba(124,58,237,.35)' }} className="w-full rounded-2xl px-8 py-5 text-xl font-black text-white active:scale-95 disabled:opacity-50">{pressing ? 'PRESSING…' : 'PRESS ME'}</button>
           </div>
         ))}</>}
         {error && <p style={{ color: C.stop }} className="mt-5 text-sm font-bold">{error}</p>}

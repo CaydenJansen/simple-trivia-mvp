@@ -6373,7 +6373,7 @@ function Lobby({ go }: { go: Go }) {
               <QrGraphic dataUrl={lobbyQrDataUrl} size={176} />
             </div>
             <div className="flex gap-2">
-              <JoinCodeButton label="Display QR" />
+              <JoinCodeButton dark label="Display QR" />
               <Btn v="secondary" sz="sm" onClick={() => downloadGameQr(lobbyQrDataUrl, lobbyCode)} disabled={!lobbyQrDataUrl}>Download QR</Btn>
             </div>
           </div>
@@ -8103,7 +8103,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         {autoRunControls}
         <div className="flex flex-1 items-start min-h-0">
         <main className="flex min-w-0 flex-1 items-center justify-center px-6 py-6">
-          <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-5xl rounded-3xl p-6 text-center shadow-2xl">
+          <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-5xl rounded-3xl p-5 text-center shadow-2xl">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{showGame ? showGameLabel(showGame.game_type) : 'Game'}</p>
             <h1 className="mt-1 text-3xl font-black">{showGame?.title ?? 'Game'}</h1>
             <p style={{ color: C.liveDim }} className="mx-auto mt-2 max-w-xl text-base font-semibold">
@@ -8148,8 +8148,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             ) : isWheel ? (
               <div className="mt-5"><TeamWheel dark compact teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
             ) : (
-              <><div className={`mt-7 text-9xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
-              <div style={{ background: C.liveLine }} className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full"><div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" /></div></>
+              <><div className={`mt-5 text-6xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
+              <div style={{ background: C.liveLine }} className="mx-auto mt-3 h-2 max-w-sm overflow-hidden rounded-full"><div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" /></div></>
             )}
             {!showingShowGameInstructions && !isAudienceQuestion && (showGameWinner ? (
               <div className="mt-7">

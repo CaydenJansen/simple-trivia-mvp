@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { loadEnvConfig } from '@next/env'
@@ -15,12 +15,13 @@ import { readQuestionLibraryWorkbook } from '../lib/trivia/question-library-work
 
 function usage() {
   return [
-    'Usage: npm run questions:import -- <workbook.xlsx> [--apply] [--replace] [--sql-output <file.sql>]',
+    'Usage: npm run questions:import -- <workbook.xlsx> [--apply] [--replace] [--sql-output <file.sql>] [--sql-chunk-dir <directory>]',
     '',
     'The default is a dry run: the workbook is parsed and validated, but nothing is written.',
     'Use --apply only after the dry run has no errors.',
     'Use --replace to treat the workbook as the complete live library; omitted source rows are archived.',
     'Use --sql-output when applying through the Supabase SQL editor instead of a local service-role key.',
+    'Use --sql-chunk-dir when the generated SQL is too large for the Supabase SQL editor; run the numbered files in order.',
   ].join('\n')
 }
 
@@ -35,10 +36,21 @@ async function main() {
   const replace = args.includes('--replace')
   const sqlOutputIndex = args.indexOf('--sql-output')
   const sqlOutput = sqlOutputIndex >= 0 ? args[sqlOutputIndex + 1] : null
-  const unknownFlags = args.filter(arg => arg.startsWith('--') && !['--apply', '--replace', '--sql-output'].includes(arg))
-  const fileArgs = args.filter((arg, index) => !arg.startsWith('--') && index !== sqlOutputIndex + 1)
+  const sqlChunkDirIndex = args.indexOf('--sql-chunk-dir')
+  const sqlChunkDir = sqlChunkDirIndex >= 0 ? args[sqlChunkDirIndex + 1] : null
+  const knownFlags = ['--apply', '--replace', '--sql-output', '--sql-chunk-dir']
+  const unknownFlags = args.filter(arg => arg.startsWith('--') && !knownFlags.includes(arg))
+  const valueIndexes = new Set([sqlOutputIndex + 1, sqlChunkDirIndex + 1].filter(index => index > 0))
+  const fileArgs = args.filter((arg, index) => !arg.startsWith('--') && !valueIndexes.has(index))
 
-  if (unknownFlags.length > 0 || fileArgs.length !== 1 || (sqlOutputIndex >= 0 && !sqlOutput) || (sqlOutput && apply)) {
+  if (
+    unknownFlags.length > 0
+    || fileArgs.length !== 1
+    || (sqlOutputIndex >= 0 && !sqlOutput)
+    || (sqlChunkDirIndex >= 0 && !sqlChunkDir)
+    || (sqlOutput && sqlChunkDir)
+    || ((sqlOutput || sqlChunkDir) && apply)
+  ) {
     console.error(usage())
     process.exitCode = 1
     return
@@ -81,6 +93,71 @@ async function main() {
 
   const bytes = await readFile(filePath)
   const sha256 = createHash('sha256').update(bytes).digest('hex')
+
+  if (sqlChunkDir) {
+    const outputDirectory = path.resolve(sqlChunkDir)
+    const payload = JSON.stringify(result.plan)
+    const chunkSize = 180_000
+    const chunks = Array.from({ length: Math.ceil(payload.length / chunkSize) }, (_, index) => (
+      payload.slice(index * chunkSize, (index + 1) * chunkSize)
+    ))
+    const batchKey = sha256.slice(0, 24)
+    const escapedFileName = path.basename(filePath).replaceAll("'", "''")
+    const functionName = replace ? 'replace_question_library_batch' : 'import_question_library_batch'
+    const activateArgument = replace ? ',\n    true' : ''
+    const stagingTable = 'public._question_library_import_staging'
+
+    await mkdir(outputDirectory, { recursive: true })
+    await writeFile(path.join(outputDirectory, '00-setup.sql'), [
+      'begin;',
+      `create table if not exists ${stagingTable} (`,
+      '  batch_key text not null,',
+      '  chunk_index integer not null,',
+      '  payload_chunk text not null,',
+      '  primary key (batch_key, chunk_index)',
+      ');',
+      `alter table ${stagingTable} enable row level security;`,
+      `revoke all on ${stagingTable} from anon, authenticated;`,
+      `delete from ${stagingTable} where batch_key = '${batchKey}';`,
+      'commit;',
+      '',
+    ].join('\n'), 'utf8')
+
+    for (const [index, chunk] of chunks.entries()) {
+      const chunkTag = `$question_chunk_${batchKey}_${index}$`
+      const fileNumber = String(index + 1).padStart(2, '0')
+      await writeFile(path.join(outputDirectory, `${fileNumber}-payload.sql`), [
+        `insert into ${stagingTable} (batch_key, chunk_index, payload_chunk)`,
+        `values ('${batchKey}', ${index}, ${chunkTag}${chunk}${chunkTag})`,
+        'on conflict (batch_key, chunk_index) do update',
+        'set payload_chunk = excluded.payload_chunk;',
+        '',
+      ].join('\n'), 'utf8')
+    }
+
+    const finalNumber = String(chunks.length + 1).padStart(2, '0')
+    await writeFile(path.join(outputDirectory, `${finalNumber}-apply.sql`), [
+      'begin;',
+      'with import_payload as (',
+      `  select string_agg(payload_chunk, '' order by chunk_index)::jsonb as document`,
+      `  from ${stagingTable}`,
+      `  where batch_key = '${batchKey}'`,
+      ')',
+      `select public.${functionName}(`,
+      `  '${escapedFileName}',`,
+      `  '${sha256}',`,
+      `  import_payload.document${activateArgument}`,
+      ')',
+      'from import_payload;',
+      `drop table ${stagingTable};`,
+      'commit;',
+      '',
+    ].join('\n'), 'utf8')
+
+    console.log(`Validated chunked SQL written to ${outputDirectory} (${chunks.length + 2} files).`)
+    console.log('Run the numbered files in order. Nothing was applied to the database.')
+    return
+  }
 
   if (sqlOutput) {
     const outputPath = path.resolve(sqlOutput)

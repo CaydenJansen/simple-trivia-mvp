@@ -63,7 +63,7 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
       wasSpinningRef.current = true
       wheel.style.transition = 'none'
       let previous: number | null = null
-      const cruisingSpeed = 0.62
+      const cruisingSpeed = 1.45
       const animate = (now: number) => {
         const elapsed = previous === null ? 16 : Math.min(40, now - previous)
         const nextRotation = rotationRef.current + (elapsed * cruisingSpeed)
@@ -78,12 +78,12 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
       const targetMod = ((restingRotation % 360) + 360) % 360
       const shouldSettle = wasSpinningRef.current
       const duration = 8000
-      const cruisingSpeed = 0.62
+      const cruisingSpeed = 1.45
       // A cubic ease starts at 3 * distance / duration. Choose the number of
       // turns so settling begins at the existing cruise speed, then only slows.
       const idealDistance = cruisingSpeed * duration / 3
       const targetOffset = (targetMod - currentMod + 360) % 360
-      const fullTurns = shouldSettle ? Math.max(2, Math.round((idealDistance - targetOffset) / 360)) : 0
+      const fullTurns = shouldSettle ? Math.max(2, Math.floor((idealDistance - targetOffset) / 360)) : 0
       const target = current + targetOffset + (360 * fullTurns)
       wasSpinningRef.current = false
       wheel.style.transition = 'none'
@@ -120,7 +120,7 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
         <p style={{ color: dark ? '#A9A4BF' : '#77738C' }} className="text-[10px] font-black uppercase tracking-[0.18em]">Under the pointer</p>
         <p className={`${compact ? 'text-base' : 'mt-1 text-xl'} truncate font-black`}>{selectedName}</p>
       </div>
-      <div className={`relative ${compact ? 'h-56 w-56 sm:h-64 sm:w-64' : 'h-72 w-72 sm:h-96 sm:w-96'}`}>
+      <div className={`relative ${compact ? 'h-44 w-44 sm:h-52 sm:w-52' : 'h-56 w-56 sm:h-64 sm:w-64'}`}>
         <div className="absolute left-1/2 top-[-10px] z-20 -translate-x-1/2 border-x-[14px] border-t-[24px] border-x-transparent border-t-rose-500 drop-shadow-lg" />
         <div
           ref={wheelRef}
