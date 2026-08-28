@@ -5,6 +5,7 @@ export type QuizReadinessInput = {
   rounds: Array<{
     questionCount: number
     contentScreenTitles: string[]
+    pointGameCount?: number
   }>
   tiebreakers: Array<{
     prompt: string
@@ -21,12 +22,10 @@ export type QuizReadiness = {
 export function checkQuizReadiness(input: QuizReadinessInput): QuizReadiness {
   const blockers: string[] = []
   const questionCount = input.rounds.reduce((total, round) => total + round.questionCount, 0)
+  const pointGameCount = input.rounds.reduce((total, round) => total + (round.pointGameCount ?? 0), 0)
 
   if (!input.title.trim()) blockers.push('Add a quiz title.')
-  if (questionCount === 0) blockers.push('Add at least one scored question.')
-  if (input.rounds.some(round => round.contentScreenTitles.length > 0 && round.questionCount === 0)) {
-    blockers.push('Each round with a content screen needs at least one scored question.')
-  }
+  if (questionCount === 0 && pointGameCount === 0) blockers.push('Add at least one scored question or points game.')
   if (input.rounds.some(round => round.contentScreenTitles.some(title => !title.trim()))) {
     blockers.push('Give every content screen a title.')
   }

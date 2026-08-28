@@ -82,32 +82,24 @@ export default function EliminationShowGame({
         {state.roundPhase === 'choosing' ? `Positions lock in ${secondsRemaining}s` : 'Positions locked—the rock is falling!'}
       </p>
       <div style={{ background: panel, border: `1px solid ${line}` }} className="relative h-56 overflow-hidden rounded-3xl">
-        {[0, 1, 2].map(lane => <div key={lane} style={{ left: `${lane * 33.333}%`, borderRight: lane < 2 ? `1px dashed ${line}` : undefined }} className="absolute inset-y-0 w-1/3">
+        {[0, 1, 2].map(lane => <button key={lane} type="button" disabled={!ownTeamId || !canChoose || choosing || state.roundPhase !== 'choosing' || !alive.has(ownTeamId)} onClick={() => onChoose?.(String(lane))}
+          aria-label={`Move to lane ${lane + 1}`}
+          style={{ left: `${lane * 33.333}%`, borderRight: lane < 2 ? `1px dashed ${line}` : undefined, background: ownTeamId && (state.positions[ownTeamId] ?? 1) === lane ? 'rgba(124,58,237,.09)' : 'transparent' }}
+          className={`absolute inset-y-0 w-1/3 border-0 transition-colors ${ownTeamId && canChoose ? 'cursor-pointer hover:bg-violet-500/10' : 'cursor-default'}`}>
           <span style={{ color: dim }} className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-black uppercase">Lane {lane + 1}</span>
-        </div>)}
+        </button>)}
         {rockLane >= 0 && <div aria-label={`Rock falling into lane ${rockLane + 1}`} className="rock-drop absolute top-2 z-20 -translate-x-1/2 text-6xl" style={{ left: `${(rockLane + 0.5) * 33.333}%` }}>🪨</div>}
-        {teams.map((team, index) => {
+        {teams.filter(team => alive.has(team.id)).map((team, index) => {
           const lane = state.positions[team.id] ?? 1
-          const eliminated = !alive.has(team.id)
           const own = team.id === ownTeamId
-          return <div key={team.id} title={team.name} className="absolute top-[58%] z-10 -translate-x-1/2 -translate-y-1/2 transition-[left,opacity,transform] duration-300 ease-out"
-            style={{ left: `${(lane + 0.5) * 33.333}%`, marginTop: (index % 4) * 10 - 15, opacity: eliminated ? 0.2 : own ? 1 : 0.56 }}>
+          return <div key={team.id} title={team.name} className="pointer-events-none absolute top-[58%] z-10 -translate-x-1/2 -translate-y-1/2 transition-[left,opacity,transform] duration-300 ease-out"
+            style={{ left: `${(lane + 0.5) * 33.333}%`, marginTop: (index % 4) * 10 - 15, opacity: own ? 1 : 0.56 }}>
             <div style={{ background: own ? '#7C3AED' : dark ? '#817A99' : '#9CA3AF', color: 'white', border: own ? '3px solid #C4B5FD' : '2px solid rgba(255,255,255,.75)' }} className={`${own ? 'h-12 w-12 text-xl' : 'h-8 w-8 text-sm'} flex items-center justify-center rounded-full font-black shadow-lg`}>{team.name.slice(0, 1).toUpperCase()}</div>
             <p style={{ color: text }} className={`${own ? 'max-w-28 font-black' : 'max-w-20'} mt-1 truncate text-center text-[10px]`}>{team.name}</p>
           </div>
         })}
       </div>
-      {ownTeamId && canChoose && state.roundPhase === 'choosing' && alive.has(ownTeamId) && (
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          {[0, 1, 2].map(lane => (
-            <button key={lane} type="button" disabled={choosing} onClick={() => onChoose?.(String(lane))}
-              style={{ background: String(state.positions[ownTeamId] ?? 1) === String(lane) ? '#7C3AED' : panel, color: String(state.positions[ownTeamId] ?? 1) === String(lane) ? 'white' : text, border: `2px solid ${String(state.positions[ownTeamId] ?? 1) === String(lane) ? '#7C3AED' : line}` }}
-              className="cursor-pointer rounded-xl px-2 py-3 text-sm font-black transition active:scale-95 disabled:opacity-60">
-              Lane {lane + 1}
-            </button>
-          ))}
-        </div>
-      )}
+      {ownTeamId && canChoose && state.roundPhase === 'choosing' && alive.has(ownTeamId) && <p style={{ color: dim }} className="mt-3 text-center text-xs font-semibold">Tap a lane to move there. Your position locks when the timer ends.</p>}
     </div>
   )
 }

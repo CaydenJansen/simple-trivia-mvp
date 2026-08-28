@@ -31,7 +31,7 @@ import {
 } from "@/lib/trivia/team-pin";
 import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { autoRunClockColor, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
-import { suggestedTeamName } from "@/lib/trivia/team-name-suggestions";
+import { nextSuggestedTeamName } from "@/lib/trivia/team-name-suggestions";
 import { showGameRewardDescription, showGameRewardFromSettings, showGameWinnerMessage } from "@/lib/trivia/show-game-rewards";
 import { correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
 import { playersSeeCorrectnessPercentage } from "@/lib/trivia/correctness-visibility";
@@ -49,6 +49,7 @@ import {
   type ShowGameType,
 } from "@/lib/trivia/elimination-show-games";
 import { audienceQuestionFromSettings } from "@/lib/trivia/audience-question";
+import { formatNumericResponse, formatNumericResponseInput, parseNumericResponseInput } from "@/lib/trivia/numeric-response";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -1507,6 +1508,13 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   const [joining, setJoining] = useState(false)
   const [gameTitle, setGameTitle] = useState('Trivia game')
   const [approvalRequired, setApprovalRequired] = useState(true)
+  const [teamNamePlaceholder] = useState(() => {
+    if (typeof window === 'undefined') return nextSuggestedTeamName(null)
+    const storageKey = 'good-trivia-last-team-name-suggestion'
+    const suggestion = nextSuggestedTeamName(window.localStorage.getItem(storageKey))
+    window.localStorage.setItem(storageKey, suggestion)
+    return suggestion
+  })
 
   useEffect(() => {
     const storedTitle = localStorage.getItem('simple-trivia-game-title')
@@ -1620,7 +1628,7 @@ async function handleJoin() {
             event.preventDefault()
             void handleJoin()
           }}
-          placeholder={suggestedTeamName(gameTitle)}
+          placeholder={teamNamePlaceholder}
           style={{
             border: `2px solid ${taken ? C.stop : name ? C.violet : C.line}`,
             borderRadius: 14,
@@ -2725,6 +2733,7 @@ type PlayerShowGame = {
 }
 
 type DatabaseAudienceResponse = Database['public']['Tables']['game_show_game_responses']['Row']
+type PlayerAudienceResponse = { team_id: string; team_name: string; response_text: string; numeric_response: number | null; submitted_at: string }
 
 function ShowGame() {
   const snapshot = usePlayerSnapshot()
@@ -2739,6 +2748,7 @@ function ShowGame() {
   const [choiceBusy, setChoiceBusy] = useState(false)
   const [audienceResponse, setAudienceResponse] = useState('')
   const [audienceResponseRow, setAudienceResponseRow] = useState<DatabaseAudienceResponse | null>(null)
+  const [audienceResponses, setAudienceResponses] = useState<PlayerAudienceResponse[]>([])
   const [audienceSubmitting, setAudienceSubmitting] = useState(false)
   const [showGameNow, setShowGameNow] = useState(() => Date.now())
   const [error, setError] = useState<string | null>(null)
@@ -2780,9 +2790,15 @@ function ShowGame() {
         })
         const row = response && typeof response === 'object' && !Array.isArray(response) ? response as DatabaseAudienceResponse : null
         setAudienceResponseRow(row?.id ? row : null)
-        if (row?.response_text) setAudienceResponse(row.response_text)
+        if (row?.response_text) setAudienceResponse(activeShowGame.settings && audienceQuestionFromSettings(activeShowGame.settings).mode === 'closest-number' ? formatNumericResponse(row.response_text) : row.response_text)
+        if (row?.id) {
+          const { data: roomResponses, error: roomError } = await supabase.rpc('get_audience_question_responses', {
+            p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken,
+          })
+          if (!roomError) setAudienceResponses(roomResponses ?? [])
+        } else setAudienceResponses([])
       }
-    } else { setAudienceResponseRow(null); setAudienceResponse('') }
+    } else { setAudienceResponseRow(null); setAudienceResponses([]); setAudienceResponse('') }
   }, [])
 
   useEffect(() => {
@@ -2845,8 +2861,12 @@ function ShowGame() {
     if (!requestId || !requestToken) return
     setAudienceSubmitting(true)
     setError(null)
+    const config = audienceQuestionFromSettings(showGame.settings)
+    const numericValue = config.mode === 'closest-number' ? parseNumericResponseInput(audienceResponse) : null
+    if (config.mode === 'closest-number' && numericValue === null) { setError('Enter a number for this Closest Guess.'); return }
     const { data, error: responseError } = await supabase.rpc('submit_audience_question_response', {
-      p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken, p_response: audienceResponse.trim(),
+      p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken,
+      p_response: config.mode === 'closest-number' ? String(numericValue) : audienceResponse.trim(),
     })
     if (responseError) setError(responseError.message.includes('NUMBER_REQUIRED') ? 'Enter a number for this Closest Guess.' : 'That response did not go through. Try again.')
     else setAudienceResponseRow(data as DatabaseAudienceResponse)
@@ -2874,6 +2894,20 @@ function ShowGame() {
   const showWheelOutcome = exploded && (!isWheel || wheelSettled)
   const eliminationSecondsRemaining = Math.max(0, Math.ceil(((showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow) - showGameNow) / 1000))
   const teamIsAlive = teamId ? eliminationState.aliveTeamIds.includes(teamId) : false
+  const isTieShowGame = Boolean(showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) && typeof (showGame.settings as Record<string, Json>).tie_resolution_id === 'string')
+
+  if (showGame && isTieShowGame && !teamIsEligible) {
+    return (
+      <div className="flex flex-col" style={{ minHeight: '100%' }}>
+        <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round="Final results" question="Tiebreaker" />
+        <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
+          <div style={{ background: C.violetPale, color: C.violet }} className="flex h-16 w-16 items-center justify-center rounded-full text-2xl">⏳</div>
+          <h1 style={{ color: C.ink }} className="mt-5 text-3xl font-black">A tiebreaker is underway</h1>
+          <p style={{ color: C.sub }} className="mt-3 max-w-sm text-base leading-6">The tied teams are settling a final placement. Results will be revealed soon.</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2897,19 +2931,26 @@ function ShowGame() {
           {!teamIsEligible ? <div className="mt-6"><h2 style={{ color: C.ink }} className="text-2xl font-black">Watch the tied teams</h2><p style={{ color: C.sub }} className="mt-2">Only the teams in this final tie are answering.</p></div> : exploded ? <div className="mt-6">
             <h2 style={{ color: audienceResponseRow?.is_winner ? C.go : C.ink }} className="text-3xl font-black">{audienceResponseRow?.is_winner ? showGameWinnerMessage(reward) : 'Another response won'}</h2>
             {audienceResponseRow && <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-5 rounded-2xl px-5 py-4 text-left">
-              <p style={{ color: C.sub }} className="text-xs font-bold uppercase tracking-wider">Your response</p><p style={{ color: C.ink }} className="mt-2 text-lg font-bold">{audienceResponseRow.response_text}</p>
-              {audienceResponseRow.distance_from_correct !== null && <p style={{ color: C.sub }} className="mt-2 text-sm">Distance from correct: {audienceResponseRow.distance_from_correct}</p>}
+              <p style={{ color: C.sub }} className="text-xs font-bold uppercase tracking-wider">Your response</p><p style={{ color: C.ink }} className="mt-2 text-lg font-bold">{audienceQuestion.mode === 'closest-number' ? formatNumericResponse(audienceResponseRow.response_text) : audienceResponseRow.response_text}</p>
+              {audienceResponseRow.distance_from_correct !== null && <p style={{ color: C.sub }} className="mt-2 text-sm">Distance from correct: {formatNumericResponse(audienceResponseRow.distance_from_correct)}</p>}
             </div>}
-            {audienceQuestion.mode === 'closest-number' && audienceQuestion.correctNumber !== null && <p style={{ color: C.go }} className="mt-4 font-bold">Correct number: {audienceQuestion.correctNumber}</p>}
+            {audienceQuestion.mode === 'closest-number' && audienceQuestion.correctNumber !== null && <p style={{ color: C.go }} className="mt-4 font-bold">Correct number: {formatNumericResponse(audienceQuestion.correctNumber)}</p>}
             <div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div>
           </div> : audienceResponseRow ? <div className="mt-6">
             <div style={{ background: C.violetPale, color: C.violet }} className="mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl">✓</div>
             <h2 style={{ color: C.ink }} className="mt-4 text-2xl font-black">Response locked in</h2>
-            <p style={{ color: C.sub }} className="mt-2">{audienceResponseRow.response_text}</p>
-            <div className="mt-5"><WaitMsg msg="The host is reading the responses…" /></div>
+            <p style={{ color: C.sub }} className="mt-2">{audienceQuestion.mode === 'closest-number' ? formatNumericResponse(audienceResponseRow.response_text) : audienceResponseRow.response_text}</p>
+            <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-6 overflow-hidden rounded-2xl text-left">
+              <p style={{ color: C.violet }} className="px-4 pb-2 pt-4 text-xs font-black uppercase tracking-widest">Everyone’s responses</p>
+              {audienceResponses.map(response => <div key={response.team_id} style={{ borderTop: `1px solid ${C.line}` }} className="flex gap-3 px-4 py-3">
+                <span style={{ color: C.ink }} className="w-28 shrink-0 truncate text-sm font-black">{response.team_name}</span>
+                <span style={{ color: C.sub }} className="min-w-0 flex-1 break-words text-sm font-semibold">{audienceQuestion.mode === 'closest-number' ? formatNumericResponse(response.numeric_response ?? response.response_text) : response.response_text}</span>
+              </div>)}
+            </div>
+            <div className="mt-5"><WaitMsg msg="The host is choosing the result…" /></div>
           </div> : <div className="mt-6">
             <label htmlFor="audience-response" style={{ color: C.sub }} className="mb-2 block text-left text-xs font-black uppercase tracking-wider">Your response</label>
-            <input id="audience-response" type={audienceQuestion.mode === 'closest-number' ? 'number' : 'text'} value={audienceResponse} onChange={event => setAudienceResponse(event.target.value)}
+            <input id="audience-response" type="text" inputMode={audienceQuestion.mode === 'closest-number' ? 'decimal' : 'text'} value={audienceResponse} onChange={event => setAudienceResponse(audienceQuestion.mode === 'closest-number' ? formatNumericResponseInput(event.target.value) : event.target.value)}
               onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(audienceResponse.trim()), () => { void submitAudienceResponse() })}
               placeholder={audienceQuestion.mode === 'closest-number' ? 'Enter your best guess' : 'Write something brilliant…'}
               style={{ border: `2px solid ${C.violet}`, color: C.ink }} className="w-full rounded-2xl bg-white px-4 py-4 text-lg focus:outline-none" />

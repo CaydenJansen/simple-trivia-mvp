@@ -128,6 +128,7 @@ import {
   audienceQuestionSettings,
   type AudienceQuestionMode,
 } from "@/lib/trivia/audience-question";
+import { formatNumericResponse } from "@/lib/trivia/numeric-response";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -2045,6 +2046,7 @@ function QuizBuilder({ go }: { go: Go }) {
     rounds: rounds.map(round => ({
       questionCount: round.questions.length,
       contentScreenTitles: round.contentScreens.map(screen => screen.title),
+      pointGameCount: round.showGames.filter(showGame => showGame.rewardType === 'points' && showGame.rewardPoints > 0).length,
     })),
     tiebreakers: tiebreakers.map(tiebreaker => ({
       prompt: tiebreaker.prompt,
@@ -5318,7 +5320,7 @@ function AutoBuild({ go }: { go: Go }) {
             <input type="checkbox" checked={includeGames} onChange={event => setIncludeGames(event.target.checked)} className="mt-0.5 h-4 w-4 accent-violet" />
             <span>
               <span style={{ color: C.ink }} className="block text-sm font-bold">Include games</span>
-              <span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">Adds one random-chance game at the end of every round. Audience Questions are not added automatically.</span>
+              <span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">Adds one random-chance game at the end of every round.</span>
             </span>
           </label>
 
@@ -6105,13 +6107,12 @@ function HostSetup({ go }: { go: Go }) {
                   ))}
                 </div>
               </div>
-              <p style={{ color: C.sub, borderTop: `1px solid ${C.line}` }} className="pt-3 text-xs">
-                These prize settings will be remembered for your next game.
-              </p>
             </div>
           </SCard>
 
-
+          <p style={{ color: C.sub }} className="text-center text-xs leading-5">
+            These settings will be remembered for your next game.
+          </p>
           <Btn sz="lg" cls="w-full" onClick={handleOpenLobby} disabled={!quiz || openingLobby}>
             {openingLobby ? 'Creating Game…' : 'Open Fresh Lobby →'}
           </Btn>
@@ -6242,17 +6243,19 @@ function Lobby({ go }: { go: Go }) {
         throw gameError ?? new Error('Game not found')
       }
 
-      const { data: firstQuestion, error: questionError } = await supabase
-        .from('game_questions')
-        .select('question_key')
-        .eq('game_id', game.id)
-        .order('position', { ascending: true })
-        .limit(1)
-        .maybeSingle()
-
-      if (questionError || !firstQuestion) {
-        throw questionError ?? new Error('No questions found for this game')
-      }
+      const [firstQuestionResult, firstContentResult, firstShowGameResult] = await Promise.all([
+        supabase.from('game_questions').select('question_key, item_position').eq('game_id', game.id).order('item_position', { ascending: true }).limit(1).maybeSingle(),
+        supabase.from('game_content_screens').select('screen_key, item_position').eq('game_id', game.id).order('item_position', { ascending: true }).limit(1).maybeSingle(),
+        supabase.from('game_show_games').select('show_game_key, item_position').eq('game_id', game.id).order('item_position', { ascending: true }).limit(1).maybeSingle(),
+      ])
+      const sequenceError = firstQuestionResult.error ?? firstContentResult.error ?? firstShowGameResult.error
+      if (sequenceError) throw sequenceError
+      const firstItem = [
+        firstQuestionResult.data ? { kind: 'question' as const, key: firstQuestionResult.data.question_key, position: firstQuestionResult.data.item_position } : null,
+        firstContentResult.data ? { kind: 'content' as const, key: firstContentResult.data.screen_key, position: firstContentResult.data.item_position } : null,
+        firstShowGameResult.data ? { kind: 'show-game' as const, key: firstShowGameResult.data.show_game_key, position: firstShowGameResult.data.item_position } : null,
+      ].filter((item): item is NonNullable<typeof item> => item !== null).sort((a, b) => a.position - b.position)[0]
+      if (!firstItem) throw new Error('This show has no playable content')
 
       const { error: clearError } = await supabase
         .from('submissions')
@@ -6270,11 +6273,12 @@ function Lobby({ go }: { go: Go }) {
 
       await updateLiveGame({
         status: 'live',
-        current_screen: 'round-start',
-        answer_phase: 'open',
-        answer_editing_allowed: submittedAnswersEditableFromSettings(lobbySettings),
-        current_question_key: firstQuestion.question_key,
-        current_content_screen_key: null,
+        current_screen: firstItem.kind === 'question' ? 'round-start' : firstItem.kind === 'content' ? 'content-screen' : 'show-game',
+        answer_phase: firstItem.kind === 'question' ? 'open' : 'closed',
+        answer_editing_allowed: firstItem.kind === 'question' && submittedAnswersEditableFromSettings(lobbySettings),
+        current_question_key: firstItem.kind === 'question' ? firstItem.key : null,
+        current_content_screen_key: firstItem.kind === 'content' ? firstItem.key : null,
+        current_show_game_key: firstItem.kind === 'show-game' ? firstItem.key : null,
       })
 
       go('live-question')
@@ -7434,7 +7438,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
       if (!nextItem) {
         if (!liveGameId) throw new Error('The live game could not be found.')
-        if (autoRunMode === 'round') {
+        if (autoRunMode === 'round' && question) {
           await updateLiveGame({
             current_screen: 'intermission',
             answer_phase: 'closed',
@@ -7554,6 +7558,19 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       }
 
       if (nextItem.roundNumber !== contentScreen.round_number) {
+        if (!question) {
+          if (nextItem.kind === 'show-game') { await prepareShowGame(nextItem.showGame); return }
+          if (nextItem.kind === 'content') {
+            await updateLiveGame({ current_screen: 'content-screen', answer_phase: 'closed', current_content_screen_key: nextItem.content.screen_key })
+            setContentScreen(nextItem.content)
+            return
+          }
+          await updateLiveGame({ current_screen: 'round-start', answer_phase: 'open', current_question_key: nextItem.question.question_key, current_content_screen_key: null })
+          setQuestion(nextItem.question)
+          setGameScreen('round-start')
+          setPhase('open')
+          return
+        }
         await updateLiveGame({
           current_screen: autoRunMode === 'round' ? 'intermission' : roundResultsScreen(leaderboardVisibility),
           answer_phase: 'closed',
@@ -7626,6 +7643,22 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         return
       }
       if (nextItem.roundNumber !== showGame.round_number) {
+        if (!question) {
+          if (nextItem.kind === 'show-game') { await prepareShowGame(nextItem.showGame); return }
+          if (nextItem.kind === 'content') {
+            await updateLiveGame({ current_screen: 'content-screen', answer_phase: 'closed', current_content_screen_key: nextItem.content.screen_key, current_show_game_key: null })
+            setContentScreen(nextItem.content)
+            setShowGame(null)
+            setGameScreen('content-screen')
+            return
+          }
+          await updateLiveGame({ current_screen: 'round-start', answer_phase: 'open', current_question_key: nextItem.question.question_key, current_show_game_key: null })
+          setQuestion(nextItem.question)
+          setShowGame(null)
+          setGameScreen('round-start')
+          setPhase('open')
+          return
+        }
         await updateLiveGame({
           current_screen: roundResultsScreen(leaderboardVisibility),
           answer_phase: 'closed',
@@ -8076,8 +8109,9 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <span style={{ background: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">GAME LIVE</span>
         </header>
         {autoRunControls}
-        <main className="flex flex-1 items-center justify-center px-6 py-6">
-          <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-6 text-center shadow-2xl">
+        <div className="flex flex-1 items-start min-h-0">
+        <main className="flex min-w-0 flex-1 items-center justify-center px-6 py-6">
+          <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-5xl rounded-3xl p-6 text-center shadow-2xl">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{showGame ? showGameLabel(showGame.game_type) : 'Game'}</p>
             <h1 className="mt-1 text-3xl font-black">{showGame?.title ?? 'Game'}</h1>
             <p style={{ color: C.liveDim }} className="mx-auto mt-2 max-w-xl text-base font-semibold">
@@ -8096,20 +8130,21 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   {showGame?.status === 'exploded' && audienceQuestion.mode === 'closest-number' && audienceQuestion.correctNumber !== null && <p className="mt-2 text-sm font-bold text-emerald-400">Correct number: {audienceQuestion.correctNumber}</p>}
                 </div>
                 <div className="mt-4 space-y-2">
-                  {audienceResponses.length === 0 ? <p style={{ color: C.liveDim }} className="py-5 text-center font-semibold">Waiting for responses…</p> : audienceResponses.map(response => {
-                    const team = teams.find(item => item.id === response.team_id)
-                    const selected = selectedAudienceWinnerIds.includes(response.team_id)
-                    const canSelect = showGame?.status === 'open' && audienceQuestion.mode === 'favourite'
-                    return <button key={response.id} type="button" disabled={!canSelect} onClick={() => {
+                  {participatingTeams.map(team => {
+                    const response = audienceResponses.find(item => item.team_id === team.id)
+                    const selected = Boolean(response && selectedAudienceWinnerIds.includes(response.team_id))
+                    const canSelect = Boolean(response && showGame?.status === 'open' && audienceQuestion.mode === 'favourite')
+                    return <button key={team.id} type="button" disabled={!canSelect} onClick={() => {
+                      if (!response) return
                       setSelectedAudienceWinnerIds(current => audienceQuestion.allowMultipleWinners
                         ? current.includes(response.team_id) ? current.filter(id => id !== response.team_id) : [...current, response.team_id]
                         : [response.team_id])
-                    }} style={{ background: selected || response.is_winner ? `${C.go}20` : C.livePanel, border: `1px solid ${selected || response.is_winner ? C.go : C.liveLine}` }}
+                    }} style={{ background: selected || response?.is_winner ? `${C.go}20` : C.livePanel, border: `1px solid ${selected || response?.is_winner ? C.go : C.liveLine}` }}
                       className={`flex w-full items-center gap-4 rounded-xl px-4 py-3 text-left ${canSelect ? 'cursor-pointer hover:bg-white/5' : ''}`}>
-                      <span className="w-36 shrink-0 truncate font-black">{team?.name ?? 'Team'}</span>
-                      <span className="min-w-0 flex-1 font-semibold">{response.response_text}</span>
-                      {response.distance_from_correct !== null && <span style={{ color: C.liveDim }} className="text-sm">Distance {response.distance_from_correct}</span>}
-                      {(selected || response.is_winner) && <span className="font-black text-emerald-400">✓ Winner</span>}
+                      <span className="w-36 shrink-0 truncate font-black">{team.name}</span>
+                      <span className="min-w-0 flex-1 font-semibold">{response ? audienceQuestion.mode === 'closest-number' ? formatNumericResponse(response.numeric_response ?? response.response_text) : response.response_text : <span style={{ color: C.liveDim }}>Waiting…</span>}</span>
+                      {response?.distance_from_correct !== null && response?.distance_from_correct !== undefined && <span style={{ color: C.liveDim }} className="text-sm">Distance {formatNumericResponse(response.distance_from_correct)}</span>}
+                      {(selected || response?.is_winner) && <span className="font-black text-emerald-400">✓ Winner</span>}
                     </button>
                   })}
                 </div>
@@ -8137,12 +8172,33 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               {participatingTeams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
             </div>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
-            <button data-host-navigation="forward" onClick={showingShowGameInstructions ? startPreparedShowGame : isAudienceQuestion && showGame?.status === 'open' ? resolveAudienceQuestion : handleAdvanceShowGame} disabled={actionBusy || (!showingShowGameInstructions && !isAudienceQuestion && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled))) || (isAudienceQuestion && showGame?.status === 'open' && audienceResponses.length === 0)} style={{ background: C.violet }} className="mx-auto mt-8 rounded-2xl px-10 py-5 text-xl font-extrabold text-white disabled:opacity-35">
-              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : isAudienceQuestion ? showGame?.status === 'exploded' ? 'Continue →' : audienceQuestion.mode === 'favourite' ? 'Confirm favourite →' : 'Find closest guess →' : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
-            </button>
           </section>
         </main>
-        <LiveReactions gameId={liveGameId} dark hostPlacement />
+        <aside style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 300 }} className="sticky top-[52px] flex h-[calc(100dvh-52px)] shrink-0 flex-col">
+          <div className="flex-1 overflow-y-auto p-5">
+            <p style={{ color: C.liveDim }} className="mb-3 text-[11px] font-bold uppercase tracking-widest">Leaderboard</p>
+            <div className="space-y-1">
+              {leaderboard.map((team, index) => {
+                const dormant = isTeamDormant(team.last_seen_at, presenceNow)
+                return <div key={team.id} style={{ background: !dormant && leaderboardPlacements[index] === 1 ? `${C.violet}20` : 'transparent', opacity: dormant ? 0.42 : 1 }} className="flex items-center gap-3 rounded-xl p-2.5">
+                  <div style={{ background: leaderboardPlacements[index] === 1 ? C.violet : C.liveLine, color: leaderboardPlacements[index] === 1 ? 'white' : C.liveDim }} className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold">{leaderboardPlacements[index]}</div>
+                  <span className="min-w-0 flex-1 truncate text-sm font-bold">{team.name}</span><span className="text-sm font-bold tabular-nums">{team.score}</span>
+                  {dormant && <span style={{ color: C.liveDim }} className="text-[9px] font-black uppercase">Asleep</span>}
+                  <button type="button" onClick={() => { void removeLiveTeam(team) }} disabled={removingLiveTeamId === team.id} title={`Remove ${team.name}`} style={{ color: C.liveDim }} className="cursor-pointer rounded px-1 text-xs hover:text-red-400 disabled:opacity-40">×</button>
+                </div>
+              })}
+            </div>
+            <TeamAdmissionList gameCode={getHostGameCode()} dark compact hideWhenEmpty className="mt-5" />
+            <LiveReactions gameId={liveGameId} dark hostPlacement inlineHostPlacement />
+          </div>
+          <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="shrink-0 space-y-3 p-5">
+            <button data-host-navigation="back" disabled style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="w-full cursor-not-allowed rounded-xl py-3 text-sm font-bold opacity-35">← Previous</button>
+            <button data-host-navigation="forward" onClick={showingShowGameInstructions ? startPreparedShowGame : isAudienceQuestion && showGame?.status === 'open' ? resolveAudienceQuestion : handleAdvanceShowGame} disabled={actionBusy || (!showingShowGameInstructions && !isAudienceQuestion && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled))) || (isAudienceQuestion && showGame?.status === 'open' && audienceResponses.length === 0)} style={{ background: C.violet }} className="w-full rounded-2xl px-5 py-5 text-lg font-extrabold text-white disabled:opacity-35">
+              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : isAudienceQuestion ? showGame?.status === 'exploded' ? 'Continue →' : audienceQuestion.mode === 'favourite' ? 'Confirm favourite →' : 'Find closest guess →' : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
+            </button>
+          </div>
+        </aside>
+        </div>
       </div>
     )
   }

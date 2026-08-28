@@ -947,6 +947,10 @@ export type Database = {
         Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }
         Returns: Database['public']['Tables']['game_show_game_responses']['Row']
       }
+      get_audience_question_responses: {
+        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }
+        Returns: Array<{ team_id: string; team_name: string; response_text: string; numeric_response: number | null; submitted_at: string }>
+      }
       resolve_audience_question: {
         Args: { p_game_show_game_id: string; p_winner_team_ids?: string[] | null }
         Returns: Database['public']['Tables']['game_show_games']['Row']

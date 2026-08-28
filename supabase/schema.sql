@@ -1335,3 +1335,31 @@ $$;
 
 revoke all on function public.get_host_game_count() from public, anon;
 grant execute on function public.get_host_game_count() to authenticated;
+
+create or replace function public.get_audience_question_responses(
+  p_game_show_game_id uuid, p_request_id uuid, p_request_token uuid
+)
+returns table (team_id uuid, team_name text, response_text text, numeric_response numeric, submitted_at timestamptz)
+language plpgsql stable security definer set search_path = public
+as $$
+declare request_row public.team_join_requests%rowtype; show_game public.game_show_games%rowtype;
+begin
+  select * into request_row from public.team_join_requests
+  where id = p_request_id and request_token = p_request_token and status = 'approved';
+  if not found or request_row.team_id is null then raise exception 'JOIN_REQUEST_INVALID'; end if;
+  select * into show_game from public.game_show_games
+  where id = p_game_show_game_id and game_id = request_row.game_id and game_type = 'audience-question';
+  if show_game.id is null then raise exception 'SHOW_GAME_INVALID'; end if;
+  if show_game.status <> 'exploded' and not exists (
+    select 1 from public.game_show_game_responses own_response
+    where own_response.game_show_game_id = show_game.id and own_response.team_id = request_row.team_id
+  ) then raise exception 'SUBMIT_BEFORE_VIEWING'; end if;
+  return query
+  select responses.team_id, teams.name, responses.response_text, responses.numeric_response, responses.submitted_at
+  from public.game_show_game_responses responses join public.teams on teams.id = responses.team_id
+  where responses.game_show_game_id = show_game.id order by responses.submitted_at;
+end;
+$$;
+
+revoke all on function public.get_audience_question_responses(uuid, uuid, uuid) from public;
+grant execute on function public.get_audience_question_responses(uuid, uuid, uuid) to anon, authenticated;

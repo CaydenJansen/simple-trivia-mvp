@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { suggestedTeamName, TEAM_NAME_SUGGESTIONS } from './team-name-suggestions'
+import { nextSuggestedTeamName, suggestedTeamName, TEAM_NAME_SUGGESTIONS } from './team-name-suggestions'
 
 describe('team-name suggestions', () => {
   it('returns a stable suggestion from the approved list', () => {
@@ -18,5 +18,11 @@ describe('team-name suggestions', () => {
       'Team Name',
       'Insert lame trivia pun here',
     ])
+  })
+
+  it('cycles to a different approved suggestion', () => {
+    expect(nextSuggestedTeamName('Olivia Newton Trivia')).toBe('The Blim Blams')
+    expect(nextSuggestedTeamName('Insert lame trivia pun here')).toBe('Olivia Newton Trivia')
+    expect(nextSuggestedTeamName(null)).toBe('Olivia Newton Trivia')
   })
 })
