@@ -39,6 +39,7 @@ import BrandWordmark from "@/components/BrandWordmark";
 import TeamWheel from "@/components/TeamWheel";
 import LiveReactions from "@/components/LiveReactions";
 import EliminationShowGame from "@/components/EliminationShowGame";
+import BigBalloon, { type BigBalloonEntry } from "@/components/BigBalloon";
 import { TEAM_PRESENCE_HEARTBEAT_MS } from "@/lib/trivia/team-presence";
 import {
   eliminationShowGameState,
@@ -2744,12 +2745,18 @@ function ShowGame() {
   const handleWheelSettled = useCallback(() => setWheelSettled(true), [])
   const [hasPressed, setHasPressed] = useState(false)
   const [pressing, setPressing] = useState(false)
+  const [bombPresses, setBombPresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [ownChoice, setOwnChoice] = useState<string | null>(null)
   const [choiceBusy, setChoiceBusy] = useState(false)
   const [audienceResponse, setAudienceResponse] = useState('')
   const [audienceResponseRow, setAudienceResponseRow] = useState<DatabaseAudienceResponse | null>(null)
   const [audienceResponses, setAudienceResponses] = useState<PlayerAudienceResponse[]>([])
   const [audienceSubmitting, setAudienceSubmitting] = useState(false)
+  const [balloons, setBalloons] = useState<BigBalloonEntry[]>([])
+  const [balloonHolding, setBalloonHolding] = useState(false)
+  const balloonPulseTimerRef = useRef<number | null>(null)
+  const balloonPulseBusyRef = useRef(false)
+  const balloonPulsePromiseRef = useRef<Promise<void> | null>(null)
   const [showGameNow, setShowGameNow] = useState(() => Date.now())
   const [error, setError] = useState<string | null>(null)
 
@@ -2772,9 +2779,10 @@ function ShowGame() {
     }
     setShowGame(activeShowGame as PlayerShowGame | null)
     if (activeShowGame?.game_type === 'beat-the-bomb') {
-      const { data: press } = await supabase.from('game_show_game_presses').select('id').eq('game_show_game_id', activeShowGame.id).eq('team_id', teamId).maybeSingle()
-      setHasPressed(Boolean(press))
-    }
+      const { data: pressRows } = await supabase.from('game_show_game_presses').select('team_id, pressed_at').eq('game_show_game_id', activeShowGame.id).order('pressed_at', { ascending: true })
+      setBombPresses(pressRows ?? [])
+      setHasPressed(Boolean((pressRows ?? []).some(press => press.team_id === teamId)))
+    } else { setBombPresses([]); setHasPressed(false) }
     if (activeShowGame && isEliminationShowGame(activeShowGame.game_type)) {
       const state = eliminationShowGameState(activeShowGame.settings)
       const { data: choice } = await supabase.from('game_show_game_choices').select('choice')
@@ -2799,6 +2807,16 @@ function ShowGame() {
         } else setAudienceResponses([])
       }
     } else { setAudienceResponseRow(null); setAudienceResponses([]); setAudienceResponse('') }
+    if (activeShowGame?.game_type === 'big-balloon') {
+      const { data: balloonRows } = await supabase.from('game_show_game_balloons').select('team_id, size_units, status').eq('game_show_game_id', activeShowGame.id)
+      setBalloons((balloonRows ?? []) as BigBalloonEntry[])
+      const own = (balloonRows ?? []).find(row => row.team_id === teamId)
+      if (own?.status === 'locked' || own?.status === 'popped' || activeShowGame.status !== 'open') {
+        setBalloonHolding(false)
+        if (balloonPulseTimerRef.current !== null) window.clearInterval(balloonPulseTimerRef.current)
+        balloonPulseTimerRef.current = null
+      }
+    } else setBalloons([])
   }, [])
 
   useEffect(() => {
@@ -2812,12 +2830,16 @@ function ShowGame() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_presses', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_choices', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_responses', filter: `game_id=eq.${gameId}` }, () => { void load() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_balloons', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .subscribe()
-    return () => { void supabase.removeChannel(channel) }
+    return () => {
+      if (balloonPulseTimerRef.current !== null) window.clearInterval(balloonPulseTimerRef.current)
+      void supabase.removeChannel(channel)
+    }
   }, [load])
 
   useEffect(() => {
-    if (!showGame || !isEliminationShowGame(showGame.game_type) || showGame.status !== 'open') return
+    if (!showGame || (!isEliminationShowGame(showGame.game_type) && showGame.game_type !== 'big-balloon') || showGame.status !== 'open') return
     const timer = window.setInterval(() => setShowGameNow(Date.now()), 200)
     return () => window.clearInterval(timer)
   }, [showGame])
@@ -2874,13 +2896,56 @@ function ShowGame() {
     void load()
   }
 
+  async function pulseBalloon() {
+    if (!showGame || showGame.game_type !== 'big-balloon' || showGame.status !== 'open' || balloonPulseBusyRef.current) return
+    const requestId = localStorage.getItem('simple-trivia-join-request-id')
+    const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+    if (!requestId || !requestToken) return
+    balloonPulseBusyRef.current = true
+    const { error: pulseError } = await supabase.rpc('pulse_big_balloon', { p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken })
+    balloonPulseBusyRef.current = false
+    if (pulseError) {
+      if (!pulseError.message.includes('BALLOON_LOCKED')) setError(pulseError.message.includes('BALLOON_CLOSED') ? 'Inflation time is over.' : 'Your balloon lost connection. Try holding again.')
+      setBalloonHolding(false)
+      if (balloonPulseTimerRef.current !== null) window.clearInterval(balloonPulseTimerRef.current)
+      balloonPulseTimerRef.current = null
+    }
+    void load()
+  }
+
+  function startBalloonHold() {
+    if (!showGame || showGame.game_type !== 'big-balloon' || showGame.status !== 'open' || balloonHolding) return
+    setError(null)
+    setBalloonHolding(true)
+    balloonPulsePromiseRef.current = pulseBalloon()
+    balloonPulseTimerRef.current = window.setInterval(() => {
+      if (!balloonPulseBusyRef.current) balloonPulsePromiseRef.current = pulseBalloon()
+    }, 120)
+  }
+
+  async function stopBalloonHold() {
+    if (!balloonHolding || !showGame || showGame.game_type !== 'big-balloon') return
+    setBalloonHolding(false)
+    if (balloonPulseTimerRef.current !== null) window.clearInterval(balloonPulseTimerRef.current)
+    balloonPulseTimerRef.current = null
+    await balloonPulsePromiseRef.current
+    const requestId = localStorage.getItem('simple-trivia-join-request-id')
+    const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+    if (!requestId || !requestToken) return
+    const { error: lockError } = await supabase.rpc('lock_big_balloon', { p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken })
+    if (lockError && !lockError.message.includes('BALLOON_CLOSED')) setError('Your balloon could not lock in. Please try again.')
+    void load()
+  }
+
   const teamId = typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id')
   const exploded = showGame?.status === 'exploded'
   const won = exploded && showGame?.winner_team_id === teamId
   const reward = showGameRewardFromSettings(showGame?.settings)
   const isWheel = showGame?.game_type === 'spin-the-wheel'
+  const isBomb = showGame?.game_type === 'beat-the-bomb'
   const isElimination = isEliminationShowGame(showGame?.game_type)
   const isAudienceQuestion = showGame?.game_type === 'audience-question'
+  const isBigBalloon = showGame?.game_type === 'big-balloon'
   const audienceQuestion = audienceQuestionFromSettings(showGame?.settings)
   const eliminationState = eliminationShowGameState(showGame?.settings)
   const showingInstructions = showGame?.status === 'ready'
@@ -2891,7 +2956,9 @@ function ShowGame() {
   const wheelTeams = liveTeams.filter(team => wheelTeamIds.length === 0 || wheelTeamIds.includes(team.id))
   const teamIsEligible = Boolean(teamId && (wheelTeamIds.length === 0 || wheelTeamIds.includes(teamId)))
   const wheelWinner = liveTeams.find(team => team.id === showGame?.winner_team_id) ?? null
-  const showWheelOutcome = exploded && (!isWheel || wheelSettled)
+  const latestBombPress = bombPresses.at(-1) ?? null
+  const latestBombPressTeam = liveTeams.find(team => team.id === latestBombPress?.team_id) ?? null
+  const showGameOutcome = exploded && (!isWheel || wheelSettled)
   const eliminationSecondsRemaining = Math.max(0, Math.ceil(((showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow) - showGameNow) / 1000))
   const teamIsAlive = teamId ? eliminationState.aliveTeamIds.includes(teamId) : false
   const isTieShowGame = Boolean(showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) && typeof (showGame.settings as Record<string, Json>).tie_resolution_id === 'string')
@@ -2967,18 +3034,31 @@ function ShowGame() {
           secondsRemaining={eliminationSecondsRemaining}
           onChoose={choice => { void chooseEliminationOption(choice) }}
         /> : isWheel ? <div className="mt-7"><TeamWheel teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
+          : isBigBalloon ? <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
           : <div className={`mt-7 text-8xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
+        {isBomb && showGame?.status === 'open' && <div className="mt-6 w-full max-w-sm space-y-3">
+          <div style={{ background: '#fff1f2', border: '2px solid #fb7185', color: '#9f1239' }} className="rounded-2xl px-5 py-4 text-left">
+            <p className="text-sm font-black uppercase tracking-wider">The bomb could explode at any moment!</p>
+            <p className="mt-1 text-sm font-bold leading-5">Make sure you press soon or you won’t have any chance of winning.</p>
+          </div>
+          {latestBombPress && latestBombPressTeam && <div key={latestBombPress.pressed_at} style={{ background: C.violetPale, border: `1px solid ${C.violet}40`, color: C.violet }} className="animate-pulse rounded-xl px-4 py-3 text-sm font-black">
+            {latestBombPressTeam.name} has pressed it!
+          </div>}
+          {bombPresses.length > 1 && <p style={{ color: C.sub }} className="text-xs font-bold">{bombPresses.length} teams have pressed so far.</p>}
+        </div>}
         {!isAudienceQuestion && (isElimination && !exploded ? (
           <div className="mt-5">
             <h2 style={{ color: teamIsAlive ? C.go : C.sub }} className="text-xl font-black">{teamIsAlive ? `You’re still in · Round ${eliminationState.roundNumber}` : 'You’re out—watch the survivors'}</h2>
             {eliminationState.roundPhase === 'reveal' && eliminationState.roundEliminatedTeamIds.length === 0 && <p style={{ color: C.sub }} className="mt-2">Nobody was knocked out. Another round is coming.</p>}
           </div>
-        ) : showWheelOutcome ? (
+        ) : showGameOutcome ? (
           <div className="mt-7">
-            <h2 style={{ color: won ? C.go : C.ink }} className="text-3xl font-black">{won ? showGameWinnerMessage(reward) : isElimination ? 'Another team survived' : isWheel ? 'Another team was selected' : 'The bomb exploded!'}</h2>
-            <p style={{ color: C.sub }} className="mt-3 text-base">{won ? (isElimination ? 'You were the last team standing!' : isWheel ? 'The wheel landed on your team!' : 'You were the last team to press.') : (isElimination ? 'Thanks for playing!' : isWheel ? 'Better luck on the next spin.' : 'Another team got the final press this time.')}</p>
+            <h2 style={{ color: won ? C.go : C.ink }} className="text-3xl font-black">{won ? showGameWinnerMessage(reward) : isElimination ? 'Another team survived' : isBigBalloon ? 'Another balloon was bigger' : isWheel ? 'Another team was selected' : 'The bomb exploded!'}</h2>
+            <p style={{ color: C.sub }} className="mt-3 text-base">{won ? (isElimination ? 'You were the last team standing!' : isBigBalloon ? 'Your intact balloon was the biggest!' : isWheel ? 'The wheel landed on your team!' : 'You were the last team to press.') : (isElimination ? 'Thanks for playing!' : isBigBalloon ? 'Better luck on the next inflation.' : isWheel ? 'Better luck on the next spin.' : 'Another team got the final press this time.')}</p>
             <div className="mt-7"><WaitMsg msg="Waiting for the host to continue…" /></div>
           </div>
+        ) : isBigBalloon ? (
+          <p style={{ color: C.sub }} className="mt-5 font-semibold">{eliminationSecondsRemaining}s left · Release to lock in your balloon.</p>
         ) : isWheel ? (
           <div className="mt-7"><h2 style={{ color: C.ink }} className="text-2xl font-black">{exploded ? 'The wheel is slowing down…' : 'The wheel is spinning…'}</h2><p style={{ color: C.sub }} className="mt-2">Watch the team names under the pointer.</p></div>
         ) : !teamIsEligible ? (

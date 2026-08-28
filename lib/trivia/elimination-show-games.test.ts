@@ -7,6 +7,7 @@ describe('elimination show games', () => {
     expect(isEliminationShowGame('dodge-the-rock')).toBe(true)
     expect(isEliminationShowGame('spin-the-wheel')).toBe(false)
     expect(isEliminationShowGame('audience-question')).toBe(false)
+    expect(isEliminationShowGame('big-balloon')).toBe(false)
   })
 
   it('parses safe defaults and clamps dodge lanes', () => {
@@ -24,6 +25,7 @@ describe('elimination show games', () => {
 
   it('describes Audience Question as a host-picked interaction', () => {
     expect(showGameInstructions('audience-question')).toContain('Pick your favourite response')
+    expect(showGameInstructions('big-balloon')).toContain('biggest balloon')
   })
 
   it('adds one random-chance game per requested round without auto-authoring Audience Questions', () => {

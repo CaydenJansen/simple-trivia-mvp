@@ -18,6 +18,7 @@ import BrandWordmark from "@/components/BrandWordmark";
 import TeamWheel from "@/components/TeamWheel";
 import LiveReactions from "@/components/LiveReactions";
 import EliminationShowGame from "@/components/EliminationShowGame";
+import BigBalloon, { type BigBalloonEntry } from "@/components/BigBalloon";
 import type { Database, Json, QuestionType } from "@/lib/supabase/database.types";
 import {
   asStringArray,
@@ -4223,6 +4224,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
               <optgroup label="One-step games · immediate winner">
                 <option value="spin-the-wheel">🎡 Spin the Wheel</option>
                 <option value="beat-the-bomb">💣 Beat the Bomb</option>
+                <option value="big-balloon">🎈 Big Balloon</option>
               </optgroup>
               <optgroup label="Elimination games · multiple rounds">
                 <option value="heads-or-tails">🪙 Heads or Tails</option>
@@ -6712,6 +6714,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const handleWheelSettled = useCallback(() => setWheelSettled(true), [])
   const [allShowGames, setAllShowGames] = useState<LiveShowGameDefinition[]>([])
   const [showGamePresses, setShowGamePresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
+  const [showGameBalloons, setShowGameBalloons] = useState<BigBalloonEntry[]>([])
   const [audienceResponses, setAudienceResponses] = useState<LiveAudienceResponse[]>([])
   const [selectedAudienceWinnerIds, setSelectedAudienceWinnerIds] = useState<string[]>([])
   const [showGameNow, setShowGameNow] = useState(() => Date.now())
@@ -6875,6 +6878,14 @@ function LiveQuestion({ go }: { go: Go }) {
             if (currentShowGame.status === 'exploded') setSelectedAudienceWinnerIds((responseRows ?? []).filter(row => row.is_winner).map(row => row.team_id))
           }
           setShowGamePresses([])
+          setShowGameBalloons([])
+        } else if (currentShowGame.game_type === 'big-balloon') {
+          const { data: balloonRows, error: balloonError } = await supabase
+            .from('game_show_game_balloons').select('team_id, size_units, status').eq('game_show_game_id', currentShowGame.id)
+          if (balloonError) console.error('Could not load balloon progress:', balloonError)
+          else setShowGameBalloons((balloonRows ?? []) as BigBalloonEntry[])
+          setShowGamePresses([])
+          setAudienceResponses([])
         } else {
           const { data: pressRows, error: pressError } = await supabase
             .from('game_show_game_presses')
@@ -6884,8 +6895,9 @@ function LiveQuestion({ go }: { go: Go }) {
           if (pressError) console.error('Could not load show-game presses:', pressError)
           else setShowGamePresses(pressRows ?? [])
           setAudienceResponses([])
+          setShowGameBalloons([])
         }
-      } else { setShowGamePresses([]); setAudienceResponses([]) }
+      } else { setShowGamePresses([]); setAudienceResponses([]); setShowGameBalloons([]) }
 
       if (currentQuestion) {
         const [submissionResult, bonusSubmissionResult] = await Promise.all([
@@ -6940,6 +6952,11 @@ function LiveQuestion({ go }: { go: Go }) {
           )
           .on(
             'postgres_changes',
+            { event: '*', schema: 'public', table: 'game_show_game_balloons', filter: `game_id=eq.${game.id}` },
+            () => { void loadLiveData() },
+          )
+          .on(
+            'postgres_changes',
             { event: '*', schema: 'public', table: 'submissions', filter: `game_id=eq.${game.id}` },
             () => { void loadLiveData() },
           )
@@ -6982,7 +6999,8 @@ function LiveQuestion({ go }: { go: Go }) {
       const eliminationState = eliminationShowGameState(showGame?.settings)
       const rpc = isEliminationShowGame(showGame?.game_type)
         ? eliminationState.roundPhase === 'reveal' ? 'advance_elimination_show_game' : 'resolve_elimination_show_game'
-        : showGame?.game_type === 'spin-the-wheel' ? 'resolve_spin_the_wheel' : 'resolve_beat_the_bomb'
+        : showGame?.game_type === 'spin-the-wheel' ? 'resolve_spin_the_wheel'
+          : showGame?.game_type === 'big-balloon' ? 'resolve_big_balloon' : 'resolve_beat_the_bomb'
       void supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId })
         .then(({ error }) => { if (error) console.error('Could not resolve show game:', error) })
     }, delay + 50)
@@ -7000,6 +7018,7 @@ function LiveQuestion({ go }: { go: Go }) {
     })
     setShowGame(nextShowGame)
     setShowGamePresses([])
+    setShowGameBalloons([])
     setAudienceResponses([])
     setSelectedAudienceWinnerIds([])
     setGameScreen('show-game')
@@ -7014,16 +7033,18 @@ function LiveQuestion({ go }: { go: Go }) {
       const tieResolutionId = showGame.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings)
         ? (showGame.settings as Record<string, Json>).tie_resolution_id : null
       const rpc = typeof tieResolutionId === 'string'
-        ? 'start_tie_show_game'
+        ? showGame.game_type === 'big-balloon' ? 'start_big_balloon' : 'start_tie_show_game'
         : showGame.game_type === 'audience-question'
         ? 'start_audience_question'
         : isEliminationShowGame(showGame.game_type)
         ? 'start_elimination_show_game'
-        : showGame.game_type === 'spin-the-wheel' ? 'start_spin_the_wheel' : 'start_beat_the_bomb'
+        : showGame.game_type === 'spin-the-wheel' ? 'start_spin_the_wheel'
+          : showGame.game_type === 'big-balloon' ? 'start_big_balloon' : 'start_beat_the_bomb'
       const { data, error } = await supabase.rpc(rpc, { p_game_show_game_id: showGame.id })
       if (error) throw error
       setShowGame(data as LiveShowGameDefinition)
       setShowGamePresses([])
+      setShowGameBalloons([])
       setAudienceResponses([])
     } catch (error) {
       console.error('Could not start show game:', error)
@@ -8088,6 +8109,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const isWheel = showGame?.game_type === 'spin-the-wheel'
     const isElimination = isEliminationShowGame(showGame?.game_type)
     const isAudienceQuestion = showGame?.game_type === 'audience-question'
+    const isBigBalloon = showGame?.game_type === 'big-balloon'
     const audienceQuestion = audienceQuestionFromSettings(showGame?.settings)
     const eliminationState = eliminationShowGameState(showGame?.settings)
     const showingShowGameInstructions = showGame?.status === 'ready'
@@ -8151,6 +8173,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               </div>
             ) : isElimination && showGame ? (
               <EliminationShowGame type={showGame.game_type as EliminationShowGameType} teams={participatingTeams} state={eliminationState} secondsRemaining={eliminationSecondsRemaining} dark />
+            ) : isBigBalloon ? (
+              <BigBalloon teams={participatingTeams} balloons={showGameBalloons} dark />
             ) : isWheel ? (
               <div className="mt-5"><TeamWheel dark compact teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
             ) : (
@@ -8165,10 +8189,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             ) : (
               <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isElimination
                 ? `${eliminationState.aliveTeamIds.length} teams remain · ${eliminationState.roundPhase === 'choosing' ? 'Choosing now' : 'Round result'}`
+                : isBigBalloon ? `${showGameBalloons.filter(balloon => balloon.status === 'locked').length} locked · ${showGameBalloons.filter(balloon => balloon.status === 'popped').length} popped · ${eliminationSecondsRemaining}s left`
                 : isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`)
                   : `Fuse burning… ${showGamePresses.length} of ${participatingTeams.length} active teams have pressed.`}</p>
             ))}
-            {!showingShowGameInstructions && !isWheel && !isElimination && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
+            {!showingShowGameInstructions && !isWheel && !isElimination && !isBigBalloon && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
               {participatingTeams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
             </div>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
@@ -8194,7 +8219,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="shrink-0 space-y-3 p-5">
             <button data-host-navigation="back" disabled style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="w-full cursor-not-allowed rounded-xl py-3 text-sm font-bold opacity-35">← Previous</button>
             <button data-host-navigation="forward" onClick={showingShowGameInstructions ? startPreparedShowGame : isAudienceQuestion && showGame?.status === 'open' ? resolveAudienceQuestion : handleAdvanceShowGame} disabled={actionBusy || (!showingShowGameInstructions && !isAudienceQuestion && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled))) || (isAudienceQuestion && showGame?.status === 'open' && audienceResponses.length === 0)} style={{ background: C.violet }} className="w-full rounded-2xl px-5 py-5 text-lg font-extrabold text-white disabled:opacity-35">
-              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : isAudienceQuestion ? showGame?.status === 'exploded' ? 'Continue →' : audienceQuestion.mode === 'favourite' ? 'Confirm favourite →' : 'Find closest guess →' : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
+              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : isAudienceQuestion ? showGame?.status === 'exploded' ? 'Continue →' : audienceQuestion.mode === 'favourite' ? 'Confirm favourite →' : 'Find closest guess →' : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isBigBalloon ? 'Balloons inflating…' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
             </button>
           </div>
         </aside>
@@ -9807,6 +9832,7 @@ function TieResolutionChooser({
           <option value="beat-the-bomb">💣 Beat the Bomb</option>
           <option value="heads-or-tails">🪙 Heads or Tails</option>
           <option value="dodge-the-rock">🪨 Dodge the Rock</option>
+          <option value="big-balloon">🎈 Big Balloon</option>
           <option value="audience-question">💬 Audience Question · Closest Guess</option>
         </select>
         {tieGameType === 'audience-question' && <div className="grid gap-3 sm:grid-cols-[1fr_160px]">

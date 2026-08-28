@@ -556,6 +556,12 @@ export type Database = {
         Update: Partial<{ id: string; game_show_game_id: string; game_id: string; team_id: string; response_text: string; numeric_response: number | null; distance_from_correct: number | null; is_winner: boolean; submitted_at: string }>
         Relationships: []
       }
+      game_show_game_balloons: {
+        Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; size_units: number; status: 'ready' | 'inflating' | 'locked' | 'popped'; last_inflated_at: string | null; locked_at: string | null; popped_at: string | null; created_at: string }
+        Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; size_units?: number; status?: 'ready' | 'inflating' | 'locked' | 'popped'; last_inflated_at?: string | null; locked_at?: string | null; popped_at?: string | null; created_at?: string }
+        Update: Partial<{ size_units: number; status: 'ready' | 'inflating' | 'locked' | 'popped'; last_inflated_at: string | null; locked_at: string | null; popped_at: string | null }>
+        Relationships: []
+      }
       game_tiebreakers: {
         Row: TiebreakerRow & { game_id: string }
         Insert: TiebreakerInsert & { game_id: string }
@@ -953,6 +959,22 @@ export type Database = {
       }
       resolve_audience_question: {
         Args: { p_game_show_game_id: string; p_winner_team_ids?: string[] | null }
+        Returns: Database['public']['Tables']['game_show_games']['Row']
+      }
+      start_big_balloon: {
+        Args: { p_game_show_game_id: string }
+        Returns: Database['public']['Tables']['game_show_games']['Row']
+      }
+      pulse_big_balloon: {
+        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }
+        Returns: Database['public']['Tables']['game_show_game_balloons']['Row']
+      }
+      lock_big_balloon: {
+        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }
+        Returns: Database['public']['Tables']['game_show_game_balloons']['Row']
+      }
+      resolve_big_balloon: {
+        Args: { p_game_show_game_id: string }
         Returns: Database['public']['Tables']['game_show_games']['Row']
       }
       cancel_host_game: {
@@ -1408,7 +1430,7 @@ type ShowGameRow = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'audience-question'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'audience-question'
   title: string
   settings: Json
   created_at: string
@@ -1420,7 +1442,7 @@ type ShowGameInsert = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'audience-question'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'audience-question'
   title: string
   settings?: Json
   created_at?: string
