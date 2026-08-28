@@ -88,7 +88,7 @@ export default function LiveReactions({
       )}
 
       {canReact && (
-        <div className="fixed bottom-24 right-4 z-40 flex flex-col items-end gap-2 sm:right-5 md:bottom-4">
+        <div className="fixed bottom-24 left-4 z-40 flex flex-col items-start gap-2 sm:left-5 md:bottom-4">
           {pickerOpen && (
             <div aria-label="Send a reaction" className="flex gap-0.5 rounded-2xl border border-[#E8E5F4] bg-white/95 p-1.5 shadow-xl backdrop-blur">
               {REACTIONS.map(reaction => (

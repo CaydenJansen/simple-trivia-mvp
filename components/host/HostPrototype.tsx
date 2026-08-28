@@ -6339,11 +6339,11 @@ function Lobby({ go }: { go: Go }) {
   }, [lobbyCode])
 
   return (
-    <div style={{ background: C.ground }} className="min-h-screen">
-      <header style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }}
+    <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-screen">
+      <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}` }}
         className="h-14 flex items-center px-6 gap-4">
         <div className="flex items-center gap-2.5">
-          <BrandWordmark compact className="text-sm" />
+          <BrandWordmark dark compact className="text-sm" />
         </div>
         <div className="flex-1" />
         <Chip color="ready">
@@ -6357,18 +6357,18 @@ function Lobby({ go }: { go: Go }) {
 
       <main className="max-w-5xl mx-auto px-6 py-10">
         <div className="text-center mb-10">
-          <h1 style={{ color: C.ink }} className="text-3xl font-extrabold mb-1">{lobbyTitle}</h1>
-          <p style={{ color: C.sub }} className="text-sm">Share the code or QR so teams can join on their phones.</p>
+          <h1 style={{ color: C.liveText }} className="text-3xl font-extrabold mb-1">{lobbyTitle}</h1>
+          <p style={{ color: C.liveDim }} className="text-sm">Share the code or QR so teams can join on their phones.</p>
         </div>
 
         <div className="grid grid-cols-2 gap-8 items-start">
           {/* Code + QR */}
-          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-8 flex flex-col items-center text-center">
-            <p style={{ color: C.sub }} className="text-[11px] font-bold uppercase tracking-widest mb-4">Game Code</p>
-            <div style={{ color: C.ink, letterSpacing: '0.2em' }} className="text-6xl font-extrabold mb-7 tabular-nums">
+          <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-8 flex flex-col items-center text-center">
+            <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-4">Game Code</p>
+            <div style={{ color: C.liveText, letterSpacing: '0.2em' }} className="text-6xl font-extrabold mb-7 tabular-nums">
               {lobbyCode}
             </div>
-            <div style={{ background: C.ground, border: `1px solid ${C.line}` }}
+            <div style={{ background: '#FFFFFF', border: `1px solid ${C.liveLine}` }}
               className="w-44 h-44 rounded-2xl mb-6 flex items-center justify-center overflow-hidden">
               <QrGraphic dataUrl={lobbyQrDataUrl} size={176} />
             </div>
@@ -6383,52 +6383,53 @@ function Lobby({ go }: { go: Go }) {
             <div className="mb-5">
               <TeamAdmissionList
                 gameCode={lobbyCode}
+                dark
                 approvalRequired={approvalRequired}
                 approvalBusy={approvalBusy}
                 onApprovalRequiredChange={required => { void handleApprovalRequiredChange(required) }}
               />
             </div>
             <div className="flex items-center justify-between mb-4">
-              <h2 style={{ color: C.ink }} className="font-extrabold">Teams Joined</h2>
+              <h2 style={{ color: C.liveText }} className="font-extrabold">Teams Joined</h2>
               <div className="flex items-center gap-2">
                 <span style={{ background: C.go }} className="w-2 h-2 rounded-full animate-pulse inline-block" />
-                <span style={{ color: C.ink }} className="font-bold text-lg">{activeLobbyTeams.length}</span>
-                <span style={{ color: C.sub }} className="text-sm">active</span>
-                {teams.length > activeLobbyTeams.length && <span style={{ color: C.sub }} className="text-xs">· {teams.length - activeLobbyTeams.length} asleep</span>}
+                <span style={{ color: C.liveText }} className="font-bold text-lg">{activeLobbyTeams.length}</span>
+                <span style={{ color: C.liveDim }} className="text-sm">active</span>
+                {teams.length > activeLobbyTeams.length && <span style={{ color: C.liveDim }} className="text-xs">· {teams.length - activeLobbyTeams.length} asleep</span>}
               </div>
             </div>
             {lobbyError && (
-              <div style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}
+              <div style={{ background: '#3B1723', border: '1px solid #7F1D3A' }}
                 className="rounded-xl px-3 py-2.5 mb-3">
                 <p style={{ color: C.stop }} className="text-xs font-semibold">{lobbyError}</p>
               </div>
             )}
             <div className="space-y-2 mb-6">
               {teams.length === 0 && !lobbyError && (
-                <div style={{ background: C.panel, border: `1px dashed ${C.line}` }}
+                <div style={{ background: C.liveSurface, border: `1px dashed ${C.liveLine}` }}
                   className="rounded-xl px-4 py-5 text-center">
-                  <p style={{ color: C.sub }} className="text-sm">Waiting for teams to join…</p>
+                  <p style={{ color: C.liveDim }} className="text-sm">Waiting for teams to join…</p>
                 </div>
               )}
               {teams.map((t, i) => {
                 const dormant = isTeamDormant(t.last_seen_at, presenceNow)
                 return (
-                <div key={t.id} style={{ background: C.panel, border: `1px solid ${C.line}`, opacity: dormant ? 0.48 : 1 }}
+                <div key={t.id} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, opacity: dormant ? 0.48 : 1 }}
                   className="flex items-center gap-3 p-3 rounded-xl">
                   <div style={{ background: C.violetPale, color: C.violet }}
                     className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 font-mono">
                     {i + 1}
                   </div>
-                  <span style={{ color: C.ink }} className="text-sm font-semibold flex-1 truncate">{t.name}</span>
-                  {dormant ? <span style={{ color: C.sub }} className="text-[10px] font-bold uppercase">Asleep</span> : <span style={{ background: C.go }} className="w-2 h-2 rounded-full shrink-0" />}
-                  <button type="button" onClick={() => { void handleRemoveTeam(t) }} disabled={removingTeamId === t.id} style={{ color: C.stop }} className="cursor-pointer rounded-lg px-2 py-1 text-xs font-bold hover:bg-red-50 disabled:opacity-50">
+                  <span style={{ color: C.liveText }} className="text-sm font-semibold flex-1 truncate">{t.name}</span>
+                  {dormant ? <span style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase">Asleep</span> : <span style={{ background: C.go }} className="w-2 h-2 rounded-full shrink-0" />}
+                  <button type="button" onClick={() => { void handleRemoveTeam(t) }} disabled={removingTeamId === t.id} style={{ color: '#FB7185' }} className="cursor-pointer rounded-lg px-2 py-1 text-xs font-bold hover:bg-red-500/10 disabled:opacity-50">
                     {removingTeamId === t.id ? 'Removing…' : 'Remove'}
                   </button>
                 </div>
               )})}
             </div>
             {startError && (
-              <div style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}
+              <div style={{ background: '#3B1723', border: '1px solid #7F1D3A' }}
                 className="rounded-xl px-3 py-2.5 mb-3">
                 <p style={{ color: C.stop }} className="text-xs font-semibold">{startError}</p>
               </div>
@@ -6439,6 +6440,7 @@ function Lobby({ go }: { go: Go }) {
           </div>
         </div>
       </main>
+      <LiveReactions gameId={lobbyGameId} dark hostPlacement />
     </div>
   )
 }
