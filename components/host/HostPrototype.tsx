@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type FormEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { flushSync } from "react-dom";
@@ -129,7 +130,7 @@ import {
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
-  | 'dashboard' | 'questions' | 'teams' | 'recent-games' | 'create-quiz' | 'quiz-builder'
+  | 'dashboard' | 'questions' | 'teams' | 'account' | 'recent-games' | 'create-quiz' | 'quiz-builder'
   | 'auto-build' | 'quiz-review' | 'host-setup'
   | 'lobby' | 'live-question' | 'end-of-round' | 'final-results'
 type Go = (s: Screen) => void
@@ -811,6 +812,18 @@ function IBtn({ icon, title, onClick, danger = false }: {
 // ─── NAV ──────────────────────────────────────────────────────────────────────
 
 function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
+  const [profileInitials, setProfileInitials] = useState('ME')
+
+  useEffect(() => {
+    let mounted = true
+    void supabase.auth.getUser().then(({ data }) => {
+      if (!mounted || !data.user?.email) return
+      const localPart = data.user.email.split('@')[0].replace(/[^a-z0-9]/gi, '')
+      setProfileInitials((localPart.slice(0, 2) || 'ME').toUpperCase())
+    })
+    return () => { mounted = false }
+  }, [])
+
   return (
     <nav style={{ background: C.panel, borderBottom: `1px solid ${C.line}` }}
       className="sticky top-0 z-40 flex h-14 items-center gap-2 px-3 sm:gap-6 sm:px-6">
@@ -837,9 +850,16 @@ function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
           </button>
         ))}
       </div>
-      <div style={{ background: C.violet }} className="hidden h-8 w-8 items-center justify-center rounded-full text-xs font-bold text-white transition-opacity hover:opacity-90 sm:flex">
-        JH
-      </div>
+      <button
+        type="button"
+        onClick={() => go('account')}
+        aria-label="Account settings"
+        title="Account settings"
+        style={{ background: C.violet, boxShadow: active === 'Account' ? `0 0 0 3px ${C.violetPale}` : undefined }}
+        className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-[10px] font-extrabold text-white transition-opacity hover:opacity-90"
+      >
+        {profileInitials}
+      </button>
     </nav>
   )
 }
@@ -965,6 +985,155 @@ function TeamsScreen({ go }: { go: Go }) {
                 </div>
               </article>
             ))}
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}
+
+function AccountScreen({ go }: { go: Go }) {
+  const [loading, setLoading] = useState(true)
+  const [currentEmail, setCurrentEmail] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [emailBusy, setEmailBusy] = useState(false)
+  const [passwordBusy, setPasswordBusy] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
+  const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    let active = true
+    void supabase.auth.getUser().then(({ data, error }) => {
+      if (!active) return
+      if (error || !data.user) {
+        setNotice({ kind: 'error', text: error?.message ?? 'Your host session has expired.' })
+      } else {
+        const signedInEmail = data.user.email ?? ''
+        setCurrentEmail(signedInEmail)
+        setEmail(signedInEmail)
+      }
+      setLoading(false)
+    })
+    return () => { active = false }
+  }, [])
+
+  async function updateEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const normalizedEmail = email.trim().toLowerCase()
+    setNotice(null)
+    if (!normalizedEmail || normalizedEmail === currentEmail.toLowerCase()) {
+      setNotice({ kind: 'error', text: normalizedEmail ? 'That is already your account email.' : 'Enter a valid email address.' })
+      return
+    }
+    setEmailBusy(true)
+    const { error } = await supabase.auth.updateUser({ email: normalizedEmail }, {
+      emailRedirectTo: `${window.location.origin}/host`,
+    })
+    setEmailBusy(false)
+    if (error) {
+      setNotice({ kind: 'error', text: error.message })
+      return
+    }
+    setNotice({ kind: 'success', text: 'Email change requested. Check your inbox and follow the confirmation link to finish the change.' })
+  }
+
+  async function updatePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setNotice(null)
+    if (password.length < 8) {
+      setNotice({ kind: 'error', text: 'Your new password must be at least 8 characters.' })
+      return
+    }
+    if (password !== confirmPassword) {
+      setNotice({ kind: 'error', text: 'The two password entries do not match.' })
+      return
+    }
+    setPasswordBusy(true)
+    const { error } = await supabase.auth.updateUser({ password })
+    setPasswordBusy(false)
+    if (error) {
+      setNotice({ kind: 'error', text: error.message })
+      return
+    }
+    setPassword('')
+    setConfirmPassword('')
+    setNotice({ kind: 'success', text: 'Password updated successfully.' })
+  }
+
+  async function signOut() {
+    setNotice(null)
+    setSigningOut(true)
+    const { error } = await supabase.auth.signOut()
+    if (error) {
+      setSigningOut(false)
+      setNotice({ kind: 'error', text: error.message })
+    }
+  }
+
+  return (
+    <div style={{ background: C.ground }} className="min-h-screen">
+      <Nav go={go} active="Account" />
+      <main className="mx-auto max-w-3xl px-5 py-9 sm:px-6 sm:py-10">
+        <div className="mb-7">
+          <p style={{ color: C.violet }} className="mb-2 text-xs font-extrabold uppercase tracking-[0.16em]">Your profile</p>
+          <h1 style={{ color: C.ink }} className="text-3xl font-extrabold">Account Settings</h1>
+          <p style={{ color: C.sub }} className="mt-2 text-sm leading-6">Manage how you sign in to Good Trivia Company.</p>
+        </div>
+
+        {notice && (
+          <div role={notice.kind === 'error' ? 'alert' : 'status'} style={{ background: notice.kind === 'error' ? '#FEF2F2' : '#ECFDF5', border: `1px solid ${notice.kind === 'error' ? '#FECACA' : '#A7F3D0'}`, color: notice.kind === 'error' ? '#B91C1C' : '#047857' }} className="mb-5 rounded-xl px-4 py-3 text-sm font-semibold">
+            {notice.text}
+          </div>
+        )}
+
+        {loading ? (
+          <div style={{ color: C.sub }} className="py-20 text-center text-sm">Loading account…</div>
+        ) : (
+          <div className="space-y-5">
+            <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5 sm:p-6">
+              <h2 style={{ color: C.ink }} className="text-lg font-extrabold">Email address</h2>
+              <p style={{ color: C.sub }} className="mt-1 text-sm">Currently signed in as <strong style={{ color: C.ink }}>{currentEmail || 'Unknown email'}</strong></p>
+              <form onSubmit={updateEmail} className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end">
+                <label className="min-w-0 flex-1 text-sm font-semibold" style={{ color: C.ink }}>
+                  New email
+                  <input type="email" autoComplete="email" required value={email} onChange={event => setEmail(event.target.value)} className="mt-2 w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 font-normal outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
+                </label>
+                <button type="submit" disabled={emailBusy} style={{ background: C.violet }} className="cursor-pointer rounded-xl px-5 py-3 font-bold text-white transition hover:opacity-90 disabled:cursor-wait disabled:opacity-50">
+                  {emailBusy ? 'Sending…' : 'Change Email'}
+                </button>
+              </form>
+              <p style={{ color: C.sub }} className="mt-3 text-xs leading-5">For security, your email provider may ask you to confirm the new address before it changes.</p>
+            </section>
+
+            <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5 sm:p-6">
+              <h2 style={{ color: C.ink }} className="text-lg font-extrabold">Password</h2>
+              <p style={{ color: C.sub }} className="mt-1 text-sm">Use at least 8 characters and choose something you do not use elsewhere.</p>
+              <form onSubmit={updatePassword} className="mt-5 grid gap-4 sm:grid-cols-2">
+                <label className="text-sm font-semibold" style={{ color: C.ink }}>
+                  New password
+                  <input type="password" autoComplete="new-password" minLength={8} required value={password} onChange={event => setPassword(event.target.value)} className="mt-2 w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 font-normal outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100" placeholder="At least 8 characters" />
+                </label>
+                <label className="text-sm font-semibold" style={{ color: C.ink }}>
+                  Confirm password
+                  <input type="password" autoComplete="new-password" minLength={8} required value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} className="mt-2 w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 font-normal outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100" placeholder="Type it again" />
+                </label>
+                <button type="submit" disabled={passwordBusy} style={{ background: C.violet }} className="cursor-pointer rounded-xl px-5 py-3 font-bold text-white transition hover:opacity-90 disabled:cursor-wait disabled:opacity-50 sm:col-span-2 sm:justify-self-start">
+                  {passwordBusy ? 'Updating…' : 'Update Password'}
+                </button>
+              </form>
+            </section>
+
+            <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="flex flex-col gap-4 rounded-2xl p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+              <div>
+                <h2 style={{ color: C.ink }} className="text-lg font-extrabold">Sign out</h2>
+                <p style={{ color: C.sub }} className="mt-1 text-sm">Your quizzes and team history will remain safely stored.</p>
+              </div>
+              <button type="button" onClick={() => { void signOut() }} disabled={signingOut} className="cursor-pointer rounded-xl border border-red-200 px-5 py-3 font-bold text-red-600 transition-colors hover:border-red-300 hover:bg-red-50 disabled:cursor-wait disabled:opacity-50">
+                {signingOut ? 'Signing Out…' : 'Log Out'}
+              </button>
+            </section>
           </div>
         )}
       </main>
@@ -2842,7 +3011,7 @@ function QuizBuilder({ go }: { go: Go }) {
                   <span style={{ color: C.sub }}>Total</span>
                   <span style={{ color: C.ink }} className="font-bold">{questionCount} questions</span>
                 </div>
-                <div className="mt-2 flex justify-between px-2 text-xs" style={{ color: C.sub }}>
+                <div className="mt-2 flex justify-between text-xs" style={{ color: C.sub }}>
                   <span>Tiebreakers</span>
                   <span className="font-mono">{tiebreakers.length}</span>
                 </div>
@@ -9994,16 +10163,18 @@ function FinalResults({ go }: { go: Go }) {
 const SCREENS: [Screen, string][] = [
   ['dashboard', '1 · Dashboard'],
   ['questions', '2 · Questions'],
-  ['recent-games', '3 · Recent Games'],
-  ['create-quiz', '4 · Create Quiz'],
-  ['quiz-builder', '5 · Quiz Builder'],
-  ['auto-build', '6 · Auto-Build'],
-  ['quiz-review', '7 · Quiz Review'],
-  ['host-setup', '8 · Host Setup'],
-  ['lobby', '9 · Lobby'],
-  ['live-question', '10 · Live Console'],
-  ['end-of-round', '11 · End of Round'],
-  ['final-results', '12 · Final Results'],
+  ['teams', '3 · Teams'],
+  ['account', '4 · Account'],
+  ['recent-games', '5 · Recent Games'],
+  ['create-quiz', '6 · Create Quiz'],
+  ['quiz-builder', '7 · Quiz Builder'],
+  ['auto-build', '8 · Auto-Build'],
+  ['quiz-review', '9 · Quiz Review'],
+  ['host-setup', '10 · Host Setup'],
+  ['lobby', '11 · Lobby'],
+  ['live-question', '12 · Live Console'],
+  ['end-of-round', '13 · End of Round'],
+  ['final-results', '14 · Final Results'],
 ]
 
 function ScreenNav({ current, go }: { current: Screen; go: Go }) {
@@ -10174,6 +10345,7 @@ export default function App({
     'dashboard': <Dashboard go={setScreen} />,
     'questions': <QuestionsScreen go={setScreen} />,
     'teams': <TeamsScreen go={setScreen} />,
+    'account': <AccountScreen go={setScreen} />,
     'recent-games': <RecentGamesScreen go={setScreen} />,
     'create-quiz': <CreateQuiz go={setScreen} />,
     'quiz-builder': <QuizBuilder go={setScreen} />,
