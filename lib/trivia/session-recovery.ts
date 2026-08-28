@@ -39,3 +39,14 @@ export function shouldResetPlayerSessionForJoinCode(
 ) {
   return requestedCode !== null && requestedCode !== storedCode
 }
+
+export type PlayerAdmissionSnapshot = {
+  admission_status: 'pending' | 'approved' | 'denied'
+  team_id: string | null
+  name: string
+} | null
+
+export function restoredTeamFromAdmission(admission: PlayerAdmissionSnapshot) {
+  if (admission?.admission_status !== 'approved' || !admission.team_id) return null
+  return { teamId: admission.team_id, teamName: admission.name }
+}

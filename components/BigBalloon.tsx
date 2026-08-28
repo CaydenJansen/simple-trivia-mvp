@@ -9,7 +9,7 @@ export type BigBalloonEntry = {
 type Team = { id: string; name: string }
 
 const MAX_VISIBLE_UNITS = 10_000_000
-const BALLOON_KEYFRAMES = `@keyframes balloon-shake{0%,100%{transform:translate(0) rotate(0)}25%{transform:translate(-2px,1px) rotate(-1deg)}75%{transform:translate(2px,-1px) rotate(1deg)}}@keyframes balloon-shake-hard{0%,100%{transform:translate(0) rotate(0)}20%{transform:translate(-5px,2px) rotate(-3deg)}40%{transform:translate(4px,-3px) rotate(3deg)}60%{transform:translate(-4px,-2px) rotate(-2deg)}80%{transform:translate(5px,3px) rotate(2deg)}}.balloon-shake{animation:balloon-shake .18s infinite}.balloon-shake-hard{animation:balloon-shake-hard .09s infinite}`
+const BALLOON_KEYFRAMES = `@keyframes balloon-shake{0%,100%{transform:translate(0) rotate(0)}25%{transform:translate(-2px,1px) rotate(-1deg)}75%{transform:translate(2px,-1px) rotate(1deg)}}@keyframes balloon-shake-hard{0%,100%{transform:translate(0) rotate(0)}20%{transform:translate(-7px,4px) rotate(-5deg)}40%{transform:translate(6px,-5px) rotate(5deg)}60%{transform:translate(-6px,-4px) rotate(-4deg)}80%{transform:translate(8px,5px) rotate(4deg)}}@keyframes balloon-shake-critical{0%,100%{transform:translate(0) rotate(0) scale(1)}16%{transform:translate(-12px,7px) rotate(-9deg) scale(1.02)}33%{transform:translate(11px,-9px) rotate(10deg) scale(.98)}50%{transform:translate(-10px,-7px) rotate(-8deg) scale(1.03)}66%{transform:translate(13px,8px) rotate(9deg) scale(.97)}83%{transform:translate(-9px,6px) rotate(-7deg) scale(1.02)}}.balloon-shake{animation:balloon-shake .17s infinite}.balloon-shake-hard{animation:balloon-shake-hard .075s infinite}.balloon-shake-critical{animation:balloon-shake-critical .05s infinite}`
 
 export function balloonProgress(sizeUnits: number) {
   return Math.max(0, Math.min(1, sizeUnits / MAX_VISIBLE_UNITS))
@@ -28,7 +28,7 @@ function BalloonGraphic({ entry, dark = false, hero = false, sizeOverride }: { e
   const progress = balloonProgress(entry.size_units)
   const popped = entry.status === 'popped'
   const size = sizeOverride ?? balloonPixelSize(entry, hero)
-  const shake = progress >= 0.78 ? 'balloon-shake-hard' : progress >= 0.5 ? 'balloon-shake' : undefined
+  const shake = progress >= 0.9 ? 'balloon-shake-critical' : progress >= 0.68 ? 'balloon-shake-hard' : progress >= 0.38 ? 'balloon-shake' : undefined
   if (popped) return <div aria-label="Popped balloon" className={hero ? 'text-8xl' : 'text-4xl'}>💥</div>
   return (
     <div className={shake} style={{ width: size, height: size * 1.14, transition: 'width 90ms linear, height 90ms linear' }}>
@@ -116,6 +116,7 @@ export default function BigBalloon({
         return <div key={team.id} style={{ background: panel, border: `1px solid ${line}`, opacity: entry.status === 'popped' ? 0.55 : 1 }} className="flex min-h-40 flex-col items-center justify-end rounded-2xl p-3">
           <div className="flex h-24 items-end justify-center"><BalloonGraphic entry={entry} dark={dark} /></div>
           <p style={{ color: text }} className="mt-3 w-full truncate text-center text-sm font-black">{team.name}</p>
+          <p style={{ color: entry.status === 'popped' ? '#ef4444' : '#c4b5fd' }} className="mt-1 text-sm font-black tabular-nums">{(balloonProgress(entry.size_units) * 100).toFixed(1)}%</p>
           <p style={{ color: entry.status === 'popped' ? '#ef4444' : sub }} className="mt-1 text-[10px] font-black uppercase tracking-wider">{entry.status === 'ready' ? 'Waiting' : entry.status}</p>
         </div>
       })}

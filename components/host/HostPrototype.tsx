@@ -8085,6 +8085,9 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const isAudienceQuestion = showGame?.game_type === 'audience-question'
     const isBigBalloon = showGame?.game_type === 'big-balloon'
     const audienceQuestion = audienceQuestionFromSettings(showGame?.settings)
+    const closestAudienceDistance = audienceQuestion.mode === 'closest-number'
+      ? Math.min(...audienceResponses.flatMap(response => response.distance_from_correct === null ? [] : [Number(response.distance_from_correct)]))
+      : Number.POSITIVE_INFINITY
     const eliminationState = eliminationShowGameState(showGame?.settings)
     const showingShowGameInstructions = showGame?.status === 'ready'
     const eligibleIds = showGameEligibleTeamIds(showGame?.settings)
@@ -8108,8 +8111,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         <div className="flex flex-1 items-start min-h-0">
         <main className="flex min-w-0 flex-1 items-center justify-center px-6 py-6">
           <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-5xl rounded-3xl p-5 text-center shadow-2xl">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-300">{showGame ? showGameLabel(showGame.game_type) : 'Game'}</p>
-            <h1 className="mt-1 text-3xl font-black">{showGame?.title ?? 'Game'}</h1>
+            <h1 className="text-3xl font-black">{showGame?.title ?? (showGame ? showGameLabel(showGame.game_type) : 'Game')}</h1>
             <p style={{ color: C.liveDim }} className="mx-auto mt-2 max-w-xl text-base font-semibold">
               {showGameRewardDescription(activeShowGameReward)}
             </p>
@@ -8130,17 +8132,19 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     const response = audienceResponses.find(item => item.team_id === team.id)
                     const selected = Boolean(response && selectedAudienceWinnerIds.includes(response.team_id))
                     const canSelect = Boolean(response && showGame?.status === 'open' && audienceQuestion.mode === 'favourite')
+                    const isClosest = Boolean(response && audienceQuestion.mode === 'closest-number' && response.distance_from_correct !== null && Number(response.distance_from_correct) === closestAudienceDistance)
                     return <button key={team.id} type="button" disabled={!canSelect} onClick={() => {
                       if (!response) return
                       setSelectedAudienceWinnerIds(current => audienceQuestion.allowMultipleWinners
                         ? current.includes(response.team_id) ? current.filter(id => id !== response.team_id) : [...current, response.team_id]
                         : [response.team_id])
-                    }} style={{ background: selected || response?.is_winner ? `${C.go}20` : C.livePanel, border: `1px solid ${selected || response?.is_winner ? C.go : C.liveLine}` }}
+                    }} style={{ background: selected || response?.is_winner || isClosest ? `${C.go}20` : C.livePanel, border: `1px solid ${selected || response?.is_winner || isClosest ? C.go : C.liveLine}` }}
                       className={`flex w-full items-center gap-4 rounded-xl px-4 py-3 text-left ${canSelect ? 'cursor-pointer hover:bg-white/5' : ''}`}>
                       <span className="w-36 shrink-0 truncate font-black">{team.name}</span>
                       <span className="min-w-0 flex-1 font-semibold">{response ? audienceQuestion.mode === 'closest-number' ? formatNumericResponse(response.numeric_response ?? response.response_text) : response.response_text : <span style={{ color: C.liveDim }}>Waiting…</span>}</span>
                       {response?.distance_from_correct !== null && response?.distance_from_correct !== undefined && <span style={{ color: C.liveDim }} className="text-sm">Distance {formatNumericResponse(response.distance_from_correct)}</span>}
                       {(selected || response?.is_winner) && <span className="font-black text-emerald-400">✓ Winner</span>}
+                      {isClosest && !response?.is_winner && <span className="font-black text-emerald-400">Closest</span>}
                     </button>
                   })}
                 </div>

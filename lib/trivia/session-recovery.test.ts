@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hostRecoveryScreen, shouldResetPlayerSessionForJoinCode } from './session-recovery'
+import { hostRecoveryScreen, restoredTeamFromAdmission, shouldResetPlayerSessionForJoinCode } from './session-recovery'
 
 describe('host session recovery', () => {
   it('restores a lobby', () => {
@@ -49,5 +49,17 @@ describe('player session recovery for QR join links', () => {
 
   it('treats a missing stored code as stale when a QR game is requested', () => {
     expect(shouldResetPlayerSessionForJoinCode('654321', null)).toBe(true)
+  })
+})
+
+describe('player admission recovery after reconnecting', () => {
+  it('restores the original team from the browser-owned admission token', () => {
+    expect(restoredTeamFromAdmission({ admission_status: 'approved', team_id: 'team-1', name: 'The Blim Blams' }))
+      .toEqual({ teamId: 'team-1', teamName: 'The Blim Blams' })
+  })
+
+  it('does not invent a team for pending or incomplete admission', () => {
+    expect(restoredTeamFromAdmission({ admission_status: 'pending', team_id: null, name: 'Waiting Team' })).toBeNull()
+    expect(restoredTeamFromAdmission({ admission_status: 'approved', team_id: null, name: 'Incomplete Team' })).toBeNull()
   })
 })

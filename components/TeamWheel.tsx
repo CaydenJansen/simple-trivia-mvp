@@ -133,11 +133,10 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
 
   return (
     <div className="flex flex-col items-center">
-      <div style={{ background: dark ? '#211A38' : '#F3EEFF', color: dark ? '#F4F1FF' : '#4C1D95' }} className={`${compact ? 'mb-3 min-h-11 max-w-xs px-4 py-2' : 'mb-5 min-h-14 max-w-sm px-5 py-3'} w-full rounded-2xl text-center shadow-sm`}>
-        <p style={{ color: dark ? '#A9A4BF' : '#77738C' }} className="text-[10px] font-black uppercase tracking-[0.18em]">Under the pointer</p>
-        <p className={`${compact ? 'text-base' : 'mt-1 text-xl'} truncate font-black`}>{selectedName}</p>
+      <div style={{ background: dark ? '#211A38' : '#F3EEFF', color: dark ? '#F4F1FF' : '#4C1D95' }} className={`${compact ? 'mb-3 max-w-xs px-4 py-2' : 'mb-5 max-w-sm px-5 py-3'} w-full rounded-2xl text-center shadow-sm`}>
+        <p className={`${compact ? 'text-base' : 'text-xl'} truncate font-black`}>{selectedName}</p>
       </div>
-      <div className={`relative ${compact ? 'h-44 w-44 sm:h-52 sm:w-52' : 'h-56 w-56 sm:h-64 sm:w-64'}`}>
+      <div className={`relative ${compact ? 'h-52 w-52 sm:h-60 sm:w-60' : 'h-64 w-64 sm:h-72 sm:w-72'}`}>
         <div className="absolute left-1/2 top-[-10px] z-20 -translate-x-1/2 border-x-[14px] border-t-[24px] border-x-transparent border-t-rose-500 drop-shadow-lg" />
         <div
           ref={wheelRef}

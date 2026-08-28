@@ -12,7 +12,7 @@ import {
   type AnswerRevealMode,
 } from "@/lib/trivia/answer-reveal";
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
-import { PLAYER_SESSION_KEYS, shouldResetPlayerSessionForJoinCode } from "@/lib/trivia/session-recovery";
+import { PLAYER_SESSION_KEYS, restoredTeamFromAdmission, shouldResetPlayerSessionForJoinCode } from "@/lib/trivia/session-recovery";
 import { gameCodeFromSearch } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
 import type { Database, Json } from "@/lib/supabase/database.types";
@@ -901,12 +901,9 @@ function PlayerQuestionResultSummary({ snapshot }: { snapshot: PlayerSnapshot })
       </section>
 
       {snapshot.correctness && (
-        <section style={{ background: C.violetPale, border: `1px solid #C4B5FD` }} className="w-full rounded-2xl px-5 py-4 text-center">
-          <p style={{ color: C.violet }} className="text-3xl font-black tabular-nums">{snapshot.correctness.percentage}%</p>
-          <p style={{ color: C.sub }} className="mt-1 text-sm font-bold">
-            {snapshot.correctness.correct} of {snapshot.correctness.total} teams got it right
-          </p>
-        </section>
+        <p style={{ color: C.sub }} className="text-center text-xs font-bold">
+          <strong style={{ color: C.violet }} className="tabular-nums">{snapshot.correctness.percentage}%</strong> of teams got it right
+        </p>
       )}
     </>
   )
@@ -2747,6 +2744,7 @@ function ShowGame() {
   const [pressing, setPressing] = useState(false)
   const [bombPresses, setBombPresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [ownChoice, setOwnChoice] = useState<string | null>(null)
+  const [choiceCounts, setChoiceCounts] = useState<Record<string, number>>({})
   const [choiceBusy, setChoiceBusy] = useState(false)
   const [audienceResponse, setAudienceResponse] = useState('')
   const [audienceResponseRow, setAudienceResponseRow] = useState<DatabaseAudienceResponse | null>(null)
@@ -2785,10 +2783,15 @@ function ShowGame() {
     } else { setBombPresses([]); setHasPressed(false) }
     if (activeShowGame && isEliminationShowGame(activeShowGame.game_type)) {
       const state = eliminationShowGameState(activeShowGame.settings)
-      const { data: choice } = await supabase.from('game_show_game_choices').select('choice')
-        .eq('game_show_game_id', activeShowGame.id).eq('team_id', teamId).eq('round_number', state.roundNumber).maybeSingle()
+      const { data: roundChoices } = await supabase.from('game_show_game_choices').select('team_id, choice')
+        .eq('game_show_game_id', activeShowGame.id).eq('round_number', state.roundNumber)
+      const choice = (roundChoices ?? []).find(item => item.team_id === teamId)
       setOwnChoice(choice?.choice ?? (activeShowGame.game_type === 'dodge-the-rock' ? String(state.positions[teamId] ?? 1) : null))
-    }
+      setChoiceCounts((roundChoices ?? []).reduce<Record<string, number>>((counts, item) => {
+        counts[item.choice] = (counts[item.choice] ?? 0) + 1
+        return counts
+      }, {}))
+    } else setChoiceCounts({})
     if (activeShowGame?.game_type === 'audience-question') {
       const requestId = localStorage.getItem('simple-trivia-join-request-id')
       const requestToken = localStorage.getItem('simple-trivia-join-request-token')
@@ -2961,7 +2964,6 @@ function ShowGame() {
   const latestBombPressTeam = liveTeams.find(team => team.id === latestBombPress?.team_id) ?? null
   const showGameOutcome = exploded && (!isWheel || wheelSettled)
   const eliminationSecondsRemaining = Math.max(0, Math.ceil(((showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow) - showGameNow) / 1000))
-  const bombSecondsRemaining = isBomb ? eliminationSecondsRemaining : 0
   const teamIsAlive = teamId ? eliminationState.aliveTeamIds.includes(teamId) : false
   const isTieShowGame = Boolean(showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) && typeof (showGame.settings as Record<string, Json>).tie_resolution_id === 'string')
 
@@ -2982,8 +2984,7 @@ function ShowGame() {
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={showGame ? `Round ${showGame.round_number}` : ''} question="Game" />
       <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8 text-center">
-        <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-[0.18em]">{showGame ? showGameLabel(showGame.game_type) : 'Game'}</p>
-        <h1 style={{ color: C.ink }} className="mt-2 text-3xl font-black">{showGame?.title ?? 'Game'}</h1>
+        <h1 style={{ color: C.ink }} className="text-3xl font-black">{showGame?.title ?? (showGame ? showGameLabel(showGame.game_type) : 'Game')}</h1>
         <p style={{ color: C.sub }} className="mt-3 max-w-sm text-base font-semibold">{showGameRewardDescription(reward)}</p>
         {showingInstructions ? (
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-7 w-full max-w-sm rounded-2xl px-5 py-5 text-left">
@@ -3009,13 +3010,13 @@ function ShowGame() {
             <div style={{ background: C.violetPale, color: C.violet }} className="mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl">✓</div>
             <h2 style={{ color: C.ink }} className="mt-4 text-2xl font-black">Response locked in</h2>
             <p style={{ color: C.sub }} className="mt-2">{audienceQuestion.mode === 'closest-number' ? formatNumericResponse(audienceResponseRow.response_text) : audienceResponseRow.response_text}</p>
-            <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-6 overflow-hidden rounded-2xl text-left">
+            {audienceQuestion.mode === 'favourite' && <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-6 overflow-hidden rounded-2xl text-left">
               <p style={{ color: C.violet }} className="px-4 pb-2 pt-4 text-xs font-black uppercase tracking-widest">Everyone’s responses</p>
               {audienceResponses.map(response => <div key={response.team_id} style={{ borderTop: `1px solid ${C.line}` }} className="flex gap-3 px-4 py-3">
                 <span style={{ color: C.ink }} className="w-28 shrink-0 truncate text-sm font-black">{response.team_name}</span>
                 <span style={{ color: C.sub }} className="min-w-0 flex-1 break-words text-sm font-semibold">{audienceQuestion.mode === 'closest-number' ? formatNumericResponse(response.numeric_response ?? response.response_text) : response.response_text}</span>
               </div>)}
-            </div>
+            </div>}
             <div className="mt-5"><WaitMsg msg="The host is choosing the result…" /></div>
           </div> : <div className="mt-6">
             <label htmlFor="audience-response" style={{ color: C.sub }} className="mb-2 block text-left text-xs font-black uppercase tracking-wider">Your response</label>
@@ -3034,15 +3035,16 @@ function ShowGame() {
           canChoose={showGame.status === 'open' && teamIsAlive}
           choosing={choiceBusy}
           secondsRemaining={eliminationSecondsRemaining}
+          choiceCounts={choiceCounts}
           onChoose={choice => { void chooseEliminationOption(choice) }}
         /> : isWheel ? <div className="mt-5"><TeamWheel compact teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
           : isBigBalloon ? <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
           : <div className={`mt-5 text-6xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
         {isBomb && showGame?.status === 'open' && <div className="mt-4 w-full max-w-sm space-y-2">
-          {bombSecondsRemaining <= 10 && <div style={{ background: '#fff1f2', border: '1px solid #fb7185', color: '#9f1239' }} className="rounded-xl px-4 py-2.5 text-left">
-            <p className="text-xs font-black uppercase tracking-wider">The bomb could explode at any moment!</p>
-            <p className="mt-0.5 text-xs font-bold leading-4">Press soon or you won’t have a chance of winning.</p>
-          </div>}
+          <div style={{ background: '#fff1f2', border: '1px solid #fb7185', color: '#9f1239' }} className="rounded-xl px-3 py-2 text-left">
+            <p className="text-[11px] font-black uppercase tracking-wide">The bomb could explode at any moment!</p>
+            <p className="mt-0.5 text-[11px] font-bold leading-4">Press soon or you won’t have a chance of winning.</p>
+          </div>
           {latestBombPress && latestBombPressTeam && <div key={latestBombPress.pressed_at} style={{ background: C.violetPale, border: `1px solid ${C.violet}40`, color: C.violet }} className="animate-pulse rounded-xl px-4 py-3 text-sm font-black">
             {latestBombPressTeam.name} has pressed it!
           </div>}
@@ -3664,7 +3666,7 @@ export function PlayerFlow() {
       }
 
       const gameId = localStorage.getItem('simple-trivia-game-id')
-      const teamId = localStorage.getItem('simple-trivia-team-id')
+      let teamId = localStorage.getItem('simple-trivia-team-id')
       const joinRequestId = localStorage.getItem('simple-trivia-join-request-id')
       const joinRequestToken = localStorage.getItem('simple-trivia-join-request-token')
 
@@ -3680,6 +3682,35 @@ export function PlayerFlow() {
         if (active) setScreen('reconnecting')
         retry()
         return
+      }
+
+      // The browser-owned request token is the durable player session. A direct
+      // team-table read can briefly return no row while a sleeping phone is
+      // reconnecting, so restore the authoritative team id before reading it.
+      if (joinRequestId && joinRequestToken) {
+        const { data: admission, error: admissionError } = await supabase
+          .rpc('get_team_join_request', {
+            p_request_id: joinRequestId,
+            p_request_token: joinRequestToken,
+          })
+          .maybeSingle()
+        if (!active) return
+        if (admissionError) {
+          console.error('Could not restore player admission:', admissionError)
+          setScreen('reconnecting')
+          retry()
+          return
+        }
+        const restoredTeam = restoredTeamFromAdmission(admission)
+        if (restoredTeam) {
+          teamId = restoredTeam.teamId
+          localStorage.setItem('simple-trivia-team-id', restoredTeam.teamId)
+          localStorage.setItem('simple-trivia-team-name', restoredTeam.teamName)
+        } else if (admission?.admission_status === 'pending') {
+          setScreen('approval-pending')
+          setRestoringSession(false)
+          return
+        }
       }
 
       const [{ data: game, error: gameError }, { data: team, error: teamError }] = await Promise.all([
