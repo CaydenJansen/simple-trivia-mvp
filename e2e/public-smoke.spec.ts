@@ -36,7 +36,7 @@ test('player join codes accept digits only and show a useful invalid-code state'
   const code = page.getByPlaceholder('000000')
   await code.fill('ab12 34-56')
   await expect(code).toHaveValue('123456')
-  await page.getByRole('button', { name: 'Join Game' }).click()
+  await page.getByRole('button', { name: 'Join Game', exact: true }).click()
 
   await expect(page.getByText('We couldn’t find that game.')).toBeVisible()
   await expect(page.getByText('Check the code and try again.')).toBeVisible()
@@ -147,7 +147,7 @@ test('mobile join controls remain reachable when the team-name field is focused'
   await teamName.fill('Pocket Rockets')
   await teamName.focus()
 
-  const joinButton = page.getByRole('button', { name: 'Join Game' })
+  const joinButton = page.getByRole('button', { name: 'Ask to join' })
   await joinButton.scrollIntoViewIfNeeded()
   await expect(joinButton).toBeVisible()
   await expectNoHorizontalOverflow(page)
@@ -192,9 +192,9 @@ test('players can create an optional team PIN when joining', async ({ page }) =>
   await page.getByRole('button', { name: 'Create a team PIN' }).click()
   await page.getByLabel('New team PIN').fill('48-21')
   await expect(page.getByLabel('New team PIN')).toHaveValue('4821')
-  await page.getByRole('button', { name: 'Create PIN & Join' }).click()
+  await page.getByRole('button', { name: 'Create PIN & Ask to Join' }).click()
 
-  await expect(page.getByRole('heading', { name: 'You’re in!' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Waiting for host approval' })).toBeVisible()
   expect(joinRequest).toMatchObject({
     p_game_id: 'pin-game',
     p_team_name: 'Pocket Rockets',
@@ -230,7 +230,7 @@ test('an unmatched existing team PIN gives useful guidance', async ({ page }) =>
   await page.getByLabel('Team name').fill('Pocket Rockets')
   await page.getByRole('button', { name: 'I already have a team PIN' }).click()
   await page.getByLabel('Existing team PIN').fill('4821')
-  await page.getByRole('button', { name: 'Link Team & Join' }).click()
+  await page.getByRole('button', { name: 'Link Team & Ask to Join' }).click()
 
   await expect(page.getByText('We couldn’t match that team name and PIN.')).toBeVisible()
 })

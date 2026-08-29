@@ -13,7 +13,7 @@ import {
 } from "@/lib/trivia/answer-reveal";
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { PLAYER_SESSION_KEYS, restoredTeamFromAdmission, shouldResetPlayerSessionForJoinCode } from "@/lib/trivia/session-recovery";
-import { gameCodeFromSearch } from "@/lib/trivia/join-code";
+import { gameCodeFromSearch, normalizeGameCode } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
 import type { Database, Json } from "@/lib/supabase/database.types";
 import { multiAnswerInputCount, playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
@@ -1444,9 +1444,8 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
             type="tel"
             inputMode="numeric"
             pattern="[0-9]*"
-            maxLength={6}
             value={code}
-            onChange={e => { setCode(e.target.value.replace(/\D/g, '')); setInvalid(false) }}
+            onChange={e => { setCode(normalizeGameCode(e.target.value)); setInvalid(false) }}
             placeholder="000000"
             className="placeholder:text-zinc-300"
             style={{
@@ -1745,7 +1744,6 @@ async function handleJoin() {
                 aria-label="Existing team PIN"
                 type="password"
                 inputMode="numeric"
-                maxLength={TEAM_PIN_LENGTH}
                 value={pin}
                 onChange={e => { setPin(normalizeTeamPin(e.target.value)); setPinError(null); setJoinError(null) }}
                 onKeyDown={event => {
@@ -1797,7 +1795,6 @@ async function handleJoin() {
                 aria-label="New team PIN"
                 type="password"
                 inputMode="numeric"
-                maxLength={TEAM_PIN_LENGTH}
                 value={pin}
                 onChange={e => { setPin(normalizeTeamPin(e.target.value)); setPinError(null); setJoinError(null) }}
                 onKeyDown={event => {
