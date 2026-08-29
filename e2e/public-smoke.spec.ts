@@ -66,6 +66,56 @@ test('a new QR code clears a stale player session before joining', async ({ page
   }))).toEqual({ gameId: null, teamId: null })
 })
 
+test('refreshing a same-game QR link restores the existing approved team', async ({ page }) => {
+  const qrGameLookups: string[] = []
+
+  await page.addInitScript(() => {
+    localStorage.setItem('simple-trivia-game-id', 'live-game')
+    localStorage.setItem('simple-trivia-game-code', '123456')
+    localStorage.setItem('simple-trivia-game-title', 'Friday Trivia')
+    localStorage.setItem('simple-trivia-team-id', 'existing-team')
+    localStorage.setItem('simple-trivia-team-name', 'The Blim Blams')
+    localStorage.setItem('simple-trivia-join-request-id', 'join-request')
+    localStorage.setItem('simple-trivia-join-request-token', 'join-token')
+  })
+  await page.route('**/rest/v1/rpc/get_team_join_request', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      admission_status: 'approved',
+      team_id: 'existing-team',
+      name: 'The Blim Blams',
+      game_status: 'live',
+    }),
+  }))
+  await page.route('**/rest/v1/games**', route => {
+    if (new URL(route.request().url()).searchParams.get('code')) qrGameLookups.push(route.request().url())
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'live',
+        current_screen: 'round-start',
+        answer_phase: 'closed',
+        answer_editing_allowed: false,
+        question_stage: 'main',
+        current_question_key: null,
+        current_content_screen_key: null,
+        current_show_game_key: null,
+      }),
+    })
+  })
+
+  await page.goto('/play?code=123456')
+
+  await expect(page.getByRole('button', { name: 'Leave game' })).toBeVisible()
+  await expect(page.getByText('Loading round…')).toBeVisible()
+  await expect(page.getByLabel('Team name')).toHaveCount(0)
+  expect(qrGameLookups).toEqual([])
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('simple-trivia-team-id')))
+    .toBe('existing-team')
+})
+
 test('mobile join controls remain reachable when the team-name field is focused', async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith('mobile'), 'Mobile layout regression')
 

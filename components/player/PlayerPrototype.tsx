@@ -3832,7 +3832,10 @@ export function PlayerFlow() {
       >
         {canLeaveGame && <PlayerPrimaryHeader onLeave={() => setConfirmingLeave(true)} />}
         <PlayerScoreVisibilityContext.Provider value={scoresVisible}>
-          {renderScreen(screen, go)}
+          {/* Do not mount JoinGame until the durable browser session has been
+              checked. On QR URLs its auto-join effect would otherwise race the
+              restore request and replace an existing team session on refresh. */}
+          {renderScreen(restoringSession ? 'reconnecting' : screen, go)}
         </PlayerScoreVisibilityContext.Provider>
       </div>
 
