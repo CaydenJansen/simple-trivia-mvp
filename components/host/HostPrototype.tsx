@@ -2046,7 +2046,8 @@ function QuizBuilder({ go }: { go: Go }) {
   const [pendingExit, setPendingExit] = useState<Screen | null>(null)
   const questionCount = rounds.reduce((total, round) => total + round.questions.length, 0)
   const bonusCount = rounds.reduce((total, round) => total + round.questions.filter(question => question.bonus !== null).length, 0)
-  const estimatedMinutes = estimatedQuizMinutes(questionCount, bonusCount)
+  const showGameCount = rounds.reduce((total, round) => total + round.showGames.length, 0)
+  const estimatedMinutes = estimatedQuizMinutes(questionCount, bonusCount, showGameCount)
   const readiness = useMemo(() => checkQuizReadiness({
     title,
     rounds: rounds.map(round => ({
@@ -5027,6 +5028,9 @@ function AutoBuild({ go }: { go: Go }) {
   const [questionCountInput, setQuestionCountInput] = useState('30')
   const [roundCount, setRoundCount] = useState(4)
   const [includeGames, setIncludeGames] = useState(false)
+  const [autoBuildGameRewardType, setAutoBuildGameRewardType] = useState<ShowGameRewardType>('points')
+  const [autoBuildGameRewardPoints, setAutoBuildGameRewardPoints] = useState(1)
+  const [autoBuildGamePrize, setAutoBuildGamePrize] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [audienceFit, setAudienceFit] = useState<AutoBuildAudiencePreference>('all')
   const [vibe, setVibe] = useState<AutoBuildVibe>('none')
@@ -5099,6 +5103,7 @@ function AutoBuild({ go }: { go: Go }) {
   const localeIsValid = scopeMode === 'global_only' || audienceLocale.trim().length > 0
   const canGenerate = countsAreValid
     && localeIsValid
+    && (!includeGames || autoBuildGameRewardType !== 'custom' || autoBuildGamePrize.trim().length > 0)
     && !sourcesLoading
     && !sourcesError
     && availability.canBuild
@@ -5196,6 +5201,19 @@ function AutoBuild({ go }: { go: Go }) {
       let position = 0
       let itemPosition = 0
       const roundGameTypes = includeGames ? autoBuildShowGameTypes(plan.rounds.length) : []
+      const autoBuildReward = autoBuildGameRewardType === 'custom'
+        ? {
+          type: 'custom' as const,
+          points: 0,
+          description: autoBuildGamePrize.trim(),
+          winnerMessage: `You won! ${autoBuildGamePrize.trim()}`,
+        }
+        : {
+          type: 'points' as const,
+          points: autoBuildGameRewardPoints,
+          description: '',
+          winnerMessage: '',
+        }
 
       plan.rounds.forEach((round, roundIndex) => {
         round.questions.forEach((question, roundIndexPosition) => {
@@ -5235,7 +5253,7 @@ function AutoBuild({ go }: { go: Go }) {
             round_title: round.title,
             game_type: gameType,
             title: showGameLabel(gameType),
-            settings: showGameRewardSettings(DEFAULT_SHOW_GAME_REWARD),
+            settings: showGameRewardSettings(autoBuildReward),
           })
         }
       })
@@ -5253,7 +5271,11 @@ function AutoBuild({ go }: { go: Go }) {
         p_quiz_id: null,
         p_title: title,
         p_status: 'draft',
-        p_estimated_minutes: estimatedQuizMinutes(questionCount, plan.rounds.reduce((total, round) => total + round.questions.filter(question => question.bonus !== null).length, 0)),
+        p_estimated_minutes: estimatedQuizMinutes(
+          questionCount,
+          plan.rounds.reduce((total, round) => total + round.questions.filter(question => question.bonus !== null).length, 0),
+          roundGameTypes.length,
+        ),
         p_questions: questionSnapshots,
         p_content_screens: [],
         p_tiebreakers: tiebreakerSnapshots,
@@ -5318,18 +5340,40 @@ function AutoBuild({ go }: { go: Go }) {
             </div>
             <p style={{ color: countsAreValid ? C.sub : C.stop }} className="mt-4 text-xs">
               {countsAreValid
-                ? autoBuildSizeSummary(questionCount, roundCount)
+                ? autoBuildSizeSummary(questionCount, roundCount, includeGames ? roundCount : 0)
                 : 'Add at least one question for every round.'}
             </p>
           </div>
 
-          <label style={{ background: C.panel, border: `1px solid ${C.line}` }} className="flex cursor-pointer items-start gap-3 rounded-2xl p-5">
-            <input type="checkbox" checked={includeGames} onChange={event => setIncludeGames(event.target.checked)} className="mt-0.5 h-4 w-4 accent-violet" />
-            <span>
-              <span style={{ color: C.ink }} className="block text-sm font-bold">Include games</span>
-              <span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">Adds one random-chance game at the end of every round.</span>
-            </span>
-          </label>
+          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input type="checkbox" checked={includeGames} onChange={event => setIncludeGames(event.target.checked)} className="mt-0.5 h-4 w-4 accent-violet" />
+              <span>
+                <span style={{ color: C.ink }} className="block text-sm font-bold">Include games</span>
+                <span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">Adds one random-chance game at the end of every round.</span>
+              </span>
+            </label>
+            {includeGames && <div style={{ borderTop: `1px solid ${C.line}` }} className="mt-4 space-y-4 pt-4">
+              <div>
+                <p style={{ color: C.ink }} className="text-sm font-bold">What are the games for?</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {([['points', 'Bonus points'], ['custom', 'A custom prize']] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setAutoBuildGameRewardType(value)}
+                    style={{ border: `1.5px solid ${autoBuildGameRewardType === value ? C.violet : C.line}`, background: autoBuildGameRewardType === value ? C.violetPale : 'white', color: autoBuildGameRewardType === value ? C.violet : C.sub }}
+                    className="cursor-pointer rounded-xl px-3 py-2.5 text-sm font-bold">{label}</button>)}
+                </div>
+              </div>
+              {autoBuildGameRewardType === 'points' ? <label className="block">
+                <span style={{ color: C.sub }} className="text-xs font-bold">Points for each winner</span>
+                <input type="number" min={1} max={100} value={autoBuildGameRewardPoints} onChange={event => setAutoBuildGameRewardPoints(Math.max(1, Math.min(100, Number(event.target.value) || 1)))}
+                  style={{ border: `1px solid ${C.line}`, color: C.ink }} className="mt-2 block w-24 rounded-xl bg-white px-3 py-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-violet/30" />
+              </label> : <label className="block">
+                <span style={{ color: C.sub }} className="text-xs font-bold">Prize for every game</span>
+                <input value={autoBuildGamePrize} onChange={event => setAutoBuildGamePrize(event.target.value)} placeholder="e.g. A free jug of beer"
+                  style={{ border: `1px solid ${C.line}`, color: C.ink }} className="mt-2 block w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+                {!autoBuildGamePrize.trim() && <span style={{ color: C.stop }} className="mt-2 block text-xs font-semibold">Describe the prize before generating.</span>}
+              </label>}
+            </div>}
+          </div>
 
           {/* Topics */}
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
@@ -6687,11 +6731,14 @@ function LiveQuestion({ go }: { go: Go }) {
   const [showGame, setShowGame] = useState<LiveShowGameDefinition | null>(null)
   const [wheelSettled, setWheelSettled] = useState(false)
   const handleWheelSettled = useCallback(() => setWheelSettled(true), [])
+  const [coinRevealFinishedRound, setCoinRevealFinishedRound] = useState<number | null>(null)
+  const handleCoinRevealAnimationComplete = useCallback((roundNumber: number) => setCoinRevealFinishedRound(roundNumber), [])
   const [allShowGames, setAllShowGames] = useState<LiveShowGameDefinition[]>([])
   const [showGamePresses, setShowGamePresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [showGameBalloons, setShowGameBalloons] = useState<BigBalloonEntry[]>([])
   const [audienceResponses, setAudienceResponses] = useState<LiveAudienceResponse[]>([])
   const [selectedAudienceWinnerIds, setSelectedAudienceWinnerIds] = useState<string[]>([])
+  const audienceShowGameIdRef = useRef<string | null>(null)
   const [showGameNow, setShowGameNow] = useState(() => Date.now())
   const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
   const [playerScoreVisibility, setPlayerScoreVisibility] = useState<PlayerScoreVisibility>('live')
@@ -6835,6 +6882,17 @@ function LiveQuestion({ go }: { go: Go }) {
       const currentQuestion = questions.find(item => item.question_key === game.current_question_key) ?? questions[0] ?? null
       const currentContentScreen = contentScreens.find(item => item.screen_key === game.current_content_screen_key) ?? null
       const currentShowGame = showGames.find(item => item.show_game_key === game.current_show_game_key) ?? null
+
+      if (currentShowGame?.game_type === 'audience-question') {
+        if (audienceShowGameIdRef.current !== currentShowGame.id) {
+          audienceShowGameIdRef.current = currentShowGame.id
+          setSelectedAudienceWinnerIds([])
+          setAudienceResponses([])
+        }
+      } else {
+        audienceShowGameIdRef.current = null
+        setSelectedAudienceWinnerIds([])
+      }
 
       setAllQuestions(questions)
       setAllContentScreens(contentScreens)
@@ -6997,6 +7055,7 @@ function LiveQuestion({ go }: { go: Go }) {
     setShowGameBalloons([])
     setAudienceResponses([])
     setSelectedAudienceWinnerIds([])
+    audienceShowGameIdRef.current = nextShowGame.game_type === 'audience-question' ? nextShowGame.id : null
     setGameScreen('show-game')
     setPhase('closed')
   }
@@ -8104,7 +8163,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const eligibleIds = showGameEligibleTeamIds(showGame?.settings)
     const wheelTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : teams
     const participatingTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : activeTeams
-    const showGameWinner = showGame?.status === 'exploded' && (!isWheel || wheelSettled)
+    const coinResultVisible = showGame?.game_type !== 'heads-or-tails' || coinRevealFinishedRound === eliminationState.roundNumber
+    const showGameWinner = showGame?.status === 'exploded' && (!isWheel || wheelSettled) && coinResultVisible
     const pressedTeamIds = new Set(showGamePresses.map(press => press.team_id))
     const startedAt = showGame?.started_at ? new Date(showGame.started_at).getTime() : showGameNow
     const explodeAt = showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow
@@ -8163,7 +8223,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 </div>
               </div>
             ) : isElimination && showGame ? (
-              <EliminationShowGame type={showGame.game_type as EliminationShowGameType} teams={participatingTeams} state={eliminationState} secondsRemaining={eliminationSecondsRemaining} dark />
+              <EliminationShowGame type={showGame.game_type as EliminationShowGameType} teams={participatingTeams} state={eliminationState} secondsRemaining={eliminationSecondsRemaining} onRevealAnimationComplete={handleCoinRevealAnimationComplete} dark />
             ) : isBigBalloon ? (
               <BigBalloon teams={participatingTeams} balloons={showGameBalloons} dark />
             ) : isWheel ? (
@@ -8179,7 +8239,9 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               </div>
             ) : (
               <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isElimination
-                ? `${eliminationState.aliveTeamIds.length} teams remain · ${eliminationState.roundPhase === 'choosing' ? 'Choosing now' : 'Round result'}`
+                ? showGame?.game_type === 'heads-or-tails' && eliminationState.roundPhase === 'reveal' && !coinResultVisible
+                  ? 'Flipping…'
+                  : `${eliminationState.aliveTeamIds.length} teams remain · ${eliminationState.roundPhase === 'choosing' ? 'Choosing now' : 'Round result'}`
                 : isBigBalloon ? `${showGameBalloons.filter(balloon => balloon.status === 'locked').length} locked · ${showGameBalloons.filter(balloon => balloon.status === 'popped').length} popped · ${eliminationSecondsRemaining}s left`
                 : isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`)
                   : `Fuse burning… ${showGamePresses.length} of ${participatingTeams.length} active teams have pressed.`}</p>

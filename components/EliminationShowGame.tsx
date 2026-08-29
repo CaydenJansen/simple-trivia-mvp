@@ -16,6 +16,7 @@ export default function EliminationShowGame({
   secondsRemaining = 0,
   choiceCounts = {},
   onChoose,
+  onRevealAnimationComplete,
   dark = false,
 }: {
   type: EliminationShowGameType
@@ -28,6 +29,7 @@ export default function EliminationShowGame({
   secondsRemaining?: number
   choiceCounts?: Record<string, number>
   onChoose?: (choice: string) => void
+  onRevealAnimationComplete?: (roundNumber: number) => void
   dark?: boolean
 }) {
   const [announcedCoinRound, setAnnouncedCoinRound] = useState<number | null>(null)
@@ -40,12 +42,16 @@ export default function EliminationShowGame({
 
   useEffect(() => {
     if (type !== 'heads-or-tails' || state.roundPhase !== 'reveal') return
-    const timer = window.setTimeout(() => setAnnouncedCoinRound(state.roundNumber), 1150)
+    const timer = window.setTimeout(() => {
+      setAnnouncedCoinRound(state.roundNumber)
+      onRevealAnimationComplete?.(state.roundNumber)
+    }, 1150)
     return () => window.clearTimeout(timer)
-  }, [state.roundNumber, state.roundPhase, state.roundOutcome, type])
+  }, [onRevealAnimationComplete, state.roundNumber, state.roundPhase, state.roundOutcome, type])
 
   if (type === 'heads-or-tails') {
     const revealed = state.roundPhase === 'reveal'
+    const resultVisible = !revealed || announcedCoinRound === state.roundNumber
     return (
       <div className="mx-auto mt-6 w-full max-w-2xl">
         <div className="text-center">
@@ -79,7 +85,7 @@ export default function EliminationShowGame({
           </div>
         )}
 
-        {ownTeamId ? <>
+        {resultVisible && (ownTeamId ? <>
           <p style={{ color: dim }} className="mt-4 text-center text-sm font-bold">Only {state.aliveTeamIds.length} team{state.aliveTeamIds.length === 1 ? '' : 's'} remaining</p>
         </> : <div className="mt-5 grid gap-2 sm:grid-cols-2">
           {teams.map(team => {
@@ -89,7 +95,7 @@ export default function EliminationShowGame({
               <span style={{ color: eliminated ? '#F87171' : '#34D399' }} className="ml-2 text-[10px] font-black uppercase">{eliminated ? 'Out' : 'In'}</span>
             </div>
           })}
-        </div>}
+        </div>)}
       </div>
     )
   }

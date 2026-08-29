@@ -2750,6 +2750,9 @@ function ShowGame() {
   const [audienceResponseRow, setAudienceResponseRow] = useState<DatabaseAudienceResponse | null>(null)
   const [audienceResponses, setAudienceResponses] = useState<PlayerAudienceResponse[]>([])
   const [audienceSubmitting, setAudienceSubmitting] = useState(false)
+  const audienceShowGameIdRef = useRef<string | null>(null)
+  const [coinRevealFinishedRound, setCoinRevealFinishedRound] = useState<number | null>(null)
+  const handleCoinRevealAnimationComplete = useCallback((roundNumber: number) => setCoinRevealFinishedRound(roundNumber), [])
   const [balloons, setBalloons] = useState<BigBalloonEntry[]>([])
   const [balloonHolding, setBalloonHolding] = useState(false)
   const balloonPulseTimerRef = useRef<number | null>(null)
@@ -2793,6 +2796,12 @@ function ShowGame() {
       }, {}))
     } else setChoiceCounts({})
     if (activeShowGame?.game_type === 'audience-question') {
+      if (audienceShowGameIdRef.current !== activeShowGame.id) {
+        audienceShowGameIdRef.current = activeShowGame.id
+        setAudienceResponse('')
+        setAudienceResponseRow(null)
+        setAudienceResponses([])
+      }
       const requestId = localStorage.getItem('simple-trivia-join-request-id')
       const requestToken = localStorage.getItem('simple-trivia-join-request-token')
       if (requestId && requestToken) {
@@ -2801,7 +2810,9 @@ function ShowGame() {
         })
         const row = response && typeof response === 'object' && !Array.isArray(response) ? response as DatabaseAudienceResponse : null
         setAudienceResponseRow(row?.id ? row : null)
-        if (row?.response_text) setAudienceResponse(activeShowGame.settings && audienceQuestionFromSettings(activeShowGame.settings).mode === 'closest-number' ? formatNumericResponse(row.response_text) : row.response_text)
+        setAudienceResponse(row?.response_text
+          ? activeShowGame.settings && audienceQuestionFromSettings(activeShowGame.settings).mode === 'closest-number' ? formatNumericResponse(row.response_text) : row.response_text
+          : '')
         if (row?.id) {
           const { data: roomResponses, error: roomError } = await supabase.rpc('get_audience_question_responses', {
             p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken,
@@ -2809,7 +2820,7 @@ function ShowGame() {
           if (!roomError) setAudienceResponses(roomResponses ?? [])
         } else setAudienceResponses([])
       }
-    } else { setAudienceResponseRow(null); setAudienceResponses([]); setAudienceResponse('') }
+    } else { audienceShowGameIdRef.current = null; setAudienceResponseRow(null); setAudienceResponses([]); setAudienceResponse('') }
     if (activeShowGame?.game_type === 'big-balloon') {
       const { data: balloonRows } = await supabase.from('game_show_game_balloons').select('team_id, size_units, status').eq('game_show_game_id', activeShowGame.id)
       setBalloons((balloonRows ?? []) as BigBalloonEntry[])
@@ -2962,7 +2973,8 @@ function ShowGame() {
   const wheelWinner = liveTeams.find(team => team.id === showGame?.winner_team_id) ?? null
   const latestBombPress = bombPresses.at(-1) ?? null
   const latestBombPressTeam = liveTeams.find(team => team.id === latestBombPress?.team_id) ?? null
-  const showGameOutcome = exploded && (!isWheel || wheelSettled)
+  const coinResultVisible = showGame?.game_type !== 'heads-or-tails' || coinRevealFinishedRound === eliminationState.roundNumber
+  const showGameOutcome = exploded && (!isWheel || wheelSettled) && coinResultVisible
   const eliminationSecondsRemaining = Math.max(0, Math.ceil(((showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow) - showGameNow) / 1000))
   const teamIsAlive = teamId ? eliminationState.aliveTeamIds.includes(teamId) : false
   const isTieShowGame = Boolean(showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) && typeof (showGame.settings as Record<string, Json>).tie_resolution_id === 'string')
@@ -3037,6 +3049,7 @@ function ShowGame() {
           secondsRemaining={eliminationSecondsRemaining}
           choiceCounts={choiceCounts}
           onChoose={choice => { void chooseEliminationOption(choice) }}
+          onRevealAnimationComplete={handleCoinRevealAnimationComplete}
         /> : isWheel ? <div className="mt-5"><TeamWheel compact teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
           : isBigBalloon ? <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
           : <div className={`mt-5 text-6xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
@@ -3050,7 +3063,7 @@ function ShowGame() {
           </div>}
           {bombPresses.length > 1 && <p style={{ color: C.sub }} className="text-xs font-bold">{bombPresses.length} teams have pressed so far.</p>}
         </div>}
-        {!isAudienceQuestion && (isElimination && !exploded ? (
+        {!isAudienceQuestion && (isElimination && !exploded && (showGame?.game_type !== 'heads-or-tails' || eliminationState.roundPhase !== 'reveal' || coinRevealFinishedRound === eliminationState.roundNumber) ? (
           <div className="mt-5">
             <h2 style={{ color: teamIsAlive ? C.go : C.sub }} className="text-xl font-black">{teamIsAlive ? `You’re still in · Round ${eliminationState.roundNumber}` : 'You’re out—watch the survivors'}</h2>
             {eliminationState.roundPhase === 'reveal' && eliminationState.roundEliminatedTeamIds.length === 0 && <p style={{ color: C.sub }} className="mt-2">Nobody was knocked out. Another round is coming.</p>}
@@ -3064,7 +3077,9 @@ function ShowGame() {
         ) : isBigBalloon ? (
           <p style={{ color: C.sub }} className="mt-5 font-semibold">{eliminationSecondsRemaining}s left · Release to lock in your balloon.</p>
         ) : isWheel ? (
-          <div className="mt-7"><h2 style={{ color: C.ink }} className="text-2xl font-black">{exploded ? 'The wheel is slowing down…' : 'The wheel is spinning…'}</h2><p style={{ color: C.sub }} className="mt-2">Watch the team names under the pointer.</p></div>
+          null
+        ) : isElimination ? (
+          null
         ) : !teamIsEligible ? (
           <div className="mt-7"><h2 style={{ color: C.ink }} className="text-2xl font-black">Watch the tied teams</h2><p style={{ color: C.sub }} className="mt-2">Only the teams in this final tie can press.</p></div>
         ) : hasPressed ? (

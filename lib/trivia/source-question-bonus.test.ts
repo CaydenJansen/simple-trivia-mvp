@@ -85,4 +85,9 @@ describe('source question bonus authoring', () => {
     expect(estimatedQuizMinutes(normalQuestionCount, 4)).toBe(82)
     expect(normalQuestionCount).toBe(30)
   })
+
+  it('adds three minutes per show game to runtime estimates', () => {
+    expect(estimatedQuizMinutes(10, 0, 0)).toBe(24)
+    expect(estimatedQuizMinutes(10, 0, 2)).toBe(30)
+  })
 })

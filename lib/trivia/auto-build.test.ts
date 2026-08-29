@@ -47,6 +47,10 @@ describe('Auto-Build selection semantics', () => {
     expect(autoBuildSizeSummary(30, 4)).toBe('About 72 minutes, with roughly 7–8 questions per round.')
   })
 
+  it('includes three minutes for every generated show game', () => {
+    expect(autoBuildSizeSummary(20, 4, 4)).toBe('About 60 minutes, with 5 questions per round.')
+  })
+
   it('requires at least one question in every configured round', () => {
     expect(() => buildAutoQuizPlan({
       questions,

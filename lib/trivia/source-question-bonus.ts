@@ -110,6 +110,7 @@ export function sourceQuestionBonusPayload(draft: SourceQuestionBonusDraft): Jso
   }
 }
 
-export function estimatedQuizMinutes(questionCount: number, bonusCount: number): number {
+export function estimatedQuizMinutes(questionCount: number, bonusCount: number, showGameCount = 0): number {
   return Math.round((Math.max(0, questionCount) + Math.max(0, bonusCount)) * 2.4)
+    + Math.max(0, showGameCount) * 3
 }
