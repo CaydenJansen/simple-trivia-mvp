@@ -49,7 +49,7 @@ import {
   type EliminationShowGameType,
   type ShowGameType,
 } from "@/lib/trivia/elimination-show-games";
-import { audienceQuestionFromSettings } from "@/lib/trivia/audience-question";
+import { audienceQuestionFromSettings, audienceQuestionPlayerInstructions } from "@/lib/trivia/audience-question";
 import { formatNumericResponse, formatNumericResponseInput, parseNumericResponseInput } from "@/lib/trivia/numeric-response";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -2989,7 +2989,7 @@ function ShowGame() {
         {showingInstructions ? (
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-7 w-full max-w-sm rounded-2xl px-5 py-5 text-left">
             <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-widest">How it works</p>
-            <p style={{ color: C.ink }} className="mt-3 text-base font-semibold leading-6">{showGame ? showGameInstructions(showGame.game_type) : ''}</p>
+            <p style={{ color: C.ink }} className="mt-3 text-base font-semibold leading-6">{showGame ? isAudienceQuestion ? audienceQuestionPlayerInstructions(showGame.settings) : showGameInstructions(showGame.game_type) : ''}</p>
             <div className="mt-5"><WaitMsg msg="The host will start the game…" /></div>
           </div>
         ) : <>
@@ -2998,7 +2998,7 @@ function ShowGame() {
             <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-widest">{audienceQuestion.mode === 'favourite' ? 'Favourite Answer' : 'Closest Guess'}</p>
             <p style={{ color: C.ink }} className="mt-3 text-xl font-black leading-7">{audienceQuestion.prompt}</p>
           </div>
-          {!teamIsEligible ? <div className="mt-6"><h2 style={{ color: C.ink }} className="text-2xl font-black">Watch the tied teams</h2><p style={{ color: C.sub }} className="mt-2">Only the teams in this final tie are answering.</p></div> : exploded ? <div className="mt-6">
+          {!teamIsEligible ? <div className="mt-6"><h2 style={{ color: C.ink }} className="text-2xl font-black">{isTieShowGame ? 'Watch the tied teams' : 'This game is already underway'}</h2><p style={{ color: C.sub }} className="mt-2">{isTieShowGame ? 'Only the teams in this final tie are answering.' : 'You’ll join in from the next activity.'}</p></div> : exploded ? <div className="mt-6">
             <h2 style={{ color: audienceResponseRow?.is_winner ? C.go : C.ink }} className="text-3xl font-black">{audienceResponseRow?.is_winner ? showGameWinnerMessage(reward) : 'Another response won'}</h2>
             {audienceResponseRow && <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-5 rounded-2xl px-5 py-4 text-left">
               <p style={{ color: C.sub }} className="text-xs font-bold uppercase tracking-wider">Your response</p><p style={{ color: C.ink }} className="mt-2 text-lg font-bold">{audienceQuestion.mode === 'closest-number' ? formatNumericResponse(audienceResponseRow.response_text) : audienceResponseRow.response_text}</p>
@@ -3041,7 +3041,7 @@ function ShowGame() {
           : isBigBalloon ? <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
           : <div className={`mt-5 text-6xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
         {isBomb && showGame?.status === 'open' && <div className="mt-4 w-full max-w-sm space-y-2">
-          <div style={{ background: '#fff1f2', border: '1px solid #fb7185', color: '#9f1239' }} className="rounded-xl px-3 py-2 text-left">
+          <div style={{ background: '#fff1f2', border: '1px solid #fb7185', color: '#9f1239' }} className="rounded-xl px-3 py-2 text-center">
             <p className="text-[11px] font-black uppercase tracking-wide">The bomb could explode at any moment!</p>
             <p className="mt-0.5 text-[11px] font-bold leading-4">Press soon or you won’t have a chance of winning.</p>
           </div>
@@ -3667,6 +3667,7 @@ export function PlayerFlow() {
 
       const gameId = localStorage.getItem('simple-trivia-game-id')
       let teamId = localStorage.getItem('simple-trivia-team-id')
+      let securelyRestoredTeam: { teamId: string; teamName: string } | null = null
       const joinRequestId = localStorage.getItem('simple-trivia-join-request-id')
       const joinRequestToken = localStorage.getItem('simple-trivia-join-request-token')
 
@@ -3703,6 +3704,7 @@ export function PlayerFlow() {
         }
         const restoredTeam = restoredTeamFromAdmission(admission)
         if (restoredTeam) {
+          securelyRestoredTeam = restoredTeam
           teamId = restoredTeam.teamId
           localStorage.setItem('simple-trivia-team-id', restoredTeam.teamId)
           localStorage.setItem('simple-trivia-team-name', restoredTeam.teamName)
@@ -3719,7 +3721,7 @@ export function PlayerFlow() {
           .select('status, current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
           .eq('id', gameId)
           .maybeSingle(),
-        teamId
+        teamId && !securelyRestoredTeam
           ? supabase.from('teams').select('id, game_id, name').eq('id', teamId).maybeSingle()
           : Promise.resolve({ data: null, error: null }),
       ])
@@ -3745,7 +3747,7 @@ export function PlayerFlow() {
         return
       }
 
-      if (!team || team.game_id !== gameId) {
+      if (!securelyRestoredTeam && (!team || team.game_id !== gameId)) {
         localStorage.removeItem('simple-trivia-team-id')
         localStorage.removeItem('simple-trivia-team-name')
         setScreen(gameAcceptsNewTeams(game.status) ? 'team-setup' : 'game-ended')
@@ -3753,8 +3755,10 @@ export function PlayerFlow() {
         return
       }
 
-      localStorage.setItem('simple-trivia-team-name', team.name)
-      const nextScreen = await resolveLivePlayerScreen(gameId, team.id, game as RemoteGameState)
+      const trustedTeam = securelyRestoredTeam ?? (team ? { teamId: team.id, teamName: team.name } : null)
+      if (!trustedTeam) return
+      localStorage.setItem('simple-trivia-team-name', trustedTeam.teamName)
+      const nextScreen = await resolveLivePlayerScreen(gameId, trustedTeam.teamId, game as RemoteGameState)
       if (!active) return
       setScreen(nextScreen ?? 'game-ended')
       setRestoringSession(false)

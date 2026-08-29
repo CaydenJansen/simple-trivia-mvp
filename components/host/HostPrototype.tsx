@@ -126,6 +126,7 @@ import {
 } from "@/lib/trivia/elimination-show-games";
 import {
   audienceQuestionFromSettings,
+  audienceQuestionHostInstructions,
   audienceQuestionSettings,
   type AudienceQuestionMode,
 } from "@/lib/trivia/audience-question";
@@ -6710,6 +6711,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const autoRunActionRef = useRef<() => void>(() => {})
   const autoRunPublishedKeyRef = useRef('')
   const liveGameSettingsRef = useRef<Record<string, Json>>({})
+  const audienceResolveBusyRef = useRef(false)
   const [liveError, setLiveError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
   const [removingLiveTeamId, setRemovingLiveTeamId] = useState<string | null>(null)
@@ -7029,7 +7031,7 @@ function LiveQuestion({ go }: { go: Go }) {
   }
 
   async function resolveAudienceQuestion() {
-    if (!showGame || showGame.game_type !== 'audience-question' || showGame.status !== 'open' || actionBusy) return
+    if (!showGame || showGame.game_type !== 'audience-question' || showGame.status !== 'open' || actionBusy || audienceResolveBusyRef.current) return
     const config = audienceQuestionFromSettings(showGame.settings)
     if (audienceResponses.length === 0) {
       setLiveError('Wait for at least one response before choosing a winner.')
@@ -7039,6 +7041,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setLiveError('Select at least one favourite response first.')
       return
     }
+    audienceResolveBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
     const { data, error } = await supabase.rpc('resolve_audience_question', {
@@ -7047,8 +7050,16 @@ function LiveQuestion({ go }: { go: Go }) {
     })
     if (error) {
       console.error('Could not resolve Audience Question:', error)
-      setLiveError('Could not confirm the result. Please try again.')
-    } else setShowGame(data as LiveShowGameDefinition)
+      const { data: resolved } = await supabase.from('game_show_games').select('*').eq('id', showGame.id).maybeSingle()
+      if (resolved?.status === 'exploded') {
+        setShowGame(resolved as LiveShowGameDefinition)
+        setLiveError(null)
+      } else setLiveError('Could not confirm the result. Please try again.')
+    } else {
+      setShowGame(data as LiveShowGameDefinition)
+      setLiveError(null)
+    }
+    audienceResolveBusyRef.current = false
     setActionBusy(false)
   }
 
@@ -8118,7 +8129,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             {showingShowGameInstructions ? (
               <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}` }} className="mx-auto mt-7 max-w-2xl rounded-2xl px-6 py-6 text-left">
                 <p className="text-xs font-black uppercase tracking-widest text-violet-300">How it works</p>
-                <p style={{ color: C.liveText }} className="mt-3 text-lg font-semibold leading-7">{showGame ? showGameInstructions(showGame.game_type) : ''}</p>
+                <p style={{ color: C.liveText }} className="mt-3 text-lg font-semibold leading-7">{showGame ? isAudienceQuestion ? audienceQuestionHostInstructions(showGame.settings) : showGameInstructions(showGame.game_type) : ''}</p>
               </div>
             ) : isAudienceQuestion ? (
               <div className="mx-auto mt-6 max-w-3xl text-left">
@@ -8128,6 +8139,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   {showGame?.status === 'exploded' && audienceQuestion.mode === 'closest-number' && audienceQuestion.correctNumber !== null && <p className="mt-2 text-sm font-bold text-emerald-400">Correct number: {audienceQuestion.correctNumber}</p>}
                 </div>
                 <div className="mt-4 space-y-2">
+                  {showGame?.status === 'open' && audienceQuestion.mode === 'favourite' && <p style={{ color: C.liveDim }} className="pb-1 text-sm font-bold">Select the answer you want to reward, then confirm it using the button on the right.</p>}
                   {participatingTeams.map(team => {
                     const response = audienceResponses.find(item => item.team_id === team.id)
                     const selected = Boolean(response && selectedAudienceWinnerIds.includes(response.team_id))
@@ -8143,7 +8155,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                       <span className="w-36 shrink-0 truncate font-black">{team.name}</span>
                       <span className="min-w-0 flex-1 font-semibold">{response ? audienceQuestion.mode === 'closest-number' ? formatNumericResponse(response.numeric_response ?? response.response_text) : response.response_text : <span style={{ color: C.liveDim }}>Waiting…</span>}</span>
                       {response?.distance_from_correct !== null && response?.distance_from_correct !== undefined && <span style={{ color: C.liveDim }} className="text-sm">Distance {formatNumericResponse(response.distance_from_correct)}</span>}
-                      {(selected || response?.is_winner) && <span className="font-black text-emerald-400">✓ Winner</span>}
+                      {canSelect && <span className={`shrink-0 text-sm font-black ${selected ? 'text-emerald-400' : 'text-violet-300'}`}>{selected ? '✓ Selected' : 'Select'}</span>}
+                      {!canSelect && response?.is_winner && <span className="font-black text-emerald-400">✓ Winner</span>}
                       {isClosest && !response?.is_winner && <span className="font-black text-emerald-400">Closest</span>}
                     </button>
                   })}
@@ -8171,7 +8184,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 : isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`)
                   : `Fuse burning… ${showGamePresses.length} of ${participatingTeams.length} active teams have pressed.`}</p>
             ))}
-            {!showingShowGameInstructions && !isWheel && !isElimination && !isBigBalloon && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
+            {!showingShowGameInstructions && !isAudienceQuestion && !isWheel && !isElimination && !isBigBalloon && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
               {participatingTeams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
             </div>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
@@ -8196,8 +8209,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           </div>
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="shrink-0 space-y-3 p-5">
             <button data-host-navigation="back" disabled style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="w-full cursor-not-allowed rounded-xl py-3 text-sm font-bold opacity-35">← Previous</button>
-            <button data-host-navigation="forward" onClick={showingShowGameInstructions ? startPreparedShowGame : isAudienceQuestion && showGame?.status === 'open' ? resolveAudienceQuestion : handleAdvanceShowGame} disabled={actionBusy || (!showingShowGameInstructions && !isAudienceQuestion && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled))) || (isAudienceQuestion && showGame?.status === 'open' && audienceResponses.length === 0)} style={{ background: C.violet }} className="w-full rounded-2xl px-5 py-5 text-lg font-extrabold text-white disabled:opacity-35">
-              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : isAudienceQuestion ? showGame?.status === 'exploded' ? 'Continue →' : audienceQuestion.mode === 'favourite' ? 'Confirm favourite →' : 'Find closest guess →' : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isBigBalloon ? 'Balloons inflating…' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
+            <button data-host-navigation="forward" onClick={showingShowGameInstructions ? startPreparedShowGame : isAudienceQuestion && showGame?.status === 'open' ? resolveAudienceQuestion : handleAdvanceShowGame} disabled={actionBusy || (!showingShowGameInstructions && !isAudienceQuestion && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled))) || (isAudienceQuestion && showGame?.status === 'open' && (audienceResponses.length === 0 || (audienceQuestion.mode === 'favourite' && selectedAudienceWinnerIds.length === 0)))} style={{ background: C.violet }} className="w-full rounded-2xl px-5 py-5 text-lg font-extrabold text-white disabled:opacity-35">
+              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : isAudienceQuestion ? showGame?.status === 'exploded' ? 'Continue →' : audienceQuestion.mode === 'favourite' ? selectedAudienceWinnerIds.length > 0 ? 'Confirm selected winner →' : 'Select an answer above' : 'Find closest guess →' : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isBigBalloon ? 'Balloons inflating…' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
             </button>
           </div>
         </aside>

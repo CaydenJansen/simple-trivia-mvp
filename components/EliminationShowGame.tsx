@@ -64,26 +64,22 @@ export default function EliminationShowGame({
           <div className="mx-auto mt-5 max-w-sm">
             <p style={{ color: dim }} className="mb-2 text-center text-xs font-black uppercase tracking-widest">Call the next flip</p>
             <div className="grid grid-cols-2 gap-3">
-            {(['heads', 'tails'] as const).map(choice => (
-              <button key={choice} type="button" disabled={choosing} onClick={() => onChoose?.(choice)}
+            {(['heads', 'tails'] as const).map(choice => {
+              const otherTeams = Math.max(0, (choiceCounts[choice] ?? 0) - (ownChoice === choice ? 1 : 0))
+              return <button key={choice} type="button" disabled={choosing} onClick={() => onChoose?.(choice)}
                 style={{ background: ownChoice === choice ? '#7C3AED' : panel, color: ownChoice === choice ? 'white' : text, border: `2px solid ${ownChoice === choice ? '#7C3AED' : line}` }}
-                className="cursor-pointer rounded-2xl px-5 py-4 text-lg font-black capitalize transition active:scale-95 disabled:opacity-60">
-                {choice}
+                className="cursor-pointer overflow-hidden rounded-2xl text-lg font-black capitalize transition active:scale-95 disabled:opacity-60">
+                <span className="block px-5 py-4">{choice}</span>
+                <span style={{ background: ownChoice === choice ? 'rgba(0,0,0,.14)' : dark ? '#211B35' : '#F3F1F8', borderTop: `1px solid ${ownChoice === choice ? 'rgba(255,255,255,.2)' : line}` }} className="block px-2 py-2 text-[11px] font-bold normal-case">
+                  {otherTeams} other team{otherTeams === 1 ? '' : 's'}
+                </span>
               </button>
-            ))}
+            })}
             </div>
           </div>
         )}
 
         {ownTeamId ? <>
-          <div className="mx-auto mt-5 grid max-w-sm grid-cols-2 gap-3">
-            {(['heads', 'tails'] as const).map(choice => {
-              const otherTeams = Math.max(0, (choiceCounts[choice] ?? 0) - (ownChoice === choice ? 1 : 0))
-              return <div key={choice} style={{ background: panel, border: `1px solid ${line}` }} className="rounded-xl px-4 py-3 text-center">
-              <p style={{ color: text }} className="text-sm font-black capitalize">{choice}</p>
-              <p style={{ color: dim }} className="mt-1 text-xs font-bold">{otherTeams} other team{otherTeams === 1 ? '' : 's'}</p>
-            </div>})}
-          </div>
           <p style={{ color: dim }} className="mt-4 text-center text-sm font-bold">Only {state.aliveTeamIds.length} team{state.aliveTeamIds.length === 1 ? '' : 's'} remaining</p>
         </> : <div className="mt-5 grid gap-2 sm:grid-cols-2">
           {teams.map(team => {
@@ -111,12 +107,14 @@ export default function EliminationShowGame({
           className={`absolute inset-y-0 w-1/3 border-0 transition-colors ${ownTeamId && canChoose ? 'cursor-pointer hover:bg-violet-500/10' : 'cursor-default'}`}>
           <span style={{ color: dim }} className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-black uppercase">Lane {lane + 1}</span>
         </button>)}
-        {rockLane >= 0 && <div aria-label={`Rock falling into lane ${rockLane + 1}`} className="rock-drop absolute top-2 z-20 flex w-20 -translate-x-1/2 justify-center text-6xl" style={{ left: `${((rockLane + 0.5) / 3) * 100}%` }}>🪨</div>}
+        {rockLane >= 0 && <div className="pointer-events-none absolute inset-0 z-20 grid grid-cols-3" aria-label={`Rock falling into lane ${rockLane + 1}`}>
+          <div className="flex justify-center" style={{ gridColumn: rockLane + 1 }}><span className="rock-drop block text-6xl">🪨</span></div>
+        </div>}
         {teams.filter(team => alive.has(team.id)).map((team, index) => {
           const lane = state.positions[team.id] ?? 1
           const own = team.id === ownTeamId
-          return <div key={team.id} title={team.name} className="pointer-events-none absolute top-[58%] z-10 -translate-x-1/2 -translate-y-1/2 transition-[left,opacity,transform] duration-300 ease-out"
-            style={{ left: `${(lane + 0.5) * 33.333}%`, marginTop: (index % 4) * 10 - 15, opacity: own ? 1 : 0.56 }}>
+          return <div key={team.id} title={team.name} className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 transition-[left,top,opacity,transform] duration-300 ease-out"
+            style={{ left: `${(lane + 0.5) * 33.333}%`, top: own ? '38%' : `${62 + (index % 3) * 7}%`, marginLeft: own ? 0 : ((index % 3) - 1) * 24, opacity: own ? 1 : 0.56 }}>
             <div style={{ background: own ? '#7C3AED' : dark ? '#817A99' : '#9CA3AF', color: 'white', border: own ? '3px solid #C4B5FD' : '2px solid rgba(255,255,255,.75)' }} className={`${own ? 'h-12 w-12 text-xl' : 'h-8 w-8 text-sm'} flex items-center justify-center rounded-full font-black shadow-lg`}>{team.name.slice(0, 1).toUpperCase()}</div>
             <p style={{ color: text }} className={`${own ? 'max-w-28 font-black' : 'max-w-20'} mt-1 truncate text-center text-[10px]`}>{team.name}</p>
           </div>

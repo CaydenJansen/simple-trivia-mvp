@@ -32,3 +32,15 @@ export function audienceQuestionSettings(value: AudienceQuestionSettings): Recor
     allow_multiple_winners: value.mode === 'favourite' && value.allowMultipleWinners,
   }
 }
+
+export function audienceQuestionPlayerInstructions(settings: Json | null | undefined) {
+  return audienceQuestionFromSettings(settings).mode === 'closest-number'
+    ? 'Enter your best numerical guess. The closest answer wins.'
+    : 'Answer the question with something good. The host may pick your response as the winner.'
+}
+
+export function audienceQuestionHostInstructions(settings: Json | null | undefined) {
+  return audienceQuestionFromSettings(settings).mode === 'closest-number'
+    ? 'Teams submit numerical guesses. You can see the closest response live, then confirm the result.'
+    : 'Teams submit their answers. Select your favourite response, then confirm the winner.'
+}

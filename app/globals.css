@@ -131,10 +131,10 @@ button {
 }
 
 @keyframes rock-drop {
-  0% { transform: translate(-50%, -130px) rotate(-8deg); }
-  72% { transform: translate(-50%, 75px) rotate(6deg); }
-  88% { transform: translate(-50%, 66px) scale(1.12); }
-  100% { transform: translate(-50%, 75px) rotate(0deg); }
+  0% { transform: translateY(-130px) rotate(-8deg); }
+  72% { transform: translateY(75px) rotate(6deg); }
+  88% { transform: translateY(66px) scale(1.12); }
+  100% { transform: translateY(75px) rotate(0deg); }
 }
 
 .rock-drop { animation: rock-drop 1.25s cubic-bezier(.4, 0, .2, 1) both; }
