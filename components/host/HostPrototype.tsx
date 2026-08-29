@@ -128,6 +128,8 @@ import {
   audienceQuestionFromSettings,
   audienceQuestionHostInstructions,
   audienceQuestionSettings,
+  compareAudienceResponses,
+  type AudienceResponseOrder,
   type AudienceQuestionMode,
 } from "@/lib/trivia/audience-question";
 import { formatNumericResponse } from "@/lib/trivia/numeric-response";
@@ -1821,6 +1823,7 @@ type BuilderShowGameData = {
   audienceQuestionPrompt: string
   audienceQuestionCorrectNumber: string
   audienceQuestionAllowMultipleWinners: boolean
+  audienceQuestionShareResponses: boolean
 }
 
 type BuilderRoundData = {
@@ -2250,6 +2253,7 @@ function QuizBuilder({ go }: { go: Go }) {
           audienceQuestionPrompt: audienceQuestion.prompt,
           audienceQuestionCorrectNumber: audienceQuestion.correctNumber === null ? '' : String(audienceQuestion.correctNumber),
           audienceQuestionAllowMultipleWinners: audienceQuestion.allowMultipleWinners,
+          audienceQuestionShareResponses: audienceQuestion.shareResponses,
         })
         groupedRounds.set(row.round_number, round)
       }
@@ -2593,6 +2597,7 @@ function QuizBuilder({ go }: { go: Go }) {
                 prompt: item.showGame.audienceQuestionPrompt,
                 correctNumber: item.showGame.audienceQuestionMode === 'closest-number' ? Number(item.showGame.audienceQuestionCorrectNumber) : null,
                 allowMultipleWinners: item.showGame.audienceQuestionAllowMultipleWinners,
+                shareResponses: item.showGame.audienceQuestionShareResponses,
               }) : {}),
             },
           })
@@ -2877,6 +2882,7 @@ function QuizBuilder({ go }: { go: Go }) {
                     audienceQuestionPrompt: '',
                     audienceQuestionCorrectNumber: '',
                     audienceQuestionAllowMultipleWinners: false,
+                    audienceQuestionShareResponses: false,
                   }),
                 } : item))
                 setDirty(true)
@@ -4263,10 +4269,18 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
               <input type="number" value={showGame.audienceQuestionCorrectNumber} onChange={event => onChange({ audienceQuestionCorrectNumber: event.target.value })}
                 placeholder="e.g. 437" style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
               <p style={{ color: C.sub }} className="mt-1 text-[11px]">Kept hidden from players until the result.</p>
-            </div> : <label style={{ color: C.ink }} className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
-              <input type="checkbox" checked={showGame.audienceQuestionAllowMultipleWinners} onChange={event => onChange({ audienceQuestionAllowMultipleWinners: event.target.checked })} className="h-4 w-4 accent-violet-600" />
-              Allow multiple favourite answers
-            </label>}
+            </div> : <div className="space-y-2">
+              <label style={{ color: C.ink }} className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
+                <input type="checkbox" checked={showGame.audienceQuestionAllowMultipleWinners} onChange={event => onChange({ audienceQuestionAllowMultipleWinners: event.target.checked })} className="h-4 w-4 accent-violet-600" />
+                Allow multiple favourite answers
+              </label>
+              <label style={{ color: C.ink }} className="flex cursor-pointer items-start gap-2 text-sm font-semibold">
+                <input type="checkbox" checked={showGame.audienceQuestionShareResponses} onChange={event => onChange({ audienceQuestionShareResponses: event.target.checked })} className="mt-0.5 h-4 w-4 accent-violet-600" />
+                <span>Let players see and like each other’s answers
+                  <span style={{ color: C.sub }} className="mt-0.5 block text-[11px] font-normal">Responses appear after a team submits. Likes help you spot the room favourite but never choose the winner automatically.</span>
+                </span>
+              </label>
+            </div>}
           </>}
           <div>
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Title</label>
@@ -6737,6 +6751,8 @@ function LiveQuestion({ go }: { go: Go }) {
   const [showGamePresses, setShowGamePresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [showGameBalloons, setShowGameBalloons] = useState<BigBalloonEntry[]>([])
   const [audienceResponses, setAudienceResponses] = useState<LiveAudienceResponse[]>([])
+  const [audienceVoteCounts, setAudienceVoteCounts] = useState<Record<string, number>>({})
+  const [audienceResponseOrder, setAudienceResponseOrder] = useState<AudienceResponseOrder>('submitted')
   const [selectedAudienceWinnerIds, setSelectedAudienceWinnerIds] = useState<string[]>([])
   const audienceShowGameIdRef = useRef<string | null>(null)
   const [showGameNow, setShowGameNow] = useState(() => Date.now())
@@ -6888,6 +6904,8 @@ function LiveQuestion({ go }: { go: Go }) {
           audienceShowGameIdRef.current = currentShowGame.id
           setSelectedAudienceWinnerIds([])
           setAudienceResponses([])
+          setAudienceVoteCounts({})
+          setAudienceResponseOrder('submitted')
         }
       } else {
         audienceShowGameIdRef.current = null
@@ -6904,13 +6922,20 @@ function LiveQuestion({ go }: { go: Go }) {
 
       if (currentShowGame) {
         if (currentShowGame.game_type === 'audience-question') {
-          const { data: responseRows, error: responseError } = await supabase
-            .from('game_show_game_responses').select('*').eq('game_show_game_id', currentShowGame.id).order('submitted_at', { ascending: true })
+          const [{ data: responseRows, error: responseError }, { data: voteRows, error: voteError }] = await Promise.all([
+            supabase.from('game_show_game_responses').select('*').eq('game_show_game_id', currentShowGame.id).order('submitted_at', { ascending: true }),
+            supabase.from('game_show_game_response_votes').select('response_id').eq('game_show_game_id', currentShowGame.id),
+          ])
           if (responseError) console.error('Could not load audience responses:', responseError)
           else {
             setAudienceResponses(responseRows ?? [])
             if (currentShowGame.status === 'exploded') setSelectedAudienceWinnerIds((responseRows ?? []).filter(row => row.is_winner).map(row => row.team_id))
           }
+          if (voteError) console.error('Could not load audience response votes:', voteError)
+          else setAudienceVoteCounts((voteRows ?? []).reduce<Record<string, number>>((counts, vote) => {
+            counts[vote.response_id] = (counts[vote.response_id] ?? 0) + 1
+            return counts
+          }, {}))
           setShowGamePresses([])
           setShowGameBalloons([])
         } else if (currentShowGame.game_type === 'big-balloon') {
@@ -6920,6 +6945,7 @@ function LiveQuestion({ go }: { go: Go }) {
           else setShowGameBalloons((balloonRows ?? []) as BigBalloonEntry[])
           setShowGamePresses([])
           setAudienceResponses([])
+          setAudienceVoteCounts({})
         } else {
           const { data: pressRows, error: pressError } = await supabase
             .from('game_show_game_presses')
@@ -6929,9 +6955,10 @@ function LiveQuestion({ go }: { go: Go }) {
           if (pressError) console.error('Could not load show-game presses:', pressError)
           else setShowGamePresses(pressRows ?? [])
           setAudienceResponses([])
+          setAudienceVoteCounts({})
           setShowGameBalloons([])
         }
-      } else { setShowGamePresses([]); setAudienceResponses([]); setShowGameBalloons([]) }
+      } else { setShowGamePresses([]); setAudienceResponses([]); setAudienceVoteCounts({}); setShowGameBalloons([]) }
 
       if (currentQuestion) {
         const [submissionResult, bonusSubmissionResult] = await Promise.all([
@@ -6982,6 +7009,11 @@ function LiveQuestion({ go }: { go: Go }) {
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'game_show_game_responses', filter: `game_id=eq.${game.id}` },
+            () => { void loadLiveData() },
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'game_show_game_response_votes', filter: `game_id=eq.${game.id}` },
             () => { void loadLiveData() },
           )
           .on(
@@ -7054,6 +7086,8 @@ function LiveQuestion({ go }: { go: Go }) {
     setShowGamePresses([])
     setShowGameBalloons([])
     setAudienceResponses([])
+    setAudienceVoteCounts({})
+    setAudienceResponseOrder('submitted')
     setSelectedAudienceWinnerIds([])
     audienceShowGameIdRef.current = nextShowGame.game_type === 'audience-question' ? nextShowGame.id : null
     setGameScreen('show-game')
@@ -7081,6 +7115,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setShowGamePresses([])
       setShowGameBalloons([])
       setAudienceResponses([])
+      setAudienceVoteCounts({})
     } catch (error) {
       console.error('Could not start show game:', error)
       setLiveError('Could not start the game. Please try again.')
@@ -8163,6 +8198,21 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const eligibleIds = showGameEligibleTeamIds(showGame?.settings)
     const wheelTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : teams
     const participatingTeams = eligibleIds.length > 0 ? teams.filter(team => eligibleIds.includes(team.id)) : activeTeams
+    const audienceResponseByTeamId = new Map(audienceResponses.map(response => [response.team_id, response]))
+    const orderedParticipatingTeams = isAudienceQuestion
+      ? [...participatingTeams].sort((left, right) => {
+          const leftResponse = audienceResponseByTeamId.get(left.id)
+          const rightResponse = audienceResponseByTeamId.get(right.id)
+          if (!leftResponse && !rightResponse) return 0
+          if (!leftResponse) return 1
+          if (!rightResponse) return -1
+          return compareAudienceResponses(
+            { submittedAt: leftResponse.submitted_at, voteCount: audienceVoteCounts[leftResponse.id] ?? 0 },
+            { submittedAt: rightResponse.submitted_at, voteCount: audienceVoteCounts[rightResponse.id] ?? 0 },
+            audienceResponseOrder,
+          )
+        })
+      : participatingTeams
     const coinResultVisible = showGame?.game_type !== 'heads-or-tails' || coinRevealFinishedRound === eliminationState.roundNumber
     const showGameWinner = showGame?.status === 'exploded' && (!isWheel || wheelSettled) && coinResultVisible
     const pressedTeamIds = new Set(showGamePresses.map(press => press.team_id))
@@ -8200,7 +8250,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 </div>
                 <div className="mt-4 space-y-2">
                   {showGame?.status === 'open' && audienceQuestion.mode === 'favourite' && <p style={{ color: C.liveDim }} className="pb-1 text-sm font-bold">Select the answer you want to reward, then confirm it using the button on the right.</p>}
-                  {participatingTeams.map(team => {
+                  {audienceQuestion.mode === 'favourite' && audienceQuestion.shareResponses && audienceResponses.length > 1 && <div className="flex items-center justify-end gap-1 pb-1">
+                    <span style={{ color: C.liveDim }} className="mr-1 text-xs font-bold">Order:</span>
+                    {(['submitted', 'votes'] as const).map(order => <button key={order} type="button" onClick={() => setAudienceResponseOrder(order)} style={{ background: audienceResponseOrder === order ? `${C.violet}30` : C.livePanel, border: `1px solid ${audienceResponseOrder === order ? C.violet : C.liveLine}`, color: audienceResponseOrder === order ? '#C4B5FD' : C.liveDim }} className="cursor-pointer rounded-lg px-2.5 py-1 text-xs font-black">
+                      {order === 'submitted' ? 'Submission order' : 'Most liked'}
+                    </button>)}
+                  </div>}
+                  {orderedParticipatingTeams.map(team => {
                     const response = audienceResponses.find(item => item.team_id === team.id)
                     const selected = Boolean(response && selectedAudienceWinnerIds.includes(response.team_id))
                     const canSelect = Boolean(response && showGame?.status === 'open' && audienceQuestion.mode === 'favourite')
@@ -8214,6 +8270,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                       className={`flex w-full items-center gap-4 rounded-xl px-4 py-3 text-left ${canSelect ? 'cursor-pointer hover:bg-white/5' : ''}`}>
                       <span className="w-36 shrink-0 truncate font-black">{team.name}</span>
                       <span className="min-w-0 flex-1 font-semibold">{response ? audienceQuestion.mode === 'closest-number' ? formatNumericResponse(response.numeric_response ?? response.response_text) : response.response_text : <span style={{ color: C.liveDim }}>Waiting…</span>}</span>
+                      {response && audienceQuestion.mode === 'favourite' && audienceQuestion.shareResponses && <span style={{ color: C.liveDim }} className="shrink-0 text-sm font-black">👍 {audienceVoteCounts[response.id] ?? 0}</span>}
                       {response?.distance_from_correct !== null && response?.distance_from_correct !== undefined && <span style={{ color: C.liveDim }} className="text-sm">Distance {formatNumericResponse(response.distance_from_correct)}</span>}
                       {canSelect && <span className={`shrink-0 text-sm font-black ${selected ? 'text-emerald-400' : 'text-violet-300'}`}>{selected ? '✓ Selected' : 'Select'}</span>}
                       {!canSelect && response?.is_winner && <span className="font-black text-emerald-400">✓ Winner</span>}

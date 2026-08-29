@@ -2731,7 +2731,16 @@ type PlayerShowGame = {
 }
 
 type DatabaseAudienceResponse = Database['public']['Tables']['game_show_game_responses']['Row']
-type PlayerAudienceResponse = { team_id: string; team_name: string; response_text: string; numeric_response: number | null; submitted_at: string }
+type PlayerAudienceResponse = {
+  response_id: string
+  team_id: string
+  team_name: string
+  response_text: string
+  numeric_response: number | null
+  submitted_at: string
+  vote_count: number
+  viewer_has_voted: boolean
+}
 
 function ShowGame() {
   const snapshot = usePlayerSnapshot()
@@ -2750,6 +2759,7 @@ function ShowGame() {
   const [audienceResponseRow, setAudienceResponseRow] = useState<DatabaseAudienceResponse | null>(null)
   const [audienceResponses, setAudienceResponses] = useState<PlayerAudienceResponse[]>([])
   const [audienceSubmitting, setAudienceSubmitting] = useState(false)
+  const [audienceVoteBusyId, setAudienceVoteBusyId] = useState<string | null>(null)
   const audienceShowGameIdRef = useRef<string | null>(null)
   const [coinRevealFinishedRound, setCoinRevealFinishedRound] = useState<number | null>(null)
   const handleCoinRevealAnimationComplete = useCallback((roundNumber: number) => setCoinRevealFinishedRound(roundNumber), [])
@@ -2813,7 +2823,8 @@ function ShowGame() {
         setAudienceResponse(row?.response_text
           ? activeShowGame.settings && audienceQuestionFromSettings(activeShowGame.settings).mode === 'closest-number' ? formatNumericResponse(row.response_text) : row.response_text
           : '')
-        if (row?.id) {
+        const audienceConfig = audienceQuestionFromSettings(activeShowGame.settings)
+        if (row?.id && audienceConfig.mode === 'favourite' && audienceConfig.shareResponses) {
           const { data: roomResponses, error: roomError } = await supabase.rpc('get_audience_question_responses', {
             p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken,
           })
@@ -2852,6 +2863,14 @@ function ShowGame() {
       void supabase.removeChannel(channel)
     }
   }, [load])
+
+  useEffect(() => {
+    if (!showGame || showGame.game_type !== 'audience-question' || showGame.status !== 'open' || !audienceResponseRow) return
+    const config = audienceQuestionFromSettings(showGame.settings)
+    if (config.mode !== 'favourite' || !config.shareResponses) return
+    const timer = window.setInterval(() => { void load() }, 1500)
+    return () => window.clearInterval(timer)
+  }, [audienceResponseRow, load, showGame])
 
   useEffect(() => {
     if (!showGame?.explode_at || showGame.status !== 'open') return
@@ -2900,7 +2919,7 @@ function ShowGame() {
     setError(null)
     const config = audienceQuestionFromSettings(showGame.settings)
     const numericValue = config.mode === 'closest-number' ? parseNumericResponseInput(audienceResponse) : null
-    if (config.mode === 'closest-number' && numericValue === null) { setError('Enter a number for this Closest Guess.'); return }
+    if (config.mode === 'closest-number' && numericValue === null) { setError('Enter a number for this Closest Guess.'); setAudienceSubmitting(false); return }
     const { data, error: responseError } = await supabase.rpc('submit_audience_question_response', {
       p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken,
       p_response: config.mode === 'closest-number' ? String(numericValue) : audienceResponse.trim(),
@@ -2908,6 +2927,24 @@ function ShowGame() {
     if (responseError) setError(responseError.message.includes('NUMBER_REQUIRED') ? 'Enter a number for this Closest Guess.' : 'That response did not go through. Try again.')
     else setAudienceResponseRow(data as DatabaseAudienceResponse)
     setAudienceSubmitting(false)
+    void load()
+  }
+
+  async function toggleAudienceVote(response: PlayerAudienceResponse) {
+    if (!showGame || showGame.game_type !== 'audience-question' || audienceVoteBusyId || response.team_id === teamId) return
+    const requestId = localStorage.getItem('simple-trivia-join-request-id')
+    const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+    if (!requestId || !requestToken) return
+    setAudienceVoteBusyId(response.response_id)
+    setError(null)
+    const { error: voteError } = await supabase.rpc('toggle_audience_question_response_vote', {
+      p_game_show_game_id: showGame.id,
+      p_response_id: response.response_id,
+      p_request_id: requestId,
+      p_request_token: requestToken,
+    })
+    if (voteError) setError(voteError.message.includes('VOTING_CLOSED') ? 'Voting has closed.' : 'That like did not go through. Try again.')
+    setAudienceVoteBusyId(null)
     void load()
   }
 
@@ -3022,11 +3059,15 @@ function ShowGame() {
             <div style={{ background: C.violetPale, color: C.violet }} className="mx-auto flex h-16 w-16 items-center justify-center rounded-full text-2xl">✓</div>
             <h2 style={{ color: C.ink }} className="mt-4 text-2xl font-black">Response locked in</h2>
             <p style={{ color: C.sub }} className="mt-2">{audienceQuestion.mode === 'closest-number' ? formatNumericResponse(audienceResponseRow.response_text) : audienceResponseRow.response_text}</p>
-            {audienceQuestion.mode === 'favourite' && <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-6 overflow-hidden rounded-2xl text-left">
+            {audienceQuestion.mode === 'favourite' && audienceQuestion.shareResponses && <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-6 overflow-hidden rounded-2xl text-left">
               <p style={{ color: C.violet }} className="px-4 pb-2 pt-4 text-xs font-black uppercase tracking-widest">Everyone’s responses</p>
-              {audienceResponses.map(response => <div key={response.team_id} style={{ borderTop: `1px solid ${C.line}` }} className="flex gap-3 px-4 py-3">
+              {audienceResponses.map(response => <div key={response.response_id} style={{ borderTop: `1px solid ${C.line}` }} className="flex items-start gap-3 px-4 py-3">
                 <span style={{ color: C.ink }} className="w-28 shrink-0 truncate text-sm font-black">{response.team_name}</span>
-                <span style={{ color: C.sub }} className="min-w-0 flex-1 break-words text-sm font-semibold">{audienceQuestion.mode === 'closest-number' ? formatNumericResponse(response.numeric_response ?? response.response_text) : response.response_text}</span>
+                <span style={{ color: C.sub }} className="min-w-0 flex-1 break-words text-sm font-semibold">{response.response_text}</span>
+                {response.team_id === teamId ? <span style={{ color: C.sub }} className="shrink-0 text-[11px] font-bold">Yours</span> : <button type="button" onClick={() => { void toggleAudienceVote(response) }} disabled={audienceVoteBusyId === response.response_id || exploded}
+                  aria-pressed={response.viewer_has_voted} aria-label={`${response.viewer_has_voted ? 'Unlike' : 'Like'} ${response.team_name}’s answer`}
+                  style={{ color: response.viewer_has_voted ? C.violet : C.sub, background: response.viewer_has_voted ? C.violetPale : 'transparent', border: `1px solid ${response.viewer_has_voted ? `${C.violet}55` : C.line}` }}
+                  className="flex shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 py-1 text-xs font-black disabled:cursor-default disabled:opacity-50">👍 {response.vote_count}</button>}
               </div>)}
             </div>}
             <div className="mt-5"><WaitMsg msg="The host is choosing the result…" /></div>

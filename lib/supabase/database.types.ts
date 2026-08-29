@@ -556,6 +556,12 @@ export type Database = {
         Update: Partial<{ id: string; game_show_game_id: string; game_id: string; team_id: string; response_text: string; numeric_response: number | null; distance_from_correct: number | null; is_winner: boolean; submitted_at: string }>
         Relationships: []
       }
+      game_show_game_response_votes: {
+        Row: { response_id: string; game_show_game_id: string; game_id: string; voter_team_id: string; created_at: string }
+        Insert: { response_id: string; game_show_game_id: string; game_id: string; voter_team_id: string; created_at?: string }
+        Update: Partial<{ response_id: string; game_show_game_id: string; game_id: string; voter_team_id: string; created_at: string }>
+        Relationships: []
+      }
       game_show_game_balloons: {
         Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; size_units: number; status: 'ready' | 'inflating' | 'locked' | 'popped'; last_inflated_at: string | null; locked_at: string | null; popped_at: string | null; created_at: string }
         Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; size_units?: number; status?: 'ready' | 'inflating' | 'locked' | 'popped'; last_inflated_at?: string | null; locked_at?: string | null; popped_at?: string | null; created_at?: string }
@@ -959,7 +965,11 @@ export type Database = {
       }
       get_audience_question_responses: {
         Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }
-        Returns: Array<{ team_id: string; team_name: string; response_text: string; numeric_response: number | null; submitted_at: string }>
+        Returns: Array<{ response_id: string; team_id: string; team_name: string; response_text: string; numeric_response: number | null; submitted_at: string; vote_count: number; viewer_has_voted: boolean }>
+      }
+      toggle_audience_question_response_vote: {
+        Args: { p_game_show_game_id: string; p_response_id: string; p_request_id: string; p_request_token: string }
+        Returns: Array<{ response_id: string; liked: boolean; vote_count: number }>
       }
       resolve_audience_question: {
         Args: { p_game_show_game_id: string; p_winner_team_ids?: string[] | null }
