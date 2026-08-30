@@ -43,6 +43,46 @@ export default function BuilderQuestionPicker({
   const [tagId, setTagId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [entryMode, setEntryMode] = useState<"choose" | "search">(
+    origin === "platform" && mode === "add" ? "choose" : "search",
+  );
+  const [randomLoading, setRandomLoading] = useState(false);
+
+  async function selectRandomQuestion() {
+    if (randomLoading) return;
+    setRandomLoading(true);
+    setError(null);
+
+    const countResult = await supabase
+      .from("source_question_catalog")
+      .select("id", { count: "exact", head: true })
+      .eq("origin", "platform")
+      .eq("status", "active");
+
+    if (countResult.error || !countResult.count) {
+      setError("Could not find an active library question.");
+      setRandomLoading(false);
+      return;
+    }
+
+    const offset = Math.floor(Math.random() * countResult.count);
+    const questionResult = await supabase
+      .from("source_question_catalog")
+      .select("*")
+      .eq("origin", "platform")
+      .eq("status", "active")
+      .order("id")
+      .range(offset, offset)
+      .single();
+
+    if (questionResult.error || !questionResult.data) {
+      setError("Could not select a random question. Try again.");
+      setRandomLoading(false);
+      return;
+    }
+
+    onSelect(questionResult.data);
+  }
 
   useEffect(() => {
     let active = true;
@@ -127,6 +167,37 @@ export default function BuilderQuestionPicker({
   }, [origin, search, type, categoryId, difficulty, tagId, categories, tags, tagAliases]);
 
   const title = origin === "user" ? "My Questions" : "Question Library";
+
+  if (entryMode === "choose") {
+    return (
+      <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/45 px-4 py-8 backdrop-blur-sm">
+        <section className="w-full max-w-lg overflow-hidden rounded-3xl bg-white shadow-2xl">
+          <header className="flex items-start justify-between border-b border-zinc-200 px-6 py-5">
+            <div>
+              <h2 className="text-xl font-bold text-zinc-900">Choose from Question Library</h2>
+              <p className="mt-1 text-sm text-zinc-500">Take a quick suggestion, or search when you want something specific.</p>
+            </div>
+            <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-semibold text-zinc-500 hover:bg-zinc-100">Close</button>
+          </header>
+          <div className="grid gap-3 p-6 sm:grid-cols-2">
+            <button type="button" onClick={() => { void selectRandomQuestion(); }} disabled={randomLoading}
+              className="cursor-pointer rounded-2xl border-2 border-violet-600 bg-violet-50 px-5 py-6 text-left transition hover:bg-violet-100 disabled:cursor-wait disabled:opacity-60">
+              <span className="text-2xl">🎲</span>
+              <span className="mt-3 block font-bold text-violet-700">{randomLoading ? "Finding a question…" : "Select random question"}</span>
+              <span className="mt-1 block text-sm leading-5 text-zinc-600">Add one active library question immediately.</span>
+            </button>
+            <button type="button" onClick={() => setEntryMode("search")}
+              className="cursor-pointer rounded-2xl border border-zinc-200 px-5 py-6 text-left transition hover:border-violet-300 hover:bg-violet-50/40">
+              <span className="text-2xl">🔎</span>
+              <span className="mt-3 block font-bold text-zinc-900">Search for a question</span>
+              <span className="mt-1 block text-sm leading-5 text-zinc-600">Browse by words, category, topic, type, or difficulty.</span>
+            </button>
+          </div>
+          {error ? <p className="mx-6 mb-6 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/45 px-4 py-8 backdrop-blur-sm">

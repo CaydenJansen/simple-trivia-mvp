@@ -1,5 +1,7 @@
 'use client'
 
+import type { CSSProperties } from 'react'
+
 export type BigBalloonEntry = {
   team_id: string
   size_units: number
@@ -9,7 +11,7 @@ export type BigBalloonEntry = {
 type Team = { id: string; name: string }
 
 const MAX_VISIBLE_UNITS = 10_000_000
-const BALLOON_KEYFRAMES = `@keyframes balloon-shake{0%,100%{transform:translate(0) rotate(0)}25%{transform:translate(-1px,1px) rotate(-.5deg)}75%{transform:translate(1px,-1px) rotate(.5deg)}}@keyframes balloon-shake-hard{0%,100%{transform:translate(0) rotate(0)}20%{transform:translate(-4px,2px) rotate(-2deg)}40%{transform:translate(4px,-3px) rotate(2deg)}60%{transform:translate(-3px,-2px) rotate(-2deg)}80%{transform:translate(4px,3px) rotate(2deg)}}@keyframes balloon-shake-critical{0%,100%{transform:translate(0) rotate(0) scale(1)}16%{transform:translate(-10px,6px) rotate(-7.5deg) scale(1.02)}33%{transform:translate(9px,-8px) rotate(8.5deg) scale(.98)}50%{transform:translate(-8.5px,-6px) rotate(-7deg) scale(1.03)}66%{transform:translate(11px,7px) rotate(7.5deg) scale(.97)}83%{transform:translate(-8px,5px) rotate(-6deg) scale(1.02)}}.balloon-shake{animation:balloon-shake .24s infinite}.balloon-shake-hard{animation:balloon-shake-hard .13s infinite}.balloon-shake-critical{animation:balloon-shake-critical .05s infinite}`
+const BALLOON_KEYFRAMES = `@keyframes balloon-shake-progressive{0%,100%{transform:translate(0,0) rotate(0)}20%{transform:translate(calc(var(--balloon-shake-x) * -1),calc(var(--balloon-shake-y) * .55)) rotate(calc(var(--balloon-shake-r) * -1))}40%{transform:translate(var(--balloon-shake-x),calc(var(--balloon-shake-y) * -.7)) rotate(var(--balloon-shake-r))}60%{transform:translate(calc(var(--balloon-shake-x) * -.75),calc(var(--balloon-shake-y) * -.5)) rotate(calc(var(--balloon-shake-r) * -.8))}80%{transform:translate(calc(var(--balloon-shake-x) * .9),var(--balloon-shake-y)) rotate(calc(var(--balloon-shake-r) * .85))}}.balloon-shake-progressive{animation:balloon-shake-progressive var(--balloon-shake-duration) linear infinite}`
 
 export function balloonProgress(sizeUnits: number) {
   return Math.max(0, Math.min(1, sizeUnits / MAX_VISIBLE_UNITS))
@@ -24,14 +26,26 @@ export function balloonComparisonSizes(own: BigBalloonEntry, winner: BigBalloonE
   return { own: ownSize, winner: Math.min(198, Math.max(balloonPixelSize(winner, true) * 0.72, ownSize * 1.05)) }
 }
 
+export function balloonShakeStyle(progress: number): CSSProperties | undefined {
+  if (progress < 0.5) return undefined
+  const pressure = Math.max(0, Math.min(1, (progress - 0.5) / 0.5))
+  const intensity = Math.pow(pressure, 1.55)
+  return {
+    '--balloon-shake-x': `${(0.25 + intensity * 8.15).toFixed(2)}px`,
+    '--balloon-shake-y': `${(0.2 + intensity * 6.7).toFixed(2)}px`,
+    '--balloon-shake-r': `${(0.2 + intensity * 5.8).toFixed(2)}deg`,
+    '--balloon-shake-duration': `${(0.48 - intensity * 0.36).toFixed(3)}s`,
+  } as CSSProperties
+}
+
 function BalloonGraphic({ entry, dark = false, hero = false, sizeOverride }: { entry: BigBalloonEntry; dark?: boolean; hero?: boolean; sizeOverride?: number }) {
   const progress = balloonProgress(entry.size_units)
   const popped = entry.status === 'popped'
   const size = sizeOverride ?? balloonPixelSize(entry, hero)
-  const shake = progress >= 0.97 ? 'balloon-shake-critical' : progress >= 0.9 ? 'balloon-shake-hard' : progress >= 0.68 ? 'balloon-shake' : undefined
+  const shakeStyle = balloonShakeStyle(progress)
   if (popped) return <div aria-label="Popped balloon" className={hero ? 'text-8xl' : 'text-4xl'}>💥</div>
   return (
-    <div className={shake} style={{ width: size, height: size * 1.14, transition: 'width 90ms linear, height 90ms linear' }}>
+    <div className={shakeStyle ? 'balloon-shake-progressive' : undefined} style={{ ...shakeStyle, width: size, height: size * 1.14, transition: 'width 90ms linear, height 90ms linear' }}>
       <div
         aria-label="Inflating balloon"
         className="relative h-full w-full rounded-[50%_50%_46%_46%]"

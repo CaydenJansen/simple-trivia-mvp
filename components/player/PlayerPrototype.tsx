@@ -2890,7 +2890,7 @@ function ShowGame() {
     if (!showGame?.explode_at || showGame.status !== 'open') return
     const timer = window.setInterval(() => setShowGameNow(Date.now()), 200)
     return () => window.clearInterval(timer)
-  }, [showGame])
+  }, [showGame?.explode_at, showGame?.status])
 
   async function press() {
     if (!showGame || hasPressed || pressing || showGame.status !== 'open') return
@@ -3051,6 +3051,7 @@ function ShowGame() {
   const treasureSettings = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) ? showGame.settings as Record<string, Json> : {}
   const treasureGuardAwake = treasureSettings.guard_awake === true
   const ownTreasure = treasure.find(entry => entry.team_id === teamId)
+  const ownBalloon = balloons.find(entry => entry.team_id === teamId)
   const liveTreasureUnits = ownTreasure?.is_stealing && ownTreasure.stealing_started_at
     ? Math.max(0, showGameNow - new Date(ownTreasure.stealing_started_at).getTime()) : 0
   const audienceQuestion = audienceQuestionFromSettings(showGame?.settings)
@@ -3149,10 +3150,10 @@ function ShowGame() {
           onRevealAnimationComplete={handleCoinRevealAnimationComplete}
         /> : isWheel ? <div className="mt-5"><TeamWheel compact teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
           : isBigBalloon ? <div className="mt-5 w-full max-w-sm">
-              {!exploded && <div style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className="mb-4 rounded-full px-4 py-2 text-center text-lg font-black tabular-nums">
-                {eliminationSecondsRemaining}s left
+              {!exploded && ownBalloon?.status !== 'locked' && ownBalloon?.status !== 'popped' && <div style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className="mb-4 rounded-full px-4 py-2 text-center text-lg font-black tabular-nums">
+                {eliminationSecondsRemaining > 0 ? `${eliminationSecondsRemaining}s to start` : balloonHolding || ownBalloon?.status === 'inflating' ? 'Start window closed · finish your attempt' : 'Start window closed'}
               </div>}
-              <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
+              <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible && (eliminationSecondsRemaining > 0 || ownBalloon?.status === 'inflating')} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
             </div>
           : isTreasure ? <div className="mt-6 w-full max-w-sm">
               <div className={`mx-auto flex h-28 w-28 items-center justify-center rounded-full text-6xl ${treasureGuardAwake ? 'bg-red-50' : 'bg-emerald-50'}`}>{treasureGuardAwake ? '👁️' : '😴'}</div>
@@ -3193,7 +3194,7 @@ function ShowGame() {
             <div className="mt-7"><WaitMsg msg="Waiting for the host to continue…" /></div>
           </div>
         ) : isBigBalloon ? (
-          <p style={{ color: C.sub }} className="mt-5 font-semibold">{eliminationSecondsRemaining}s left · Release to lock in your balloon.</p>
+          <p style={{ color: C.sub }} className="mt-5 font-semibold">{balloonHolding || ownBalloon?.status === 'inflating' ? 'Release when you are ready to lock in your balloon.' : eliminationSecondsRemaining > 0 ? 'Start inflating before the timer reaches zero.' : 'The start window has closed.'}</p>
         ) : isWheel ? (
           null
         ) : isElimination ? (
@@ -3954,6 +3955,7 @@ export function PlayerFlow() {
           margin: '0 auto',
           display: 'flex',
           flexDirection: 'column',
+          paddingBottom: canReact ? '5rem' : undefined,
         }}
       >
         {canLeaveGame && <PlayerPrimaryHeader onLeave={() => setConfirmingLeave(true)} />}
