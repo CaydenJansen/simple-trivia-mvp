@@ -2888,9 +2888,29 @@ function ShowGame() {
 
   useEffect(() => {
     if (showGame?.game_type !== 'steal-the-treasure' || showGame.status !== 'open') return
-    const timer = window.setInterval(() => { void load() }, 500)
-    return () => window.clearInterval(timer)
-  }, [load, showGame?.game_type, showGame?.status])
+    const requestId = localStorage.getItem('simple-trivia-join-request-id')
+    const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+    if (!requestId || !requestToken) return
+    let active = true
+    let syncing = false
+    const sync = async () => {
+      if (syncing) return
+      syncing = true
+      const { data, error: syncError } = await supabase.rpc('sync_steal_the_treasure_guard', {
+        p_game_show_game_id: showGame.id,
+        p_request_id: requestId,
+        p_request_token: requestToken,
+      })
+      if (active && !syncError && data) {
+        setShowGame(data as PlayerShowGame)
+        void load()
+      }
+      syncing = false
+    }
+    void sync()
+    const timer = window.setInterval(() => { void sync() }, 400)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [load, showGame?.game_type, showGame?.id, showGame?.status])
 
   useEffect(() => {
     if (!showGame?.explode_at || showGame.status !== 'open') return

@@ -1009,6 +1009,10 @@ export type Database = {
         Args: { p_game_show_game_id: string }
         Returns: Database['public']['Tables']['game_show_games']['Row']
       }
+      sync_steal_the_treasure_guard: {
+        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }
+        Returns: Database['public']['Tables']['game_show_games']['Row']
+      }
       resolve_steal_the_treasure: {
         Args: { p_game_show_game_id: string }
         Returns: Database['public']['Tables']['game_show_games']['Row']
