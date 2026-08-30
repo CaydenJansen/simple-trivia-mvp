@@ -13,7 +13,7 @@ import {
 } from "@/lib/trivia/answer-reveal";
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { PLAYER_SESSION_KEYS, restoredTeamFromAdmission, shouldResetPlayerSessionForJoinCode } from "@/lib/trivia/session-recovery";
-import { gameCodeFromSearch, normalizeGameCode } from "@/lib/trivia/join-code";
+import { gameCodeFromSearch, normalizeGameCode, withGameCodeInUrl } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
 import type { Database, Json } from "@/lib/supabase/database.types";
 import { multiAnswerInputCount, playerQuestionStageScreen } from "@/lib/trivia/live-bonus-flow";
@@ -32,7 +32,7 @@ import {
 import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { autoRunClockColor, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
 import { nextSuggestedTeamName } from "@/lib/trivia/team-name-suggestions";
-import { showGameRewardDescription, showGameRewardFromSettings, showGameWinnerMessage } from "@/lib/trivia/show-game-rewards";
+import { showGameRewardDescription, showGameRewardFromSettings, showGameWinnerDetail } from "@/lib/trivia/show-game-rewards";
 import { correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
 import { playersSeeCorrectnessPercentage } from "@/lib/trivia/correctness-visibility";
 import BrandWordmark from "@/components/BrandWordmark";
@@ -1408,6 +1408,11 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
     localStorage.setItem('simple-trivia-game-code', game.code)
     localStorage.setItem('simple-trivia-game-title', game.title)
 
+    // Keep the address bar aligned with the game the player actually joined.
+    // A player can manually replace a stale QR code; without this, refreshing
+    // later would re-run the old URL code and discard the active team session.
+    window.history.replaceState({}, '', withGameCodeInUrl(window.location.href, game.code))
+
     go('team-setup')
   }, [code, go])
 
@@ -2728,6 +2733,7 @@ type PlayerShowGame = {
 }
 
 type DatabaseAudienceResponse = Database['public']['Tables']['game_show_game_responses']['Row']
+type PlayerTreasureEntry = Database['public']['Tables']['game_show_game_treasure']['Row']
 type PlayerAudienceResponse = {
   response_id: string
   team_id: string
@@ -2762,6 +2768,10 @@ function ShowGame() {
   const handleCoinRevealAnimationComplete = useCallback((roundNumber: number) => setCoinRevealFinishedRound(roundNumber), [])
   const [balloons, setBalloons] = useState<BigBalloonEntry[]>([])
   const [balloonHolding, setBalloonHolding] = useState(false)
+  const [treasure, setTreasure] = useState<PlayerTreasureEntry[]>([])
+  const [treasureHolding, setTreasureHolding] = useState(false)
+  const treasureBusyRef = useRef(false)
+  const treasureDesiredHoldingRef = useRef(false)
   const balloonPulseTimerRef = useRef<number | null>(null)
   const balloonPulseBusyRef = useRef(false)
   const balloonPulsePromiseRef = useRef<Promise<void> | null>(null)
@@ -2802,7 +2812,7 @@ function ShowGame() {
         return counts
       }, {}))
     } else setChoiceCounts({})
-    if (activeShowGame?.game_type === 'audience-question') {
+    if (activeShowGame && ['audience-question', 'in-show-tiebreaker'].includes(activeShowGame.game_type)) {
       if (audienceShowGameIdRef.current !== activeShowGame.id) {
         audienceShowGameIdRef.current = activeShowGame.id
         setAudienceResponse('')
@@ -2839,6 +2849,12 @@ function ShowGame() {
         balloonPulseTimerRef.current = null
       }
     } else setBalloons([])
+    if (activeShowGame?.game_type === 'steal-the-treasure') {
+      const { data: treasureRows } = await supabase.from('game_show_game_treasure').select('*').eq('game_show_game_id', activeShowGame.id)
+      setTreasure(treasureRows ?? [])
+      const own = (treasureRows ?? []).find(row => row.team_id === teamId)
+      setTreasureHolding(Boolean(own?.is_stealing))
+    } else { setTreasure([]); setTreasureHolding(false) }
   }, [])
 
   useEffect(() => {
@@ -2854,6 +2870,7 @@ function ShowGame() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_choices', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_responses', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_balloons', filter: `game_id=eq.${gameId}` }, () => { void load() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_treasure', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .subscribe()
     return () => {
       if (balloonPulseTimerRef.current !== null) window.clearInterval(balloonPulseTimerRef.current)
@@ -2862,7 +2879,7 @@ function ShowGame() {
   }, [load])
 
   useEffect(() => {
-    if (!showGame || showGame.game_type !== 'audience-question' || showGame.status !== 'open' || !audienceResponseRow) return
+    if (!showGame || !['audience-question', 'in-show-tiebreaker'].includes(showGame.game_type) || showGame.status !== 'open' || !audienceResponseRow) return
     const config = audienceQuestionFromSettings(showGame.settings)
     if (config.mode !== 'favourite' || !config.shareResponses) return
     const timer = window.setInterval(() => { void load() }, 1500)
@@ -2908,7 +2925,7 @@ function ShowGame() {
   }
 
   async function submitAudienceResponse() {
-    if (!showGame || showGame.game_type !== 'audience-question' || audienceSubmitting || audienceResponseRow || !audienceResponse.trim()) return
+    if (!showGame || !['audience-question', 'in-show-tiebreaker'].includes(showGame.game_type) || audienceSubmitting || audienceResponseRow || !audienceResponse.trim()) return
     const requestId = localStorage.getItem('simple-trivia-join-request-id')
     const requestToken = localStorage.getItem('simple-trivia-join-request-token')
     if (!requestId || !requestToken) return
@@ -2986,6 +3003,40 @@ function ShowGame() {
     void load()
   }
 
+  async function setTreasureHold(holding: boolean) {
+    if (!showGame || showGame.game_type !== 'steal-the-treasure' || showGame.status !== 'open') return
+    const requestId = localStorage.getItem('simple-trivia-join-request-id')
+    const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+    if (!requestId || !requestToken) return
+
+    // Pointer-up can arrive before the pointer-down request finishes on a
+    // mobile connection. Remember the latest intent and drain it in order so
+    // a quick release can never leave the player stealing on the server.
+    treasureDesiredHoldingRef.current = holding
+    setTreasureHolding(holding)
+    if (treasureBusyRef.current) return
+
+    treasureBusyRef.current = true
+    setError(null)
+    let sentHolding: boolean | null = null
+    let treasureError: { message: string } | null = null
+    while (sentHolding !== treasureDesiredHoldingRef.current) {
+      sentHolding = treasureDesiredHoldingRef.current
+      const response = await supabase.rpc('set_steal_the_treasure_holding', {
+        p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken, p_holding: sentHolding,
+      })
+      treasureError = response.error
+      if (treasureError) break
+    }
+    treasureBusyRef.current = false
+    if (treasureError) {
+      treasureDesiredHoldingRef.current = false
+      setTreasureHolding(false)
+      if (!treasureError.message.includes('GUARD_AWAKE')) setError('Your treasure move did not register. Try again.')
+    } else setTreasureHolding(treasureDesiredHoldingRef.current)
+    void load()
+  }
+
   const teamId = typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id')
   const exploded = showGame?.status === 'exploded'
   const won = exploded && showGame?.winner_team_id === teamId
@@ -2993,8 +3044,15 @@ function ShowGame() {
   const isWheel = showGame?.game_type === 'spin-the-wheel'
   const isBomb = showGame?.game_type === 'beat-the-bomb'
   const isElimination = isEliminationShowGame(showGame?.game_type)
-  const isAudienceQuestion = showGame?.game_type === 'audience-question'
+  const isAudienceQuestion = showGame?.game_type === 'audience-question' || showGame?.game_type === 'in-show-tiebreaker'
+  const isInShowTiebreaker = showGame?.game_type === 'in-show-tiebreaker'
   const isBigBalloon = showGame?.game_type === 'big-balloon'
+  const isTreasure = showGame?.game_type === 'steal-the-treasure'
+  const treasureSettings = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) ? showGame.settings as Record<string, Json> : {}
+  const treasureGuardAwake = treasureSettings.guard_awake === true
+  const ownTreasure = treasure.find(entry => entry.team_id === teamId)
+  const liveTreasureUnits = ownTreasure?.is_stealing && ownTreasure.stealing_started_at
+    ? Math.max(0, showGameNow - new Date(ownTreasure.stealing_started_at).getTime()) : 0
   const audienceQuestion = audienceQuestionFromSettings(showGame?.settings)
   const eliminationState = eliminationShowGameState(showGame?.settings)
   const showingInstructions = showGame?.status === 'ready'
@@ -3028,14 +3086,14 @@ function ShowGame() {
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
-      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={showGame ? `Round ${showGame.round_number}` : ''} question="Game" />
+      <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={showGame ? `Round ${showGame.round_number}` : ''} question={isInShowTiebreaker ? 'Tiebreaker' : 'Game'} />
       <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8 text-center">
         <h1 style={{ color: C.ink }} className="text-3xl font-black">{showGame?.title ?? (showGame ? showGameLabel(showGame.game_type) : 'Game')}</h1>
-        <p style={{ color: C.sub }} className="mt-3 max-w-sm text-base font-semibold">{showGameRewardDescription(reward)}</p>
+        <p style={{ color: C.sub }} className="mt-3 max-w-sm text-base font-semibold">{isInShowTiebreaker ? 'This result only orders teams who finish on equal scores. It does not add points.' : showGameRewardDescription(reward)}</p>
         {showingInstructions ? (
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-7 w-full max-w-sm rounded-2xl px-5 py-5 text-left">
             <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-widest">How it works</p>
-            <p style={{ color: C.ink }} className="mt-3 text-base font-semibold leading-6">{showGame ? isAudienceQuestion ? audienceQuestionPlayerInstructions(showGame.settings) : showGameInstructions(showGame.game_type) : ''}</p>
+            <p style={{ color: C.ink }} className="mt-3 text-base font-semibold leading-6">{showGame ? isInShowTiebreaker ? showGameInstructions('in-show-tiebreaker') : isAudienceQuestion ? audienceQuestionPlayerInstructions(showGame.settings) : showGameInstructions(showGame.game_type) : ''}</p>
             <div className="mt-5"><WaitMsg msg="The host will start the game…" /></div>
           </div>
         ) : <>
@@ -3045,7 +3103,8 @@ function ShowGame() {
             <p style={{ color: C.ink }} className="mt-3 text-xl font-black leading-7">{audienceQuestion.prompt}</p>
           </div>
           {!teamIsEligible ? <div className="mt-6"><h2 style={{ color: C.ink }} className="text-2xl font-black">{isTieShowGame ? 'Watch the tied teams' : 'This game is already underway'}</h2><p style={{ color: C.sub }} className="mt-2">{isTieShowGame ? 'Only the teams in this final tie are answering.' : 'You’ll join in from the next activity.'}</p></div> : exploded ? <div className="mt-6">
-            <h2 style={{ color: audienceResponseRow?.is_winner ? C.go : C.ink }} className="text-3xl font-black">{audienceResponseRow?.is_winner ? showGameWinnerMessage(reward) : 'Another response won'}</h2>
+            <h2 style={{ color: audienceResponseRow?.is_winner ? C.go : C.ink }} className="text-4xl font-black">{isInShowTiebreaker ? audienceResponseRow?.is_winner ? 'Closest answer!' : 'Tiebreaker recorded' : audienceResponseRow?.is_winner ? 'You won!' : 'Another response won'}</h2>
+            {!isInShowTiebreaker && audienceResponseRow?.is_winner && <p style={{ color: C.sub }} className="mt-2 text-base font-semibold">{showGameWinnerDetail(reward)}</p>}
             {audienceResponseRow && <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-5 rounded-2xl px-5 py-4 text-left">
               <p style={{ color: C.sub }} className="text-xs font-bold uppercase tracking-wider">Your response</p><p style={{ color: C.ink }} className="mt-2 text-lg font-bold">{audienceQuestion.mode === 'closest-number' ? formatNumericResponse(audienceResponseRow.response_text) : audienceResponseRow.response_text}</p>
               {audienceResponseRow.distance_from_correct !== null && <p style={{ color: C.sub }} className="mt-2 text-sm">Distance from correct: {formatNumericResponse(audienceResponseRow.distance_from_correct)}</p>}
@@ -3089,7 +3148,28 @@ function ShowGame() {
           onChoose={choice => { void chooseEliminationOption(choice) }}
           onRevealAnimationComplete={handleCoinRevealAnimationComplete}
         /> : isWheel ? <div className="mt-5"><TeamWheel compact teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
-          : isBigBalloon ? <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
+          : isBigBalloon ? <div className="mt-5 w-full max-w-sm">
+              {!exploded && <div style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className="mb-4 rounded-full px-4 py-2 text-center text-lg font-black tabular-nums">
+                {eliminationSecondsRemaining}s left
+              </div>}
+              <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
+            </div>
+          : isTreasure ? <div className="mt-6 w-full max-w-sm">
+              <div className={`mx-auto flex h-28 w-28 items-center justify-center rounded-full text-6xl ${treasureGuardAwake ? 'bg-red-50' : 'bg-emerald-50'}`}>{treasureGuardAwake ? '👁️' : '😴'}</div>
+              <p style={{ color: treasureGuardAwake ? C.stop : C.go }} className="mt-3 text-xl font-black">{treasureGuardAwake ? 'GUARD AWAKE · HANDS OFF!' : 'GUARD ASLEEP · STEAL NOW!'}</p>
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-4"><p style={{ color: C.sub }} className="text-xs font-black uppercase">Banked</p><p style={{ color: C.go }} className="mt-1 text-2xl font-black tabular-nums">{((ownTreasure?.banked_units ?? 0) / 1000).toFixed(1)}</p></div>
+                <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-4"><p style={{ color: C.sub }} className="text-xs font-black uppercase">At risk</p><p style={{ color: C.caution }} className="mt-1 text-2xl font-black tabular-nums">{(liveTreasureUnits / 1000).toFixed(1)}</p></div>
+              </div>
+              {!exploded && <button type="button" disabled={treasureGuardAwake || !teamIsEligible}
+                onPointerDown={() => { if (!treasureGuardAwake) void setTreasureHold(true) }}
+                onPointerUp={() => { void setTreasureHold(false) }} onPointerCancel={() => { void setTreasureHold(false) }} onPointerLeave={() => { if (treasureHolding) void setTreasureHold(false) }}
+                style={{ background: treasureHolding ? C.caution : C.violet, touchAction: 'none' }} className="mt-5 w-full select-none rounded-2xl px-6 py-5 text-xl font-black text-white disabled:opacity-40">
+                {treasureHolding ? 'RELEASE TO BANK' : 'HOLD TO STEAL'}
+              </button>}
+              {(ownTreasure?.caught_count ?? 0) > 0 && <p style={{ color: C.stop }} className="mt-3 text-sm font-bold">Caught {ownTreasure?.caught_count} time{ownTreasure?.caught_count === 1 ? '' : 's'} · that unbanked haul was lost.</p>}
+              {exploded && <div className="mt-5"><h2 style={{ color: won ? C.go : C.ink }} className="text-4xl font-black">{won ? 'You won!' : 'Another team stole more'}</h2>{won && <p style={{ color: C.sub }} className="mt-2 text-base font-semibold">{showGameWinnerDetail(reward)}</p>}<p style={{ color: C.sub }} className="mt-2">You banked {((ownTreasure?.banked_units ?? 0) / 1000).toFixed(1)} treasure.</p><div className="mt-5"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}
+            </div>
           : <div className={`mt-5 text-6xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
         {isBomb && showGame?.status === 'open' && <div className="mt-4 w-full max-w-sm space-y-2">
           <div style={{ background: '#fff1f2', border: '1px solid #fb7185', color: '#9f1239' }} className="rounded-xl px-3 py-2 text-center">
@@ -3101,15 +3181,15 @@ function ShowGame() {
           </div>}
           {bombPresses.length > 1 && <p style={{ color: C.sub }} className="text-xs font-bold">{bombPresses.length} teams have pressed so far.</p>}
         </div>}
-        {!isAudienceQuestion && (isElimination && !exploded && (showGame?.game_type !== 'heads-or-tails' || eliminationState.roundPhase !== 'reveal' || coinRevealFinishedRound === eliminationState.roundNumber) ? (
+        {!isAudienceQuestion && !isTreasure && (isElimination && !exploded && (showGame?.game_type !== 'heads-or-tails' || eliminationState.roundPhase !== 'reveal' || coinRevealFinishedRound === eliminationState.roundNumber) ? (
           <div className="mt-5">
             <h2 style={{ color: teamIsAlive ? C.go : C.sub }} className="text-xl font-black">{teamIsAlive ? `You’re still in · Round ${eliminationState.roundNumber}` : 'You’re out—watch the survivors'}</h2>
             {eliminationState.roundPhase === 'reveal' && eliminationState.roundEliminatedTeamIds.length === 0 && <p style={{ color: C.sub }} className="mt-2">Nobody was knocked out. Another round is coming.</p>}
           </div>
         ) : showGameOutcome ? (
           <div className="mt-7">
-            <h2 style={{ color: won ? C.go : C.ink }} className="text-3xl font-black">{won ? showGameWinnerMessage(reward) : isElimination ? 'Another team survived' : isBigBalloon ? 'Another balloon was bigger' : isWheel ? 'Another team was selected' : 'The bomb exploded!'}</h2>
-            <p style={{ color: C.sub }} className="mt-3 text-base">{won ? (isElimination ? 'You were the last team standing!' : isBigBalloon ? 'Your intact balloon was the biggest!' : isWheel ? 'The wheel landed on your team!' : 'You were the last team to press.') : (isElimination ? 'Thanks for playing!' : isBigBalloon ? 'Better luck on the next inflation.' : isWheel ? 'Better luck on the next spin.' : 'Another team got the final press this time.')}</p>
+            <h2 style={{ color: won ? C.go : C.ink }} className="text-4xl font-black">{won ? 'You won!' : isElimination ? 'Another team survived' : isBigBalloon ? 'Another balloon was bigger' : isWheel ? 'Another team was selected' : 'The bomb exploded!'}</h2>
+            <p style={{ color: C.sub }} className="mt-3 text-base font-semibold">{won ? showGameWinnerDetail(reward) : (isElimination ? 'Thanks for playing!' : isBigBalloon ? 'Better luck on the next inflation.' : isWheel ? 'Better luck on the next spin.' : 'Another team got the final press this time.')}</p>
             <div className="mt-7"><WaitMsg msg="Waiting for the host to continue…" /></div>
           </div>
         ) : isBigBalloon ? (
@@ -3823,9 +3903,15 @@ export function PlayerFlow() {
       setScreen('reconnecting')
     }
     const handleOnline = () => { if (active) void restore() }
+    const handleVisibilityChange = () => {
+      if (active && document.visibilityState === 'visible') void restore()
+    }
+    const handlePageShow = () => { if (active) void restore() }
 
     window.addEventListener('offline', handleOffline)
     window.addEventListener('online', handleOnline)
+    window.addEventListener('pageshow', handlePageShow)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
     void restore()
 
     return () => {
@@ -3833,6 +3919,8 @@ export function PlayerFlow() {
       if (retryTimer) clearTimeout(retryTimer)
       window.removeEventListener('offline', handleOffline)
       window.removeEventListener('online', handleOnline)
+      window.removeEventListener('pageshow', handlePageShow)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [])
 

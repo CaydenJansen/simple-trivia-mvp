@@ -228,6 +228,7 @@ export function buildAutoQuizPlan<
   roundTopics,
   difficulties,
   contentSettings,
+  tiebreakerCount = AUTO_BUILD_TIEBREAKER_COUNT,
   random = Math.random,
 }: {
   questions: readonly TQuestion[]
@@ -236,16 +237,17 @@ export function buildAutoQuizPlan<
   roundTopics: readonly (string | null)[]
   difficulties: readonly string[]
   contentSettings?: AutoBuildContentSettings
+  tiebreakerCount?: number
   random?: () => number
 }): AutoBuildPlan<TQuestion, TTiebreaker> {
   if (roundTopics.length === 0) throw new Error('Choose at least one round.')
   if (difficulties.length === 0) throw new Error('Choose at least one difficulty.')
   if (questionCount < roundTopics.length) throw new Error('Add at least one question for every round.')
   const eligibleTiebreakers = getEligibleAutoBuildTiebreakers(tiebreakers, contentSettings)
-  if (eligibleTiebreakers.length < AUTO_BUILD_TIEBREAKER_COUNT) {
+  if (eligibleTiebreakers.length < tiebreakerCount) {
     throw new Error(contentSettings
-      ? `Question Library has ${eligibleTiebreakers.length} prepared tiebreakers matching these advanced settings, but Auto-Build needs ${AUTO_BUILD_TIEBREAKER_COUNT}.`
-      : `Auto-Build needs at least ${AUTO_BUILD_TIEBREAKER_COUNT} active prepared tiebreakers.`)
+      ? `Question Library has ${eligibleTiebreakers.length} prepared tiebreakers matching these advanced settings, but Auto-Build needs ${tiebreakerCount}.`
+      : `Auto-Build needs at least ${tiebreakerCount} active prepared tiebreakers.`)
   }
 
   const availability = getAutoBuildAvailability({ questions, questionCount, roundTopics, difficulties, contentSettings })
@@ -295,6 +297,6 @@ export function buildAutoQuizPlan<
     tiebreakers: withAudiencePreference(
       shuffled(eligibleTiebreakers, random),
       contentSettings,
-    ).slice(0, AUTO_BUILD_TIEBREAKER_COUNT),
+    ).slice(0, tiebreakerCount),
   }
 }

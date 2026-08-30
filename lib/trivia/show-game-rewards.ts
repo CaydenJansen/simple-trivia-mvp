@@ -47,6 +47,14 @@ export function showGameWinnerMessage(reward: ShowGameReward): string {
   return `You won! ${reward.points} bonus ${reward.points === 1 ? 'point has' : 'points have'} been added to your score.`
 }
 
+export function showGameWinnerDetail(reward: ShowGameReward): string {
+  if (reward.type === 'custom') {
+    const message = reward.winnerMessage || 'See the host to claim your prize.'
+    return message.replace(/^you won[!.]?\s*/i, '') || 'See the host to claim your prize.'
+  }
+  return `${reward.points} bonus ${reward.points === 1 ? 'point has' : 'points have'} been added to your score.`
+}
+
 export function showGameRewardSettings(reward: ShowGameReward): Json {
   return {
     minimum_seconds: 10,

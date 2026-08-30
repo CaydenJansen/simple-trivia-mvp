@@ -568,6 +568,12 @@ export type Database = {
         Update: Partial<{ size_units: number; status: 'ready' | 'inflating' | 'locked' | 'popped'; last_inflated_at: string | null; locked_at: string | null; popped_at: string | null }>
         Relationships: []
       }
+      game_show_game_treasure: {
+        Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; banked_units: number; current_units: number; is_stealing: boolean; stealing_started_at: string | null; caught_count: number; updated_at: string }
+        Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; banked_units?: number; current_units?: number; is_stealing?: boolean; stealing_started_at?: string | null; caught_count?: number; updated_at?: string }
+        Update: Partial<{ banked_units: number; current_units: number; is_stealing: boolean; stealing_started_at: string | null; caught_count: number; updated_at: string }>
+        Relationships: []
+      }
       game_tiebreakers: {
         Row: TiebreakerRow & { game_id: string }
         Insert: TiebreakerInsert & { game_id: string }
@@ -991,6 +997,22 @@ export type Database = {
         Args: { p_game_show_game_id: string }
         Returns: Database['public']['Tables']['game_show_games']['Row']
       }
+      start_steal_the_treasure: {
+        Args: { p_game_show_game_id: string }
+        Returns: Database['public']['Tables']['game_show_games']['Row']
+      }
+      set_steal_the_treasure_holding: {
+        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_holding: boolean }
+        Returns: Database['public']['Tables']['game_show_game_treasure']['Row']
+      }
+      advance_steal_the_treasure: {
+        Args: { p_game_show_game_id: string }
+        Returns: Database['public']['Tables']['game_show_games']['Row']
+      }
+      resolve_steal_the_treasure: {
+        Args: { p_game_show_game_id: string }
+        Returns: Database['public']['Tables']['game_show_games']['Row']
+      }
       cancel_host_game: {
         Args: {
           p_game_code: string
@@ -1199,6 +1221,10 @@ export type Database = {
         Args: {
           p_game_id: string
         }
+        Returns: number
+      }
+      apply_latest_in_show_tiebreaker: {
+        Args: { p_game_id: string }
         Returns: number
       }
       start_game_tiebreaker: {
@@ -1444,7 +1470,7 @@ type ShowGameRow = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'audience-question'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
   title: string
   settings: Json
   created_at: string
@@ -1456,7 +1482,7 @@ type ShowGameInsert = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'audience-question'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
   title: string
   settings?: Json
   created_at?: string

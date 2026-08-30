@@ -14,3 +14,9 @@ export function gameCodeFromSearch(search: string) {
   const code = new URLSearchParams(search).get('code')?.replace(/\D/g, '') ?? ''
   return new RegExp(`^\\d{${GAME_CODE_LENGTH}}$`).test(code) ? code : null
 }
+
+export function withGameCodeInUrl(currentUrl: string, gameCode: string) {
+  const url = new URL(currentUrl)
+  url.searchParams.set('code', normalizeGameCode(gameCode))
+  return url.toString()
+}

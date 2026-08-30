@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildGameJoinUrl, gameCodeFromSearch, normalizeGameCode } from './join-code'
+import { buildGameJoinUrl, gameCodeFromSearch, normalizeGameCode, withGameCodeInUrl } from './join-code'
 
 describe('game join links', () => {
   it('builds a player link containing the game code', () => {
@@ -9,6 +9,11 @@ describe('game join links', () => {
 
   it('reads a six-digit game code from a join link', () => {
     expect(gameCodeFromSearch('?code=307117')).toBe('307117')
+  })
+
+  it('replaces a stale QR code after the player manually joins another game', () => {
+    expect(withGameCodeInUrl('https://simple-trivia.example/play?code=111111&source=qr', '222222'))
+      .toBe('https://simple-trivia.example/play?code=222222&source=qr')
   })
 
   it('normalizes pasted game codes before applying the length limit', () => {

@@ -1,6 +1,6 @@
 import type { Json } from '@/lib/supabase/database.types'
 
-export type ShowGameType = 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'audience-question'
+export type ShowGameType = 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
 export type EliminationShowGameType = 'heads-or-tails' | 'dodge-the-rock'
 export type EliminationRoundPhase = 'choosing' | 'reveal'
 export const RANDOM_CHANCE_SHOW_GAME_TYPES = ['spin-the-wheel', 'beat-the-bomb', 'heads-or-tails', 'dodge-the-rock'] as const satisfies readonly ShowGameType[]
@@ -60,6 +60,8 @@ export function showGameLabel(type: ShowGameType) {
   if (type === 'beat-the-bomb') return 'Beat the Bomb'
   if (type === 'heads-or-tails') return 'Heads or Tails'
   if (type === 'big-balloon') return 'Big Balloon'
+  if (type === 'steal-the-treasure') return 'Steal the Treasure'
+  if (type === 'in-show-tiebreaker') return 'In-show Tiebreaker'
   if (type === 'audience-question') return 'Audience Question'
   return 'Dodge the Rock'
 }
@@ -69,6 +71,8 @@ export function showGameEmoji(type: ShowGameType) {
   if (type === 'beat-the-bomb') return '💣'
   if (type === 'heads-or-tails') return '🪙'
   if (type === 'big-balloon') return '🎈'
+  if (type === 'steal-the-treasure') return '💰'
+  if (type === 'in-show-tiebreaker') return '🎯'
   if (type === 'audience-question') return '💬'
   return '🪨'
 }
@@ -78,6 +82,8 @@ export function showGameInstructions(type: ShowGameType) {
   if (type === 'beat-the-bomb') return 'Each team can press once. Be the last team to press before the randomly timed bomb explodes.'
   if (type === 'heads-or-tails') return 'Call heads or tails before each flip. Correct teams stay in; the others are knocked out. Flips continue until one team remains.'
   if (type === 'big-balloon') return 'Press and hold to inflate your balloon, then release to lock in its size. Push it too far and it pops. The biggest balloon still intact wins.'
+  if (type === 'steal-the-treasure') return 'Hold to steal treasure while the guard is asleep, then release to bank it. If the guard catches you holding, that unbanked haul is lost. The most banked treasure wins.'
+  if (type === 'in-show-tiebreaker') return 'Everyone submits a numerical answer. The closest answer becomes the latest tie-ordering result without changing anyone\'s score.'
   if (type === 'audience-question') return 'Ask the room something fun. Pick your favourite response, or use Closest Guess to find the nearest numerical answer.'
   return 'Move your character between three lanes before positions lock. A rock hits one random lane each round. Survive until your team is the last one standing.'
 }

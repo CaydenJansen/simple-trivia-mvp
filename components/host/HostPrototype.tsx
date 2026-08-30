@@ -252,6 +252,8 @@ async function updateLiveGame(values: {
 }
 
 async function finalizeLiveGame(gameId: string) {
+  const { error: tiebreakerError } = await supabase.rpc('apply_latest_in_show_tiebreaker', { p_game_id: gameId })
+  if (tiebreakerError) throw tiebreakerError
   const { error } = await supabase.rpc('finalize_game_with_prizes', { p_game_id: gameId })
   if (error) throw error
 }
@@ -1824,6 +1826,8 @@ type BuilderShowGameData = {
   audienceQuestionCorrectNumber: string
   audienceQuestionAllowMultipleWinners: boolean
   audienceQuestionShareResponses: boolean
+  tiebreakerAnswerUnit: string
+  tiebreakerNotes: string
 }
 
 type BuilderRoundData = {
@@ -2232,6 +2236,9 @@ function QuizBuilder({ go }: { go: Go }) {
       for (const row of showGameResult.data ?? []) {
         const reward = showGameRewardFromSettings(row.settings)
         const audienceQuestion = audienceQuestionFromSettings(row.settings)
+        const showGameSettings = row.settings && typeof row.settings === 'object' && !Array.isArray(row.settings)
+          ? row.settings as Record<string, Json>
+          : {}
         const round = groupedRounds.get(row.round_number) ?? {
           id: row.round_number,
           title: row.round_title,
@@ -2254,6 +2261,8 @@ function QuizBuilder({ go }: { go: Go }) {
           audienceQuestionCorrectNumber: audienceQuestion.correctNumber === null ? '' : String(audienceQuestion.correctNumber),
           audienceQuestionAllowMultipleWinners: audienceQuestion.allowMultipleWinners,
           audienceQuestionShareResponses: audienceQuestion.shareResponses,
+          tiebreakerAnswerUnit: typeof showGameSettings.tiebreaker_answer_unit === 'string' ? showGameSettings.tiebreaker_answer_unit : '',
+          tiebreakerNotes: typeof showGameSettings.tiebreaker_notes === 'string' ? showGameSettings.tiebreaker_notes : '',
         })
         groupedRounds.set(row.round_number, round)
       }
@@ -2510,20 +2519,20 @@ function QuizBuilder({ go }: { go: Go }) {
       setSaveError('Give every game a title before saving.')
       return null
     }
-    if (rounds.some(round => round.showGames.some(showGame => showGame.rewardType === 'custom' && !showGame.rewardDescription.trim()))) {
+    if (rounds.some(round => round.showGames.some(showGame => showGame.gameType !== 'in-show-tiebreaker' && showGame.rewardType === 'custom' && !showGame.rewardDescription.trim()))) {
       setSaveError('Describe the prize for every custom game reward before saving.')
       return null
     }
-    if (rounds.some(round => round.showGames.some(showGame => showGame.rewardType === 'custom' && !showGame.winnerMessage.trim()))) {
+    if (rounds.some(round => round.showGames.some(showGame => showGame.gameType !== 'in-show-tiebreaker' && showGame.rewardType === 'custom' && !showGame.winnerMessage.trim()))) {
       setSaveError('Add a winner message for every custom game reward before saving.')
       return null
     }
-    if (rounds.some(round => round.showGames.some(showGame => showGame.gameType === 'audience-question' && !showGame.audienceQuestionPrompt.trim()))) {
-      setSaveError('Add a prompt for every Audience Question before saving.')
+    if (rounds.some(round => round.showGames.some(showGame => ['audience-question', 'in-show-tiebreaker'].includes(showGame.gameType) && !showGame.audienceQuestionPrompt.trim()))) {
+      setSaveError('Add a prompt for every Audience Question and in-show tiebreaker before saving.')
       return null
     }
-    if (rounds.some(round => round.showGames.some(showGame => showGame.gameType === 'audience-question'
-      && showGame.audienceQuestionMode === 'closest-number'
+    if (rounds.some(round => round.showGames.some(showGame => ['audience-question', 'in-show-tiebreaker'].includes(showGame.gameType)
+      && (showGame.gameType === 'in-show-tiebreaker' || showGame.audienceQuestionMode === 'closest-number')
       && (!showGame.audienceQuestionCorrectNumber.trim() || !Number.isFinite(Number(showGame.audienceQuestionCorrectNumber)))))) {
       setSaveError('Add a valid correct number for every Closest Guess game.')
       return null
@@ -2592,13 +2601,17 @@ function QuizBuilder({ go }: { go: Go }) {
                 description: item.showGame.rewardDescription.trim(),
                 winnerMessage: item.showGame.winnerMessage.trim(),
               }) as Record<string, Json>,
-              ...(item.showGame.gameType === 'audience-question' ? audienceQuestionSettings({
-                mode: item.showGame.audienceQuestionMode,
+              ...(['audience-question', 'in-show-tiebreaker'].includes(item.showGame.gameType) ? audienceQuestionSettings({
+                mode: item.showGame.gameType === 'in-show-tiebreaker' ? 'closest-number' : item.showGame.audienceQuestionMode,
                 prompt: item.showGame.audienceQuestionPrompt,
-                correctNumber: item.showGame.audienceQuestionMode === 'closest-number' ? Number(item.showGame.audienceQuestionCorrectNumber) : null,
+                correctNumber: item.showGame.gameType === 'in-show-tiebreaker' || item.showGame.audienceQuestionMode === 'closest-number' ? Number(item.showGame.audienceQuestionCorrectNumber) : null,
                 allowMultipleWinners: item.showGame.audienceQuestionAllowMultipleWinners,
                 shareResponses: item.showGame.audienceQuestionShareResponses,
               }) : {}),
+              ...(item.showGame.gameType === 'in-show-tiebreaker' ? {
+                tiebreaker_answer_unit: item.showGame.tiebreakerAnswerUnit.trim() || null,
+                tiebreaker_notes: item.showGame.tiebreakerNotes.trim() || null,
+              } : {}),
             },
           })
           return
@@ -2883,6 +2896,8 @@ function QuizBuilder({ go }: { go: Go }) {
                     audienceQuestionCorrectNumber: '',
                     audienceQuestionAllowMultipleWinners: false,
                     audienceQuestionShareResponses: false,
+                    tiebreakerAnswerUnit: '',
+                    tiebreakerNotes: '',
                   }),
                 } : item))
                 setDirty(true)
@@ -2912,6 +2927,24 @@ function QuizBuilder({ go }: { go: Go }) {
                 setRounds(current => current.map(item => item.id === round.id ? {
                   ...item,
                   showGames: item.showGames.filter(showGame => showGame.id !== showGameId),
+                } : item))
+                setDirty(true)
+              }}
+              onMoveShowGameToBackup={showGameId => {
+                const showGame = round.showGames.find(item => item.id === showGameId)
+                if (!showGame || showGame.gameType !== 'in-show-tiebreaker') return
+                setTiebreakers(current => [...current, {
+                  id: `tiebreaker-${crypto.randomUUID()}`,
+                  tiebreakerKey: `tiebreaker-${crypto.randomUUID()}`,
+                  sourceTiebreakerId: null,
+                  prompt: showGame.audienceQuestionPrompt,
+                  correctValue: showGame.audienceQuestionCorrectNumber,
+                  answerUnit: showGame.tiebreakerAnswerUnit,
+                  notes: showGame.tiebreakerNotes,
+                }])
+                setRounds(current => current.map(item => item.id === round.id ? {
+                  ...item,
+                  showGames: item.showGames.filter(game => game.id !== showGameId),
                 } : item))
                 setDirty(true)
               }}
@@ -2970,6 +3003,7 @@ function QuizBuilder({ go }: { go: Go }) {
               <I.plus /> Add Round
             </span>
           </button>
+          <div className="pt-3"><p style={{ color: C.sub }} className="mb-2 text-xs font-black uppercase tracking-widest">Backup tiebreakers · only used if needed</p></div>
           <TiebreakerBuilder
             tiebreakers={tiebreakers}
             replacingId={replacingLibraryTiebreakerId}
@@ -2986,6 +3020,37 @@ function QuizBuilder({ go }: { go: Go }) {
               setDirty(true)
             }}
             onCycle={id => { void cycleLibraryTiebreaker(id) }}
+            onMoveIntoShow={id => {
+              const tiebreaker = tiebreakers.find(item => item.id === id)
+              if (!tiebreaker) return
+              setRounds(current => {
+                const existingRounds = current.length > 0 ? current : [{ id: 1, title: 'Round 1', questions: [], contentScreens: [], showGames: [] }]
+                const destination = existingRounds[existingRounds.length - 1]
+                return existingRounds.map(round => round.id === destination.id ? {
+                  ...round,
+                  showGames: [...round.showGames, {
+                    id: `show-game-${crypto.randomUUID()}`,
+                    showGameKey: `show-game-${crypto.randomUUID()}`,
+                    itemPosition: nextRoundItemPosition(round),
+                    gameType: 'in-show-tiebreaker',
+                    title: 'In-show Tiebreaker',
+                    rewardType: DEFAULT_SHOW_GAME_REWARD.type,
+                    rewardPoints: DEFAULT_SHOW_GAME_REWARD.points,
+                    rewardDescription: '',
+                    winnerMessage: '',
+                    audienceQuestionMode: 'closest-number',
+                    audienceQuestionPrompt: tiebreaker.prompt,
+                    audienceQuestionCorrectNumber: tiebreaker.correctValue,
+                    audienceQuestionAllowMultipleWinners: false,
+                    audienceQuestionShareResponses: false,
+                    tiebreakerAnswerUnit: tiebreaker.answerUnit,
+                    tiebreakerNotes: tiebreaker.notes,
+                  }],
+                } : round)
+              })
+              setTiebreakers(current => current.filter(item => item.id !== id))
+              setDirty(true)
+            }}
             onReorder={orderedIds => {
               const byId = new Map(tiebreakers.map(tiebreaker => [tiebreaker.id, tiebreaker]))
               setTiebreakers(orderedIds.flatMap(id => {
@@ -3219,7 +3284,7 @@ function QuizBuilder({ go }: { go: Go }) {
   )
 }
 
-function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, onEdit, onDelete, onCycle, onReorder }: {
+function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, onEdit, onDelete, onCycle, onReorder, onMoveIntoShow }: {
   tiebreakers: BuilderTiebreakerData[]
   replacingId: string | null
   replacementError: string | null
@@ -3228,6 +3293,7 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
   onDelete: (id: string) => void
   onCycle: (id: string) => void
   onReorder: (orderedIds: string[]) => void
+  onMoveIntoShow: (id: string) => void
 }) {
   const belowRecommendation = needsMoreManualTiebreakers(tiebreakers.length)
   const [dragPreview, setDragPreview] = useState<{
@@ -3414,6 +3480,10 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
                 </div>
               </div>
               <div className="mt-0.5 flex shrink-0 items-center gap-1" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
+                  <button type="button" onClick={() => onMoveIntoShow(tiebreaker.id)} title="Make this an in-show tiebreaker answered by every team"
+                    className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700 transition hover:border-violet-400 hover:bg-violet-50">
+                    Use during show
+                  </button>
                   {isLibraryTiebreaker && (
                     <button
                       type="button"
@@ -3839,7 +3909,7 @@ function QuizPreview({ title, rounds, onClose }: {
   )
 }
 
-function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacementBackCounts, onEdit, onReplace, onCycleLibrary, onCycleLibraryBack, onRoundPointerDown, onTitleChange, onAddQuestion, onAddContentScreen, onAddShowGame, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onDeleteShowGame, onReorderItems }: {
+function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacementBackCounts, onEdit, onReplace, onCycleLibrary, onCycleLibraryBack, onRoundPointerDown, onTitleChange, onAddQuestion, onAddContentScreen, onAddShowGame, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onDeleteShowGame, onMoveShowGameToBackup, onReorderItems }: {
   round: BuilderRoundData
   roundNumber: number
   replacingLibraryQuestionId: string | null
@@ -3859,6 +3929,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacem
   onDeleteContentScreen: (screenId: string) => void
   onUpdateShowGame: (showGameId: string, updates: Partial<BuilderShowGameData>) => void
   onDeleteShowGame: (showGameId: string) => void
+  onMoveShowGameToBackup: (showGameId: string) => void
   onReorderItems: (orderedKeys: string[]) => void
 }) {
   const [open, setOpen] = useState(true)
@@ -4066,7 +4137,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacem
                   <span style={{ color: C.violet }} className="text-sm font-black leading-none">＋</span>
                   <button type="button" onClick={() => onAddQuestion(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Question</button>
                   <button type="button" onClick={() => onAddContentScreen(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Content</button>
-                  <button type="button" onClick={() => onAddShowGame(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Game</button>
+                  <button type="button" onClick={() => onAddShowGame(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Game / Tiebreaker</button>
                 </div>
               </div>
               {item.kind === 'question' ? (
@@ -4097,6 +4168,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacem
               showGame={item.showGame}
               onChange={updates => onUpdateShowGame(item.showGame.id, updates)}
               onDelete={() => onDeleteShowGame(item.showGame.id)}
+              onMoveToBackup={() => onMoveShowGameToBackup(item.showGame.id)}
               onPointerDown={event => startItemDrag(itemKey, event)}
             />
           )}
@@ -4113,7 +4185,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacem
             </button>
             <button onClick={() => onAddShowGame(items.length + 1)} style={{ color: C.sub }}
               className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
-              <I.plus /> Add Game
+              <I.plus /> Add Game / Tiebreaker
             </button>
           </div>
         </div>
@@ -4200,10 +4272,11 @@ function BuilderContentScreen({ screen, onChange, onDelete, onPointerDown }: {
   )
 }
 
-function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
+function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onPointerDown }: {
   showGame: BuilderShowGameData
   onChange: (updates: Partial<BuilderShowGameData>) => void
   onDelete: () => void
+  onMoveToBackup: () => void
   onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
 }) {
   const [expanded, setExpanded] = useState(() => showGame.id.startsWith('show-game-'))
@@ -4216,17 +4289,24 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
           onClick={event => event.stopPropagation()}><I.grip /></button>
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex items-center gap-2">
-            <span style={{ background: C.violet, color: 'white' }} className="rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest">Game</span>
+            <span style={{ background: C.violet, color: 'white' }} className="rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest">{showGame.gameType === 'in-show-tiebreaker' ? 'Tiebreaker' : 'Game'}</span>
             <span style={{ color: C.sub }} className="text-[10px]">
-              {showGame.gameType === 'audience-question' ? 'Host-picked game' : isEliminationShowGame(showGame.gameType) ? 'Multi-round elimination' : 'Immediate winner'} · {showGame.rewardType === 'points' ? `${showGame.rewardPoints} bonus ${showGame.rewardPoints === 1 ? 'point' : 'points'}` : 'Custom prize'}
+              {showGame.gameType === 'in-show-tiebreaker' ? 'Answered by everyone · score-neutral' : showGame.gameType === 'audience-question' ? 'Host-picked game' : isEliminationShowGame(showGame.gameType) ? 'Multi-round elimination' : 'Immediate winner'}{showGame.gameType !== 'in-show-tiebreaker' ? ` · ${showGame.rewardType === 'points' ? `${showGame.rewardPoints} bonus ${showGame.rewardPoints === 1 ? 'point' : 'points'}` : 'Custom prize'}` : ''}
             </span>
           </div>
           <p style={{ color: C.ink }} className="truncate text-sm font-semibold group-hover:text-violet">{showGameEmoji(showGame.gameType)} {showGame.title}</p>
+          {['audience-question', 'in-show-tiebreaker'].includes(showGame.gameType) && showGame.audienceQuestionPrompt.trim() && (
+            <p style={{ color: C.sub }} className="mt-1 line-clamp-2 text-xs leading-5">{showGame.audienceQuestionPrompt}</p>
+          )}
         </div>
         <div onClick={event => event.stopPropagation()}><IBtn icon={<I.trash />} title="Delete game" onClick={onDelete} danger /></div>
       </div>
       {expanded && (
         <div style={{ borderTop: `1px solid ${C.violet}30` }} className="space-y-3 px-4 pb-4 pt-3">
+          {showGame.gameType === 'in-show-tiebreaker' && <div className="flex items-center justify-between gap-3 rounded-xl border border-violet-200 bg-white px-3 py-2">
+            <div><p style={{ color: C.ink }} className="text-xs font-bold">Mode: In-show</p><p style={{ color: C.sub }} className="text-[11px]">Every team answers this during the show.</p></div>
+            <button type="button" onClick={onMoveToBackup} className="shrink-0 rounded-lg border border-zinc-200 px-3 py-2 text-xs font-bold text-zinc-700 hover:border-violet-300 hover:text-violet">Make backup</button>
+          </div>}
           <div>
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Game</label>
             <select value={showGame.gameType} onChange={event => {
@@ -4237,6 +4317,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
                 <option value="spin-the-wheel">🎡 Spin the Wheel</option>
                 <option value="beat-the-bomb">💣 Beat the Bomb</option>
                 <option value="big-balloon">🎈 Big Balloon</option>
+                <option value="steal-the-treasure">💰 Steal the Treasure</option>
               </optgroup>
               <optgroup label="Elimination games · multiple rounds">
                 <option value="heads-or-tails">🪙 Heads or Tails</option>
@@ -4245,26 +4326,29 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
               <optgroup label="Host-picked games">
                 <option value="audience-question">💬 Audience Question</option>
               </optgroup>
+              <optgroup label="Tiebreakers">
+                <option value="in-show-tiebreaker">🎯 In-show Tiebreaker</option>
+              </optgroup>
             </select>
           </div>
           <p style={{ color: C.sub }} className="text-xs leading-5">{showGameInstructions(showGame.gameType)}</p>
-          {showGame.gameType === 'audience-question' && <>
+          {['audience-question', 'in-show-tiebreaker'].includes(showGame.gameType) && <>
             <div>
               <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">How is the winner chosen?</label>
-              <div className="grid grid-cols-2 gap-2">
+              {showGame.gameType === 'audience-question' ? <div className="grid grid-cols-2 gap-2">
                 {(['favourite', 'closest-number'] as const).map(mode => <button key={mode} type="button" onClick={() => onChange({ audienceQuestionMode: mode })}
                   style={{ border: `1px solid ${showGame.audienceQuestionMode === mode ? C.violet : C.line}`, background: showGame.audienceQuestionMode === mode ? C.violetMist : 'white', color: showGame.audienceQuestionMode === mode ? C.violet : C.ink }}
                   className="cursor-pointer rounded-xl px-3 py-2 text-sm font-bold">{mode === 'favourite' ? 'Favourite Answer' : 'Closest Guess'}</button>)}
-              </div>
+              </div> : <p style={{ color: C.violet }} className="rounded-xl bg-violet-mist px-3 py-2 text-xs font-bold">Closest numerical answer orders tied teams. No trivia points are added.</p>}
               <p style={{ color: C.sub }} className="mt-1 text-[11px]">{showGame.audienceQuestionMode === 'favourite' ? 'You read the responses and choose the answer you like best.' : 'Players enter numbers and the nearest answer wins automatically.'}</p>
             </div>
             <div>
               <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Prompt</label>
               <textarea rows={2} value={showGame.audienceQuestionPrompt} onChange={event => onChange({ audienceQuestionPrompt: event.target.value })}
-                placeholder={showGame.audienceQuestionMode === 'favourite' ? 'What’s the funniest joke you’ve heard this week?' : 'How many jellybeans are in this jar?'}
+                placeholder={showGame.gameType === 'in-show-tiebreaker' ? 'Approximately how many kilometres long is the Great Wall of China?' : showGame.audienceQuestionMode === 'favourite' ? 'What’s the funniest joke you’ve heard this week?' : 'How many jellybeans are in this jar?'}
                 style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full resize-none rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
             </div>
-            {showGame.audienceQuestionMode === 'closest-number' ? <div>
+            {showGame.gameType === 'in-show-tiebreaker' || showGame.audienceQuestionMode === 'closest-number' ? <div>
               <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Correct number</label>
               <input type="number" value={showGame.audienceQuestionCorrectNumber} onChange={event => onChange({ audienceQuestionCorrectNumber: event.target.value })}
                 placeholder="e.g. 437" style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
@@ -4281,12 +4365,25 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
                 </span>
               </label>
             </div>}
+            {showGame.gameType === 'in-show-tiebreaker' && <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Answer unit</label>
+                <input value={showGame.tiebreakerAnswerUnit} onChange={event => onChange({ tiebreakerAnswerUnit: event.target.value })}
+                  placeholder="e.g. kilometres" style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+              </div>
+              <div>
+                <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Host notes</label>
+                <input value={showGame.tiebreakerNotes} onChange={event => onChange({ tiebreakerNotes: event.target.value })}
+                  placeholder="Optional" style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
+              </div>
+            </div>}
           </>}
           <div>
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Title</label>
             <input value={showGame.title} onChange={event => onChange({ title: event.target.value })}
               style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
           </div>
+          {showGame.gameType !== 'in-show-tiebreaker' && <>
           <div>
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Reward</label>
             <div className="grid grid-cols-2 gap-2">
@@ -4324,6 +4421,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onPointerDown }: {
                 style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full resize-none rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
             </div>
           )}
+          </>}
           <div className="flex justify-end"><button onClick={() => setExpanded(false)} style={{ color: C.violet }} className="text-xs font-semibold">Done</button></div>
         </div>
       )}
@@ -5042,6 +5140,8 @@ function AutoBuild({ go }: { go: Go }) {
   const [questionCountInput, setQuestionCountInput] = useState('30')
   const [roundCount, setRoundCount] = useState(4)
   const [includeGames, setIncludeGames] = useState(false)
+  const [includeTiebreaker, setIncludeTiebreaker] = useState(true)
+  const [autoBuildTiebreakerMode, setAutoBuildTiebreakerMode] = useState<'in-show' | 'backup'>('in-show')
   const [autoBuildGameRewardType, setAutoBuildGameRewardType] = useState<ShowGameRewardType>('points')
   const [autoBuildGameRewardPoints, setAutoBuildGameRewardPoints] = useState(1)
   const [autoBuildGamePrize, setAutoBuildGamePrize] = useState('')
@@ -5112,6 +5212,7 @@ function AutoBuild({ go }: { go: Go }) {
     () => getEligibleAutoBuildTiebreakers(sourceTiebreakers, contentSettings).length,
     [contentSettings, sourceTiebreakers],
   )
+  const requestedTiebreakerCount = includeTiebreaker ? (autoBuildTiebreakerMode === 'in-show' ? 1 : AUTO_BUILD_TIEBREAKER_COUNT) : 0
   const firstShortage = availability.shortages[0]
   const countsAreValid = questionCount >= roundCount
   const localeIsValid = scopeMode === 'global_only' || audienceLocale.trim().length > 0
@@ -5121,7 +5222,7 @@ function AutoBuild({ go }: { go: Go }) {
     && !sourcesLoading
     && !sourcesError
     && availability.canBuild
-    && eligibleTiebreakerCount >= AUTO_BUILD_TIEBREAKER_COUNT
+    && eligibleTiebreakerCount >= requestedTiebreakerCount
 
   useEffect(() => {
     let cancelled = false
@@ -5169,7 +5270,7 @@ function AutoBuild({ go }: { go: Go }) {
   const availabilityHasError = !countsAreValid
     || !localeIsValid
     || !!sourcesError
-    || (!sourcesLoading && (!!firstShortage || eligibleTiebreakerCount < AUTO_BUILD_TIEBREAKER_COUNT))
+    || (!sourcesLoading && (!!firstShortage || eligibleTiebreakerCount < requestedTiebreakerCount))
   const availabilityMessage = !countsAreValid
     ? 'The question count must be at least the number of rounds.'
     : !localeIsValid
@@ -5180,8 +5281,8 @@ function AutoBuild({ go }: { go: Go }) {
           ? sourcesError
           : firstShortage
             ? `Not enough ${firstShortage.topic ?? 'matching'} questions: ${firstShortage.available} available, ${firstShortage.required} needed.`
-            : eligibleTiebreakerCount < AUTO_BUILD_TIEBREAKER_COUNT
-              ? `Only ${eligibleTiebreakerCount} prepared tiebreaker${eligibleTiebreakerCount === 1 ? '' : 's'} match these settings; ${AUTO_BUILD_TIEBREAKER_COUNT} are needed.`
+            : eligibleTiebreakerCount < requestedTiebreakerCount
+              ? `Only ${eligibleTiebreakerCount} prepared tiebreaker${eligibleTiebreakerCount === 1 ? '' : 's'} match these settings; ${requestedTiebreakerCount} are needed.`
               : `${availability.matchingQuestionCount} matching questions available for this setup.`
 
   function updateRoundCount(nextCount: number) {
@@ -5209,6 +5310,7 @@ function AutoBuild({ go }: { go: Go }) {
         roundTopics: selectedRoundTopics,
         difficulties: selectedDifficulties,
         contentSettings,
+        tiebreakerCount: requestedTiebreakerCount,
       })
       const questionSnapshots: Json[] = []
       const showGameSnapshots: Json[] = []
@@ -5272,7 +5374,29 @@ function AutoBuild({ go }: { go: Go }) {
         }
       })
 
-      const tiebreakerSnapshots: Json[] = plan.tiebreakers.map((tiebreaker, index) => ({
+      if (includeTiebreaker && autoBuildTiebreakerMode === 'in-show') {
+        const tiebreaker = plan.tiebreakers[0]
+        const lastRound = plan.rounds.at(-1)
+        if (tiebreaker && lastRound) {
+          itemPosition += 1
+          showGameSnapshots.push({
+            show_game_key: `in-show-tiebreaker-${crypto.randomUUID()}`,
+            item_position: itemPosition,
+            round_number: plan.rounds.length,
+            round_title: lastRound.title,
+            game_type: 'in-show-tiebreaker',
+            title: 'In-show Tiebreaker',
+            settings: {
+              ...(showGameRewardSettings({ type: 'custom', points: 0, description: '', winnerMessage: '' }) as Record<string, Json>),
+              ...audienceQuestionSettings({ mode: 'closest-number', prompt: tiebreaker.prompt, correctNumber: Number(tiebreaker.correct_value), allowMultipleWinners: false, shareResponses: false }),
+              answer_unit: tiebreaker.answer_unit,
+              notes: tiebreaker.notes,
+            },
+          })
+        }
+      }
+
+      const tiebreakerSnapshots: Json[] = (autoBuildTiebreakerMode === 'backup' ? plan.tiebreakers : []).map((tiebreaker, index) => ({
         tiebreaker_key: `tiebreaker-${crypto.randomUUID()}`,
         position: index + 1,
         prompt: tiebreaker.prompt,
@@ -5357,6 +5481,25 @@ function AutoBuild({ go }: { go: Go }) {
                 ? autoBuildSizeSummary(questionCount, roundCount, includeGames ? roundCount : 0)
                 : 'Add at least one question for every round.'}
             </p>
+          </div>
+
+          <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input type="checkbox" checked={includeTiebreaker} onChange={event => setIncludeTiebreaker(event.target.checked)} className="mt-0.5 h-4 w-4 accent-violet" />
+              <span>
+                <span style={{ color: C.ink }} className="block text-sm font-bold">Include a tiebreaker</span>
+                <span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">Keeps equal scores fair without adding normal trivia points.</span>
+              </span>
+            </label>
+            {includeTiebreaker && <div style={{ borderTop: `1px solid ${C.line}` }} className="mt-4 grid gap-2 pt-4 sm:grid-cols-2">
+              {([['in-show', 'In-show tiebreaker', 'Everyone answers it at the end of the show. This is the recommended default.'], ['backup', 'Backup tiebreakers', `${AUTO_BUILD_TIEBREAKER_COUNT} questions are held aside and only played if a final tie needs them.`]] as const).map(([value, label, description]) => (
+                <button key={value} type="button" onClick={() => setAutoBuildTiebreakerMode(value)}
+                  style={{ border: `1.5px solid ${autoBuildTiebreakerMode === value ? C.violet : C.line}`, background: autoBuildTiebreakerMode === value ? C.violetMist : 'white', color: autoBuildTiebreakerMode === value ? C.violet : C.ink }}
+                  className="cursor-pointer rounded-xl p-3 text-left">
+                  <span className="block text-sm font-bold">{label}</span><span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">{description}</span>
+                </button>
+              ))}
+            </div>}
           </div>
 
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5">
@@ -6534,6 +6677,8 @@ type LiveSubmission = {
 
 type LiveBonusSubmission = LiveSubmission
 
+type LiveTreasureEntry = Database['public']['Tables']['game_show_game_treasure']['Row']
+
 type LiveQuestionDefinition = {
   question_key: string
   position: number
@@ -6750,6 +6895,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const [allShowGames, setAllShowGames] = useState<LiveShowGameDefinition[]>([])
   const [showGamePresses, setShowGamePresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [showGameBalloons, setShowGameBalloons] = useState<BigBalloonEntry[]>([])
+  const [showGameTreasure, setShowGameTreasure] = useState<LiveTreasureEntry[]>([])
   const [audienceResponses, setAudienceResponses] = useState<LiveAudienceResponse[]>([])
   const [audienceVoteCounts, setAudienceVoteCounts] = useState<Record<string, number>>({})
   const [audienceResponseOrder, setAudienceResponseOrder] = useState<AudienceResponseOrder>('submitted')
@@ -6899,7 +7045,7 @@ function LiveQuestion({ go }: { go: Go }) {
       const currentContentScreen = contentScreens.find(item => item.screen_key === game.current_content_screen_key) ?? null
       const currentShowGame = showGames.find(item => item.show_game_key === game.current_show_game_key) ?? null
 
-      if (currentShowGame?.game_type === 'audience-question') {
+      if (currentShowGame && ['audience-question', 'in-show-tiebreaker'].includes(currentShowGame.game_type)) {
         if (audienceShowGameIdRef.current !== currentShowGame.id) {
           audienceShowGameIdRef.current = currentShowGame.id
           setSelectedAudienceWinnerIds([])
@@ -6921,7 +7067,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setTeams((teamResult.data ?? []) as LiveTeam[])
 
       if (currentShowGame) {
-        if (currentShowGame.game_type === 'audience-question') {
+        if (['audience-question', 'in-show-tiebreaker'].includes(currentShowGame.game_type)) {
           const [{ data: responseRows, error: responseError }, { data: voteRows, error: voteError }] = await Promise.all([
             supabase.from('game_show_game_responses').select('*').eq('game_show_game_id', currentShowGame.id).order('submitted_at', { ascending: true }),
             supabase.from('game_show_game_response_votes').select('response_id').eq('game_show_game_id', currentShowGame.id),
@@ -6946,6 +7092,15 @@ function LiveQuestion({ go }: { go: Go }) {
           setShowGamePresses([])
           setAudienceResponses([])
           setAudienceVoteCounts({})
+          setShowGameTreasure([])
+        } else if (currentShowGame.game_type === 'steal-the-treasure') {
+          const { data: treasureRows, error: treasureError } = await supabase.from('game_show_game_treasure').select('*').eq('game_show_game_id', currentShowGame.id)
+          if (treasureError) console.error('Could not load treasure progress:', treasureError)
+          else setShowGameTreasure(treasureRows ?? [])
+          setShowGamePresses([])
+          setShowGameBalloons([])
+          setAudienceResponses([])
+          setAudienceVoteCounts({})
         } else {
           const { data: pressRows, error: pressError } = await supabase
             .from('game_show_game_presses')
@@ -6957,8 +7112,9 @@ function LiveQuestion({ go }: { go: Go }) {
           setAudienceResponses([])
           setAudienceVoteCounts({})
           setShowGameBalloons([])
+          setShowGameTreasure([])
         }
-      } else { setShowGamePresses([]); setAudienceResponses([]); setAudienceVoteCounts({}); setShowGameBalloons([]) }
+      } else { setShowGamePresses([]); setAudienceResponses([]); setAudienceVoteCounts({}); setShowGameBalloons([]); setShowGameTreasure([]) }
 
       if (currentQuestion) {
         const [submissionResult, bonusSubmissionResult] = await Promise.all([
@@ -7023,6 +7179,11 @@ function LiveQuestion({ go }: { go: Go }) {
           )
           .on(
             'postgres_changes',
+            { event: '*', schema: 'public', table: 'game_show_game_treasure', filter: `game_id=eq.${game.id}` },
+            () => { void loadLiveData() },
+          )
+          .on(
+            'postgres_changes',
             { event: '*', schema: 'public', table: 'submissions', filter: `game_id=eq.${game.id}` },
             () => { void loadLiveData() },
           )
@@ -7066,12 +7227,21 @@ function LiveQuestion({ go }: { go: Go }) {
       const rpc = isEliminationShowGame(showGame?.game_type)
         ? eliminationState.roundPhase === 'reveal' ? 'advance_elimination_show_game' : 'resolve_elimination_show_game'
         : showGame?.game_type === 'spin-the-wheel' ? 'resolve_spin_the_wheel'
-          : showGame?.game_type === 'big-balloon' ? 'resolve_big_balloon' : 'resolve_beat_the_bomb'
+          : showGame?.game_type === 'big-balloon' ? 'resolve_big_balloon'
+            : showGame?.game_type === 'steal-the-treasure' ? 'resolve_steal_the_treasure' : 'resolve_beat_the_bomb'
       void supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId })
         .then(({ error }) => { if (error) console.error('Could not resolve show game:', error) })
     }, delay + 50)
     return () => { window.clearInterval(interval); window.clearTimeout(timeout) }
   }, [activeShowGameExplodeAt, activeShowGameId, activeShowGameStatus, showGame?.game_type, showGame?.settings])
+
+  useEffect(() => {
+    if (!activeShowGameId || activeShowGameStatus !== 'open' || showGame?.game_type !== 'steal-the-treasure') return
+    const tick = () => { void supabase.rpc('advance_steal_the_treasure', { p_game_show_game_id: activeShowGameId }) }
+    tick()
+    const timer = window.setInterval(tick, 350)
+    return () => window.clearInterval(timer)
+  }, [activeShowGameId, activeShowGameStatus, showGame?.game_type])
 
   async function prepareShowGame(nextShowGame: LiveShowGameDefinition) {
     setWheelSettled(false)
@@ -7085,11 +7255,12 @@ function LiveQuestion({ go }: { go: Go }) {
     setShowGame(nextShowGame)
     setShowGamePresses([])
     setShowGameBalloons([])
+    setShowGameTreasure([])
     setAudienceResponses([])
     setAudienceVoteCounts({})
     setAudienceResponseOrder('submitted')
     setSelectedAudienceWinnerIds([])
-    audienceShowGameIdRef.current = nextShowGame.game_type === 'audience-question' ? nextShowGame.id : null
+    audienceShowGameIdRef.current = ['audience-question', 'in-show-tiebreaker'].includes(nextShowGame.game_type) ? nextShowGame.id : null
     setGameScreen('show-game')
     setPhase('closed')
   }
@@ -7103,17 +7274,19 @@ function LiveQuestion({ go }: { go: Go }) {
         ? (showGame.settings as Record<string, Json>).tie_resolution_id : null
       const rpc = typeof tieResolutionId === 'string'
         ? showGame.game_type === 'big-balloon' ? 'start_big_balloon' : 'start_tie_show_game'
-        : showGame.game_type === 'audience-question'
+        : ['audience-question', 'in-show-tiebreaker'].includes(showGame.game_type)
         ? 'start_audience_question'
         : isEliminationShowGame(showGame.game_type)
         ? 'start_elimination_show_game'
         : showGame.game_type === 'spin-the-wheel' ? 'start_spin_the_wheel'
-          : showGame.game_type === 'big-balloon' ? 'start_big_balloon' : 'start_beat_the_bomb'
+          : showGame.game_type === 'big-balloon' ? 'start_big_balloon'
+            : showGame.game_type === 'steal-the-treasure' ? 'start_steal_the_treasure' : 'start_beat_the_bomb'
       const { data, error } = await supabase.rpc(rpc, { p_game_show_game_id: showGame.id })
       if (error) throw error
       setShowGame(data as LiveShowGameDefinition)
       setShowGamePresses([])
       setShowGameBalloons([])
+      setShowGameTreasure([])
       setAudienceResponses([])
       setAudienceVoteCounts({})
     } catch (error) {
@@ -7125,7 +7298,7 @@ function LiveQuestion({ go }: { go: Go }) {
   }
 
   async function resolveAudienceQuestion() {
-    if (!showGame || showGame.game_type !== 'audience-question' || showGame.status !== 'open' || actionBusy || audienceResolveBusyRef.current) return
+    if (!showGame || !['audience-question', 'in-show-tiebreaker'].includes(showGame.game_type) || showGame.status !== 'open' || actionBusy || audienceResolveBusyRef.current) return
     const config = audienceQuestionFromSettings(showGame.settings)
     if (audienceResponses.length === 0) {
       setLiveError('Wait for at least one response before choosing a winner.')
@@ -8187,8 +8360,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const winner = teams.find(team => team.id === showGame?.winner_team_id) ?? null
     const isWheel = showGame?.game_type === 'spin-the-wheel'
     const isElimination = isEliminationShowGame(showGame?.game_type)
-    const isAudienceQuestion = showGame?.game_type === 'audience-question'
+    const isAudienceQuestion = showGame?.game_type === 'audience-question' || showGame?.game_type === 'in-show-tiebreaker'
+    const isInShowTiebreaker = showGame?.game_type === 'in-show-tiebreaker'
     const isBigBalloon = showGame?.game_type === 'big-balloon'
+    const isTreasure = showGame?.game_type === 'steal-the-treasure'
+    const treasureSettings = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) ? showGame.settings as Record<string, Json> : {}
+    const treasureGuardAwake = treasureSettings.guard_awake === true
     const audienceQuestion = audienceQuestionFromSettings(showGame?.settings)
     const closestAudienceDistance = audienceQuestion.mode === 'closest-number'
       ? Math.min(...audienceResponses.flatMap(response => response.distance_from_correct === null ? [] : [Number(response.distance_from_correct)]))
@@ -8224,7 +8401,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
         <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }} className="sticky top-0 z-40 flex items-center gap-4 px-6">
           <BrandWordmark dark compact className="text-sm" />
-          <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>Round {showGame?.round_number ?? 1} · Game</div>
+          <div className="flex-1 text-center text-sm font-semibold" style={{ color: C.liveDim }}>Round {showGame?.round_number ?? 1} · {isInShowTiebreaker ? 'Tiebreaker' : 'Game'}</div>
           <JoinCodeButton dark />{liveSettingsMenu}
           <span style={{ background: C.violet }} className="rounded-full px-3 py-1 text-xs font-bold">GAME LIVE</span>
         </header>
@@ -8234,12 +8411,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-5xl rounded-3xl p-5 text-center shadow-2xl">
             <h1 className="text-3xl font-black">{showGame?.title ?? (showGame ? showGameLabel(showGame.game_type) : 'Game')}</h1>
             <p style={{ color: C.liveDim }} className="mx-auto mt-2 max-w-xl text-base font-semibold">
-              {showGameRewardDescription(activeShowGameReward)}
+              {isInShowTiebreaker ? 'Everyone answers · orders equal scores without adding points.' : showGameRewardDescription(activeShowGameReward)}
             </p>
             {showingShowGameInstructions ? (
               <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}` }} className="mx-auto mt-7 max-w-2xl rounded-2xl px-6 py-6 text-left">
                 <p className="text-xs font-black uppercase tracking-widest text-violet-300">How it works</p>
-                <p style={{ color: C.liveText }} className="mt-3 text-lg font-semibold leading-7">{showGame ? isAudienceQuestion ? audienceQuestionHostInstructions(showGame.settings) : showGameInstructions(showGame.game_type) : ''}</p>
+                <p style={{ color: C.liveText }} className="mt-3 text-lg font-semibold leading-7">{showGame ? isInShowTiebreaker ? showGameInstructions('in-show-tiebreaker') : isAudienceQuestion ? audienceQuestionHostInstructions(showGame.settings) : showGameInstructions(showGame.game_type) : ''}</p>
               </div>
             ) : isAudienceQuestion ? (
               <div className="mx-auto mt-6 max-w-3xl text-left">
@@ -8283,6 +8460,18 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               <EliminationShowGame type={showGame.game_type as EliminationShowGameType} teams={participatingTeams} state={eliminationState} secondsRemaining={eliminationSecondsRemaining} onRevealAnimationComplete={handleCoinRevealAnimationComplete} dark />
             ) : isBigBalloon ? (
               <BigBalloon teams={participatingTeams} balloons={showGameBalloons} dark />
+            ) : isTreasure ? (
+              <div className="mx-auto mt-6 max-w-3xl">
+                <div className={`mx-auto flex h-28 w-28 items-center justify-center rounded-full text-6xl ${treasureGuardAwake ? 'bg-red-500/20' : 'bg-emerald-500/15'}`}>{treasureGuardAwake ? '👁️' : '😴'}</div>
+                <p className={`mt-3 text-xl font-black ${treasureGuardAwake ? 'text-red-400' : 'text-emerald-400'}`}>{treasureGuardAwake ? 'GUARD AWAKE · HANDS OFF!' : 'GUARD ASLEEP · STEAL NOW!'}</p>
+                <div className="mt-5 grid gap-2 sm:grid-cols-2">
+                  {[...showGameTreasure].sort((a,b) => b.banked_units - a.banked_units).map(entry => <div key={entry.team_id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center gap-3 rounded-xl px-4 py-3 text-left">
+                    <span className="min-w-0 flex-1 truncate font-bold">{teams.find(team => team.id === entry.team_id)?.name ?? 'Team'}</span>
+                    {entry.is_stealing && <span className="animate-pulse text-xs font-black text-amber-300">STEALING</span>}
+                    <span className="font-black tabular-nums text-emerald-400">{(entry.banked_units / 1000).toFixed(1)} 💰</span>
+                  </div>)}
+                </div>
+              </div>
             ) : isWheel ? (
               <div className="mt-5"><TeamWheel dark compact teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
             ) : (
@@ -8300,10 +8489,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   ? 'Flipping…'
                   : `${eliminationState.aliveTeamIds.length} teams remain · ${eliminationState.roundPhase === 'choosing' ? 'Choosing now' : 'Round result'}`
                 : isBigBalloon ? `${showGameBalloons.filter(balloon => balloon.status === 'locked').length} locked · ${showGameBalloons.filter(balloon => balloon.status === 'popped').length} popped · ${eliminationSecondsRemaining}s left`
+                : isTreasure ? `${eliminationSecondsRemaining}s left · bank treasure before the guard catches you`
                 : isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`)
                   : `Fuse burning… ${showGamePresses.length} of ${participatingTeams.length} active teams have pressed.`}</p>
             ))}
-            {!showingShowGameInstructions && !isAudienceQuestion && !isWheel && !isElimination && !isBigBalloon && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
+            {!showingShowGameInstructions && !isAudienceQuestion && !isWheel && !isElimination && !isBigBalloon && !isTreasure && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
               {participatingTeams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Pressed ✓' : 'Waiting…'}</span></div>)}
             </div>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}

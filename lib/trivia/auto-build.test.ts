@@ -270,6 +270,34 @@ describe('Auto-Build selection semantics', () => {
     expect(plan.tiebreakers).toHaveLength(2)
   })
 
+  it('can build without a prepared tiebreaker when the host opts out', () => {
+    const plan = buildAutoQuizPlan({
+      questions,
+      tiebreakers: [],
+      tiebreakerCount: 0,
+      questionCount: 4,
+      roundTopics: [null],
+      difficulties: ['Easy'],
+      random: noShuffle,
+    })
+
+    expect(plan.tiebreakers).toEqual([])
+  })
+
+  it('selects one source tiebreaker for the default in-show mode', () => {
+    const plan = buildAutoQuizPlan({
+      questions,
+      tiebreakers,
+      tiebreakerCount: 1,
+      questionCount: 4,
+      roundTopics: [null],
+      difficulties: ['Easy'],
+      random: noShuffle,
+    })
+
+    expect(plan.tiebreakers).toHaveLength(1)
+  })
+
   it('explains when a topic or the tiebreaker pool is too small', () => {
     expect(() => buildAutoQuizPlan({
       questions,
