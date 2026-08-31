@@ -71,7 +71,7 @@ import {
   type AutoBuildScopeMode,
   type AutoBuildVibe,
 } from "@/lib/trivia/auto-build";
-import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
+import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, nextBuilderItemPosition, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib/trivia/question-metadata";
 import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
@@ -1703,6 +1703,7 @@ function QuizCard({ q, go, duplicating, onRename, onDuplicate, onDelete }: {
 }
 
 type QuizTemplateRow = Database['public']['Tables']['quiz_templates']['Row']
+type TemplateSourceQuiz = Pick<Database['public']['Tables']['quizzes']['Row'], 'id' | 'title' | 'round_count' | 'question_count' | 'estimated_minutes' | 'updated_at'>
 type TemplatePreviewItem = {
   id: string
   kind: 'question' | 'content' | 'game'
@@ -1789,6 +1790,9 @@ function TemplatesScreen({ go }: { go: Go }) {
   const [previewItems, setPreviewItems] = useState<TemplatePreviewItem[]>([])
   const [previewBackups, setPreviewBackups] = useState(0)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [quizPickerOpen, setQuizPickerOpen] = useState(false)
+  const [availableQuizzes, setAvailableQuizzes] = useState<TemplateSourceQuiz[]>([])
+  const [quizPickerLoading, setQuizPickerLoading] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -1901,6 +1905,43 @@ function TemplatesScreen({ go }: { go: Go }) {
     setPreviewLoading(false)
   }
 
+  async function openQuizPicker() {
+    setQuizPickerOpen(true)
+    setQuizPickerLoading(true)
+    setError(null)
+    const { data, error: quizError } = await supabase
+      .from('quizzes')
+      .select('id,title,round_count,question_count,estimated_minutes,updated_at')
+      .order('updated_at', { ascending: false })
+    if (quizError) {
+      console.error('Could not load quizzes for template creation:', quizError)
+      setError('Could not load your quizzes. Please try again.')
+      setQuizPickerOpen(false)
+    } else setAvailableQuizzes(data ?? [])
+    setQuizPickerLoading(false)
+  }
+
+  async function saveQuizAsTemplate(quiz: TemplateSourceQuiz) {
+    const name = window.prompt('Template name', `${quiz.title} template`)?.trim()
+    if (!name || busyId) return
+    setBusyId(quiz.id)
+    setError(null)
+    const { data, error: saveError } = await supabase
+      .from('quiz_templates')
+      .upsert({ name, source_quiz_id: quiz.id, updated_at: new Date().toISOString() }, { onConflict: 'owner_id,name' })
+      .select('*')
+      .single()
+    if (saveError || !data) {
+      console.error('Could not save quiz as template:', saveError)
+      setError('Could not save that quiz as a template. Please try again.')
+    } else {
+      setTemplates(current => [data, ...current.filter(item => item.id !== data.id)])
+      setQuizDetails(current => ({ ...current, [quiz.id]: quiz }))
+      setQuizPickerOpen(false)
+    }
+    setBusyId(null)
+  }
+
   return <div style={{ background: C.ground }} className="min-h-screen">
     <Nav go={go} active="Templates" />
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -1909,7 +1950,7 @@ function TemplatesScreen({ go }: { go: Go }) {
           <h1 style={{ color: C.ink }} className="text-3xl font-extrabold">Templates</h1>
           <p style={{ color: C.sub }} className="mt-2 text-sm">Reuse a show’s rounds, content and games with a fresh set of questions.</p>
         </div>
-        <Btn onClick={() => go('dashboard')} v="secondary">Save a quiz as a template</Btn>
+        <Btn onClick={() => void openQuizPicker()} v="secondary">Choose a Quiz</Btn>
       </div>
       <div style={{ background: C.violetMist, border: `1px solid ${C.violet}30` }} className="mb-6 rounded-2xl px-5 py-4">
         <p style={{ color: C.ink }} className="text-sm font-extrabold">Same show shape, fresh questions</p>
@@ -1919,8 +1960,8 @@ function TemplatesScreen({ go }: { go: Go }) {
       {loading ? <p style={{ color: C.sub }} className="py-24 text-center text-sm">Loading templates…</p> : templates.length === 0 ? (
         <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-3xl px-6 py-20 text-center">
           <h2 style={{ color: C.ink }} className="text-xl font-bold">No templates yet</h2>
-          <p style={{ color: C.sub }} className="mx-auto mt-2 max-w-md text-sm leading-6">Open a saved quiz and choose <strong>Save as Template</strong>. It will appear here for next week.</p>
-          <Btn cls="mt-6" onClick={() => go('dashboard')}>Choose a Quiz</Btn>
+          <p style={{ color: C.sub }} className="mx-auto mt-2 max-w-md text-sm leading-6">Choose one of your saved quizzes and give the reusable template a name.</p>
+          <Btn cls="mt-6" onClick={() => void openQuizPicker()}>Choose a Quiz</Btn>
         </div>
       ) : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{templates.map(template => {
         const quiz = quizDetails[template.source_quiz_id]
@@ -1958,6 +1999,20 @@ function TemplatesScreen({ go }: { go: Go }) {
             })}
             {previewBackups > 0 && <div style={{ border: `1px dashed ${C.line}` }} className="rounded-xl px-4 py-3 text-sm"><strong style={{ color: C.ink }}>{previewBackups} backup tiebreaker{previewBackups === 1 ? '' : 's'}</strong><span style={{ color: C.sub }}> will also be kept in reserve.</span></div>}
           </>}
+        </div>
+      </section>
+    </div>}
+    {quizPickerOpen && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4" onMouseDown={event => { if (event.currentTarget === event.target) setQuizPickerOpen(false) }}>
+      <section className="max-h-[82dvh] w-full max-w-2xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+        <header style={{ borderBottom: `1px solid ${C.line}` }} className="flex items-start justify-between gap-4 px-6 py-5">
+          <div><h2 style={{ color: C.ink }} className="text-2xl font-extrabold">Choose a quiz</h2><p style={{ color: C.sub }} className="mt-1 text-sm">The selected quiz will be saved as a reusable template.</p></div>
+          <button type="button" aria-label="Close quiz picker" onClick={() => setQuizPickerOpen(false)} style={{ color: C.sub }} className="rounded-lg p-2 hover:bg-zinc-100">{I.x()}</button>
+        </header>
+        <div className="max-h-[calc(82dvh-92px)] overflow-y-auto p-4">
+          {quizPickerLoading ? <p style={{ color: C.sub }} className="py-14 text-center text-sm">Loading your quizzes…</p> : availableQuizzes.length === 0 ? <p style={{ color: C.sub }} className="py-14 text-center text-sm">You do not have a saved quiz to turn into a template yet.</p> : <div className="space-y-2">{availableQuizzes.map(quiz => <div key={quiz.id} style={{ border: `1px solid ${C.line}` }} className="flex items-center gap-4 rounded-2xl px-4 py-3">
+            <div className="min-w-0 flex-1"><p style={{ color: C.ink }} className="truncate font-extrabold">{quiz.title}</p><p style={{ color: C.sub }} className="mt-1 text-xs">{quiz.round_count} rounds · {quiz.question_count} questions · ~{quiz.estimated_minutes} min</p></div>
+            <Btn sz="sm" disabled={Boolean(busyId)} onClick={() => void saveQuizAsTemplate(quiz)}>{busyId === quiz.id ? 'Saving…' : 'Save as Template'}</Btn>
+          </div>)}</div>}
         </div>
       </section>
     </div>}
@@ -4491,6 +4546,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
     ...round.contentScreens.map(screen => ({ kind: 'content' as const, itemPosition: screen.itemPosition, screen })),
     ...round.showGames.map(showGame => ({ kind: 'show-game' as const, itemPosition: showGame.itemPosition, showGame })),
   ].sort((a, b) => a.itemPosition - b.itemPosition)
+  const endItemPosition = nextBuilderItemPosition(items.map(item => item.itemPosition))
   const itemKeys = items.map(item => item.kind === 'question'
     ? `question:${item.question.id}`
     : item.kind === 'content' ? `content:${item.screen.id}` : `show-game:${item.showGame.id}`)
@@ -4662,7 +4718,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
       </div>
       {open && (
         <div data-builder-item-list className="p-3 space-y-2">
-          {items.map((item, itemIndex) => {
+          {items.map(item => {
             const itemKey = item.kind === 'question'
               ? `question:${item.question.id}`
               : item.kind === 'content' ? `content:${item.screen.id}` : `show-game:${item.showGame.id}`
@@ -4678,10 +4734,10 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
               <div className="group absolute -top-4 left-3 right-3 z-30 flex h-8 items-center justify-center">
                 <div className="flex items-center gap-1.5 rounded-full border border-violet/15 bg-white px-3 py-1 shadow-md opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                   <span style={{ color: C.violet }} className="text-sm font-black leading-none">＋</span>
-                  <button type="button" onClick={() => onAddQuestion(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Question</button>
-                  <button type="button" onClick={() => onAddContentScreen(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Content</button>
-                  <button type="button" onClick={() => onAddShowGame(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Game</button>
-                  <button type="button" onClick={() => onAddTiebreaker(itemIndex + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Tiebreaker</button>
+                  <button type="button" onClick={() => onAddQuestion(item.itemPosition + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Question</button>
+                  <button type="button" onClick={() => onAddContentScreen(item.itemPosition + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Content</button>
+                  <button type="button" onClick={() => onAddShowGame(item.itemPosition + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Game</button>
+                  <button type="button" onClick={() => onAddTiebreaker(item.itemPosition + 1)} style={{ color: C.sub }} className="rounded-md px-2.5 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Tiebreaker</button>
                 </div>
               </div>
               {item.kind === 'question' ? (
@@ -4722,19 +4778,19 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
             </div>
           )})}
           <div className="flex gap-1 pt-1">
-            <button onClick={() => onAddQuestion(items.length + 1)} style={{ color: C.sub }}
+            <button onClick={() => onAddQuestion(endItemPosition)} style={{ color: C.sub }}
               className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
               <I.plus /> Add Question
             </button>
-            <button onClick={() => onAddContentScreen(items.length + 1)} style={{ color: C.sub }}
+            <button onClick={() => onAddContentScreen(endItemPosition)} style={{ color: C.sub }}
               className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
               <I.plus /> Add Content Screen
             </button>
-            <button onClick={() => onAddShowGame(items.length + 1)} style={{ color: C.sub }}
+            <button onClick={() => onAddShowGame(endItemPosition)} style={{ color: C.sub }}
               className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
               <I.plus /> Add Game
             </button>
-            <button onClick={() => onAddTiebreaker(items.length + 1)} style={{ color: C.sub }}
+            <button onClick={() => onAddTiebreaker(endItemPosition)} style={{ color: C.sub }}
               className="text-xs font-semibold px-2.5 py-2 rounded-lg hover:bg-violet-mist hover:text-violet transition-colors flex items-center gap-1.5">
               <I.plus /> Add Tiebreaker
             </button>

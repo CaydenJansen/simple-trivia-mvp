@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, reorderKeys } from './builder-order'
+import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, nextBuilderItemPosition, reorderKeys } from './builder-order'
 
 describe('quiz builder ordering', () => {
+  it('adds footer items after the actual final global position in a round', () => {
+    expect(nextBuilderItemPosition([])).toBe(1)
+    expect(nextBuilderItemPosition([8, 9, 12])).toBe(13)
+  })
+
   it('moves an item before a later item', () => {
     expect(reorderKeys(['a', 'b', 'c', 'd'], 'a', 'c', 'before')).toEqual(['b', 'a', 'c', 'd'])
   })

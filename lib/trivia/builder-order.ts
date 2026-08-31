@@ -1,5 +1,9 @@
 export type DropPlacement = 'before' | 'after'
 
+export function nextBuilderItemPosition(itemPositions: readonly number[]) {
+  return Math.max(0, ...itemPositions) + 1
+}
+
 export function reorderKeys(
   keys: readonly string[],
   draggedKey: string,
