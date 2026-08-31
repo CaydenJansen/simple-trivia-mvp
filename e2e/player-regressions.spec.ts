@@ -44,6 +44,24 @@ test('a five-point multi-answer question renders five answer fields', async ({ p
   await expect(page.getByLabel(/^Answer \d+$/)).toHaveCount(5)
 })
 
+test('the submit control follows the answer fields instead of being pinned to the viewport', async ({ page }) => {
+  await page.goto('/play/prototype')
+  await page.getByRole('button', { name: '8 · Multi-Answer' }).click()
+
+  const lastAnswer = page.getByLabel('Answer 5')
+  const submit = page.getByRole('button', { name: 'Submit Answers' })
+  await expect(submit).toBeVisible()
+  const [answerBox, submitBox, position] = await Promise.all([
+    lastAnswer.boundingBox(),
+    submit.boundingBox(),
+    submit.evaluate(element => getComputedStyle(element).position),
+  ])
+  expect(answerBox).not.toBeNull()
+  expect(submitBox).not.toBeNull()
+  expect(submitBox!.y).toBeGreaterThan(answerBox!.y + answerBox!.height)
+  expect(position).not.toBe('fixed')
+})
+
 test('ranking controls visibly reorder answers', async ({ page }, testInfo) => {
   await page.goto('/play/prototype')
   await page.getByRole('button', { name: '10 · Ranking' }).click()

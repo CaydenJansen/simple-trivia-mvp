@@ -1302,18 +1302,6 @@ function WaitMsg({ msg }: { msg: string }) {
   )
 }
 
-function StickyBottom({ children }: { children: React.ReactNode }) {
-  return (
-    <>
-      <div className="h-[76px] shrink-0 md:hidden" aria-hidden="true" />
-      <div style={{ background: C.panel, borderTop: `1px solid ${C.line}`, paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}
-        className="fixed inset-x-0 bottom-0 z-30 px-4 pt-3 md:sticky md:px-4 md:py-3">
-        <div className="mx-auto w-full max-w-lg">{children}</div>
-      </div>
-    </>
-  )
-}
-
 function Btn({
   children, onClick, disabled = false, variant = 'primary',
 }: {
@@ -2136,8 +2124,8 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
-      <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></StickyBottom>
     </div>
   )
 }
@@ -2173,8 +2161,8 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
         <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
-      <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></StickyBottom>
     </div>
   )
 }
@@ -2213,8 +2201,8 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
           })}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <div className="mt-4"><Btn onClick={() => selected && void submit(selected)} disabled={!selected || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
-      <StickyBottom><Btn onClick={() => selected && void submit(selected)} disabled={!selected || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></StickyBottom>
     </div>
   )
 }
@@ -2252,8 +2240,8 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
           </div>)}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <div className="mt-4"><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></div>
       </div>
-      <StickyBottom><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></StickyBottom>
     </div>
   )
 }
@@ -2292,9 +2280,8 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
           </div>)}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
-        <div style={{ height: 90 }} />
+        <div className="mt-4"><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></div>
       </div>
-      <StickyBottom><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></StickyBottom>
     </div>
   )
 }
@@ -2479,13 +2466,12 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
         </div>
 
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <div className="mt-4">
+          <Btn onClick={() => void submit(items)} disabled={submitting}>
+            {submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Order' : 'Lock In Order'}
+          </Btn>
+        </div>
       </div>
-
-      <StickyBottom>
-        <Btn onClick={() => void submit(items)} disabled={submitting}>
-          {submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Order' : 'Lock In Order'}
-        </Btn>
-      </StickyBottom>
     </div>
   )
 }
@@ -2523,8 +2509,8 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         <textarea rows={3} value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasBonusSubmission ? 'Update Bonus Answer' : 'Submit Bonus Answer'}</Btn></div>
       </div>
-      <StickyBottom><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasBonusSubmission ? 'Update Bonus Answer' : 'Submit Bonus Answer'}</Btn></StickyBottom>
     </div>
   )
 }

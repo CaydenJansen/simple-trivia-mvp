@@ -97,13 +97,14 @@ import {
   AUTO_RUN_CONTENT_SECONDS,
   AUTO_RUN_EXTENSION_SECONDS,
   AUTO_RUN_SHOW_GAME_INSTRUCTIONS_SECONDS,
-  AUTO_RUN_SHOW_GAME_RESULT_SECONDS,
   autoRunAnswerSeconds,
   autoRunClockColor,
   autoRunClockLabel,
   autoRunModeFromSettings,
   autoRunScaledSeconds,
   autoRunSpeedFromSettings,
+  autoRunShowGameResultSeconds,
+  autoRunShouldAdvanceShowGameResult,
   autoRunRemainingAfterAllLocked,
   autoRunRevealSeconds,
   type AutoRunMode,
@@ -1702,6 +1703,15 @@ function QuizCard({ q, go, duplicating, onRename, onDuplicate, onDelete }: {
 }
 
 type QuizTemplateRow = Database['public']['Tables']['quiz_templates']['Row']
+type TemplatePreviewItem = {
+  id: string
+  kind: 'question' | 'content' | 'game'
+  roundNumber: number
+  roundTitle: string
+  itemPosition: number
+  label: string
+  detail?: string
+}
 
 async function buildQuizFromTemplate(template: QuizTemplateRow) {
   const [quizResult, questionResult, contentResult, gameResult, tiebreakerResult, libraryResult] = await Promise.all([
@@ -1775,6 +1785,10 @@ function TemplatesScreen({ go }: { go: Go }) {
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [previewTemplate, setPreviewTemplate] = useState<QuizTemplateRow | null>(null)
+  const [previewItems, setPreviewItems] = useState<TemplatePreviewItem[]>([])
+  const [previewBackups, setPreviewBackups] = useState(0)
+  const [previewLoading, setPreviewLoading] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -1834,6 +1848,59 @@ function TemplatesScreen({ go }: { go: Go }) {
     setBusyId(null)
   }
 
+  async function viewTemplate(template: QuizTemplateRow) {
+    setPreviewTemplate(template)
+    setPreviewItems([])
+    setPreviewBackups(0)
+    setPreviewLoading(true)
+    setError(null)
+    const [questions, content, games, backups] = await Promise.all([
+      supabase.from('quiz_questions').select('question_key,item_position,round_number,round_title,question_type,category').eq('quiz_id', template.source_quiz_id),
+      supabase.from('quiz_content_screens').select('screen_key,item_position,round_number,round_title,title,body').eq('quiz_id', template.source_quiz_id),
+      supabase.from('quiz_show_games').select('show_game_key,item_position,round_number,round_title,title,game_type').eq('quiz_id', template.source_quiz_id),
+      supabase.from('quiz_tiebreakers').select('id', { count: 'exact', head: true }).eq('quiz_id', template.source_quiz_id),
+    ])
+    const previewError = questions.error ?? content.error ?? games.error ?? backups.error
+    if (previewError) {
+      console.error('Could not preview template:', previewError)
+      setError('Could not load that template structure.')
+      setPreviewTemplate(null)
+      setPreviewLoading(false)
+      return
+    }
+    setPreviewItems([
+      ...(questions.data ?? []).map(item => ({
+        id: item.question_key,
+        kind: 'question' as const,
+        roundNumber: item.round_number,
+        roundTitle: item.round_title,
+        itemPosition: item.item_position,
+        label: 'Question will be here',
+        detail: `${questionTypeLabel(item.question_type)}${item.category ? ` · ${item.category}` : ''}`,
+      })),
+      ...(content.data ?? []).map(item => ({
+        id: item.screen_key,
+        kind: 'content' as const,
+        roundNumber: item.round_number,
+        roundTitle: item.round_title,
+        itemPosition: item.item_position,
+        label: item.title,
+        detail: item.body || 'Content screen',
+      })),
+      ...(games.data ?? []).map(item => ({
+        id: item.show_game_key,
+        kind: 'game' as const,
+        roundNumber: item.round_number,
+        roundTitle: item.round_title,
+        itemPosition: item.item_position,
+        label: item.title,
+        detail: showGameLabel(item.game_type),
+      })),
+    ].sort((a, b) => a.roundNumber - b.roundNumber || a.itemPosition - b.itemPosition))
+    setPreviewBackups(backups.count ?? 0)
+    setPreviewLoading(false)
+  }
+
   return <div style={{ background: C.ground }} className="min-h-screen">
     <Nav go={go} active="Templates" />
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -1843,6 +1910,10 @@ function TemplatesScreen({ go }: { go: Go }) {
           <p style={{ color: C.sub }} className="mt-2 text-sm">Reuse a show’s rounds, content and games with a fresh set of questions.</p>
         </div>
         <Btn onClick={() => go('dashboard')} v="secondary">Save a quiz as a template</Btn>
+      </div>
+      <div style={{ background: C.violetMist, border: `1px solid ${C.violet}30` }} className="mb-6 rounded-2xl px-5 py-4">
+        <p style={{ color: C.ink }} className="text-sm font-extrabold">Same show shape, fresh questions</p>
+        <p style={{ color: C.sub }} className="mt-1 text-sm leading-6">When you use a template, every ordinary Question Library question is swapped for a fresh random replacement of the same question type. Your rounds, order, games, content screens, in-show tiebreakers and backup tiebreakers stay in place.</p>
       </div>
       {error && <p className="mb-5 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
       {loading ? <p style={{ color: C.sub }} className="py-24 text-center text-sm">Loading templates…</p> : templates.length === 0 ? (
@@ -1860,12 +1931,36 @@ function TemplatesScreen({ go }: { go: Go }) {
           {quiz && <p style={{ color: C.sub }} className="mt-4 text-sm">{quiz.round_count} rounds · {quiz.question_count} questions · ~{quiz.estimated_minutes} min</p>}
           <div className="mt-auto flex items-center gap-2 pt-5">
             <Btn sz="sm" cls="flex-1 justify-center" disabled={Boolean(busyId)} onClick={() => void createShowFromTemplate(template)}>{busyId === template.id ? 'Building…' : 'Use Template'}</Btn>
+            <Btn sz="sm" v="secondary" onClick={() => void viewTemplate(template)}>View</Btn>
             <IBtn icon={<I.pencil />} title="Rename template" onClick={() => void renameTemplate(template)} />
             <IBtn icon={<I.trash />} title="Delete template" onClick={() => void deleteTemplate(template)} danger />
           </div>
         </article>
       })}</div>}
     </main>
+    {previewTemplate && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4" onMouseDown={event => { if (event.currentTarget === event.target) setPreviewTemplate(null) }}>
+      <section className="max-h-[88dvh] w-full max-w-3xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+        <header style={{ borderBottom: `1px solid ${C.line}` }} className="flex items-start justify-between gap-4 px-6 py-5">
+          <div><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Template structure</p><h2 style={{ color: C.ink }} className="mt-1 text-2xl font-extrabold">{previewTemplate.name}</h2><p style={{ color: C.sub }} className="mt-1 text-sm">Question text is hidden because fresh library questions will be inserted when you use it.</p></div>
+          <button type="button" aria-label="Close template preview" onClick={() => setPreviewTemplate(null)} style={{ color: C.sub }} className="rounded-lg p-2 hover:bg-zinc-100">{I.x()}</button>
+        </header>
+        <div className="max-h-[calc(88dvh-104px)] overflow-y-auto px-6 py-5">
+          {previewLoading ? <p style={{ color: C.sub }} className="py-16 text-center text-sm">Loading template structure…</p> : <>
+            {[...new Set(previewItems.map(item => item.roundNumber))].map(roundNumber => {
+              const items = previewItems.filter(item => item.roundNumber === roundNumber)
+              return <div key={roundNumber} className="mb-6 last:mb-0">
+                <h3 style={{ color: C.ink }} className="mb-2 font-extrabold">Round {roundNumber} · {items[0]?.roundTitle || `Round ${roundNumber}`}</h3>
+                <div className="space-y-2">{items.map(item => <div key={`${item.kind}-${item.id}`} style={{ border: `1px solid ${item.kind === 'question' ? `${C.violet}45` : C.line}`, background: item.kind === 'question' ? C.violetMist : C.panel }} className="rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-2"><span className="text-sm">{item.kind === 'question' ? '❓' : item.kind === 'content' ? '▣' : '🎮'}</span><p style={{ color: C.ink }} className="font-bold">{item.label}</p></div>
+                  {item.detail && <p style={{ color: C.sub }} className="mt-1 pl-7 text-xs">{item.detail}</p>}
+                </div>)}</div>
+              </div>
+            })}
+            {previewBackups > 0 && <div style={{ border: `1px dashed ${C.line}` }} className="rounded-xl px-4 py-3 text-sm"><strong style={{ color: C.ink }}>{previewBackups} backup tiebreaker{previewBackups === 1 ? '' : 's'}</strong><span style={{ color: C.sub }}> will also be kept in reserve.</span></div>}
+          </>}
+        </div>
+      </section>
+    </div>}
   </div>
 }
 
@@ -2296,6 +2391,7 @@ function QuizBuilder({ go }: { go: Go }) {
   const [draggedRoundId, setDraggedRoundId] = useState<number | null>(null)
   const [roundDropTarget, setRoundDropTarget] = useState<{ id: number; placement: DropPlacement } | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [builderActionsOpen, setBuilderActionsOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [pendingExit, setPendingExit] = useState<Screen | null>(null)
   const questionCount = rounds.reduce((total, round) => total + round.questions.length, 0)
@@ -3115,11 +3211,14 @@ function QuizBuilder({ go }: { go: Go }) {
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
             {loading ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : needsStatusSync ? 'Save to enable hosting' : persisted ? 'Saved' : 'New quiz'}
           </span>
-          <Btn v="secondary" sz="sm" onClick={() => setPreviewOpen(true)}>Preview</Btn>
-          {quizId && <button type="button" onClick={() => void saveCurrentQuizAsTemplate()} disabled={savingTemplate || saving}
-            className="rounded-lg px-3 py-2 text-xs font-bold text-violet-700 hover:bg-violet-50 disabled:opacity-50">{savingTemplate ? 'Saving template…' : 'Save as Template'}</button>}
-          {quizId && <button type="button" onClick={() => void deleteCurrentQuiz()} disabled={deletingQuiz || saving}
-            className="rounded-lg px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-50">{deletingQuiz ? 'Deleting…' : 'Delete Show'}</button>}
+          <div className="relative">
+            <button type="button" aria-label="More quiz actions" aria-expanded={builderActionsOpen} onClick={() => setBuilderActionsOpen(open => !open)} style={{ border: `1px solid ${C.line}`, color: C.sub }} className="rounded-lg px-3 py-2 text-xs font-black hover:bg-zinc-50">•••</button>
+            {builderActionsOpen && <div className="absolute right-0 top-10 z-50 w-48 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl">
+              <button type="button" onClick={() => { setBuilderActionsOpen(false); setPreviewOpen(true) }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Preview Quiz</button>
+              {quizId && <button type="button" onClick={() => { setBuilderActionsOpen(false); void saveCurrentQuizAsTemplate() }} disabled={savingTemplate || saving} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50">{savingTemplate ? 'Saving template…' : 'Save as Template'}</button>}
+              {quizId && <button type="button" onClick={() => { setBuilderActionsOpen(false); void deleteCurrentQuiz() }} disabled={deletingQuiz || saving} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">{deletingQuiz ? 'Deleting…' : 'Delete Show'}</button>}
+            </div>}
+          </div>
           <Btn
             v="secondary"
             sz="sm"
@@ -8600,7 +8699,10 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     if (gameScreen === 'content-screen') return { key: `content-${contentScreen?.screen_key ?? ''}`, seconds: AUTO_RUN_CONTENT_SECONDS, label: 'Content advances in' }
     if (gameScreen === 'show-game' && showGame?.status === 'ready') return { key: `show-game-instructions-${showGame.id}`, seconds: AUTO_RUN_SHOW_GAME_INSTRUCTIONS_SECONDS, label: 'Game starts in' }
     if (gameScreen === 'show-game' && showGame?.status === 'open') return { key: `show-game-playing-${showGame.id}`, seconds: 0, label: 'Game in progress' }
-    if (gameScreen === 'show-game' && showGame?.status === 'exploded') return { key: `show-game-result-${showGame.id}`, seconds: AUTO_RUN_SHOW_GAME_RESULT_SECONDS, label: 'Show continues in' }
+    if (gameScreen === 'show-game' && showGame?.status === 'exploded') {
+      const seconds = autoRunShowGameResultSeconds(showGame.game_type)
+      return { key: `${seconds === 0 ? 'show-game-review' : 'show-game-result'}-${showGame.id}`, seconds, label: seconds === 0 ? 'Host reviewing answers' : 'Show continues in' }
+    }
     if (gameScreen === 'question-results') return { key: `leaderboard-${question?.question_key ?? ''}`, seconds: 10, label: 'Next question opens in' }
     if (phase === 'open') {
       const bonus = runtimeBonusFromJson(question?.bonus)
@@ -8641,7 +8743,10 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       if (gameScreen === 'round-start') { void handleOpenQuestion(); return }
       if (gameScreen === 'content-screen') { void handleAdvanceContentScreen(); return }
       if (gameScreen === 'show-game' && showGame?.status === 'ready') { void startPreparedShowGame(); return }
-      if (gameScreen === 'show-game' && showGame?.status === 'exploded') { void handleAdvanceShowGame(); return }
+      if (gameScreen === 'show-game' && showGame?.status === 'exploded') {
+        if (!autoRunShouldAdvanceShowGameResult(showGame.game_type)) return
+        void handleAdvanceShowGame(); return
+      }
       if (gameScreen === 'show-game') return
       if (gameScreen === 'question-results') { void handleAdvance(); return }
       if (phase === 'open') { void handleCloseAnswers(); return }

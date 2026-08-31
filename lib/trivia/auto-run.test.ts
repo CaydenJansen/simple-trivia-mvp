@@ -9,6 +9,8 @@ import {
   autoRunModeFromSettings,
   autoRunScaledSeconds,
   autoRunSpeedFromSettings,
+  autoRunShowGameResultSeconds,
+  autoRunShouldAdvanceShowGameResult,
   autoRunRemainingAfterAllLocked,
   autoRunRevealSeconds,
 } from './auto-run'
@@ -55,6 +57,13 @@ describe('Auto-Run rules', () => {
     expect(AUTO_RUN_CONTENT_SECONDS).toBe(30)
     expect(AUTO_RUN_ROUND_CHECKPOINT_SECONDS).toBe(60)
     expect(autoRunClockLabel(37)).toBe('00:37')
+  })
+
+  it('pauses completed in-show tiebreakers for host review', () => {
+    expect(autoRunShowGameResultSeconds('spin-the-wheel')).toBe(10)
+    expect(autoRunShouldAdvanceShowGameResult('spin-the-wheel')).toBe(true)
+    expect(autoRunShowGameResultSeconds('in-show-tiebreaker')).toBe(0)
+    expect(autoRunShouldAdvanceShowGameResult('in-show-tiebreaker')).toBe(false)
   })
 
   it('reads a synchronized running or paused player clock', () => {

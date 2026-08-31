@@ -56,6 +56,14 @@ export const AUTO_RUN_SHOW_GAME_RESULT_SECONDS = 10
 export const AUTO_RUN_ROUND_CHECKPOINT_SECONDS = 60
 export const AUTO_RUN_EXTENSION_SECONDS = 15
 
+export function autoRunShowGameResultSeconds(gameType: string | null | undefined) {
+  return gameType === 'in-show-tiebreaker' ? 0 : AUTO_RUN_SHOW_GAME_RESULT_SECONDS
+}
+
+export function autoRunShouldAdvanceShowGameResult(gameType: string | null | undefined) {
+  return gameType !== 'in-show-tiebreaker'
+}
+
 export function autoRunClockLabel(seconds: number) {
   const safe = Math.max(0, Math.trunc(seconds))
   return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`
