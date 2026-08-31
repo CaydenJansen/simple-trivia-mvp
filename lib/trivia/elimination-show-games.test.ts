@@ -26,6 +26,7 @@ describe('elimination show games', () => {
   it('explains that elimination games continue across rounds', () => {
     expect(showGameInstructions('heads-or-tails')).toContain('until one team remains')
     expect(showGameInstructions('dodge-the-rock')).toContain('last one standing')
+    expect(showGameInstructions('scissors-paper-rock')).toContain('ten-second timer')
     expect(showGameInstructions('scissors-paper-rock')).toContain('If it’s a draw, you both advance')
     expect(showGameInstructions('scissors-paper-rock')).toContain('until one team remains')
   })

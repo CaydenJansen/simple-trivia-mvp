@@ -3079,6 +3079,7 @@ function ShowGame() {
   const treasureSettings = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) ? showGame.settings as Record<string, Json> : {}
   const treasureGuardAwake = treasureSettings.guard_awake === true
   const ownTreasure = treasure.find(entry => entry.team_id === teamId)
+  const currentWinningTreasureUnits = treasure.reduce((highest, entry) => Math.max(highest, entry.banked_units), 0)
   const ownBalloon = balloons.find(entry => entry.team_id === teamId)
   const liveTreasureUnits = ownTreasure?.is_stealing && ownTreasure.stealing_started_at
     ? Math.max(0, showGameNow - new Date(ownTreasure.stealing_started_at).getTime()) : 0
@@ -3192,6 +3193,10 @@ function ShowGame() {
               </div>}
               <div className={`mx-auto flex h-28 w-28 items-center justify-center rounded-full text-6xl transition-all duration-150 ${treasureGuardAwake ? 'animate-pulse bg-red-50 ring-4 ring-red-300' : 'bg-emerald-50'}`}>{treasureGuardAwake ? '👁️' : '😴'}</div>
               <p style={{ color: treasureGuardAwake ? C.stop : C.go }} className="mt-3 text-xl font-black">{treasureGuardAwake ? 'GUARD AWAKE · HANDS OFF!' : 'GUARD ASLEEP · STEAL NOW!'}</p>
+              <div style={{ background: C.violetPale, border: `1px solid ${C.violet}40` }} className="mt-5 rounded-2xl px-4 py-3 text-center">
+                <p style={{ color: C.sub }} className="text-[10px] font-black uppercase tracking-[0.16em]">Current winning score</p>
+                <p style={{ color: C.violet }} className="mt-1 text-3xl font-black tabular-nums">{(currentWinningTreasureUnits / 1000).toFixed(1)} 💰</p>
+              </div>
               <div className="mt-5 grid grid-cols-2 gap-3">
                 <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-4"><p style={{ color: C.sub }} className="text-xs font-black uppercase">Banked</p><p style={{ color: C.go }} className="mt-1 text-2xl font-black tabular-nums">{((ownTreasure?.banked_units ?? 0) / 1000).toFixed(1)}</p></div>
                 <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-4"><p style={{ color: C.sub }} className="text-xs font-black uppercase">At risk</p><p style={{ color: C.caution }} className="mt-1 text-2xl font-black tabular-nums">{(liveTreasureUnits / 1000).toFixed(1)}</p></div>
