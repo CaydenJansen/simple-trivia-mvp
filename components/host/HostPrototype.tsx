@@ -141,7 +141,7 @@ import {
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
-  | 'dashboard' | 'questions' | 'teams' | 'account' | 'recent-games' | 'create-quiz' | 'quiz-builder'
+  | 'dashboard' | 'templates' | 'questions' | 'teams' | 'account' | 'recent-games' | 'create-quiz' | 'quiz-builder'
   | 'auto-build' | 'quiz-review' | 'host-setup'
   | 'lobby' | 'live-question' | 'end-of-round' | 'final-results'
 type Go = (s: Screen) => void
@@ -850,6 +850,7 @@ function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
       <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
         {[
           { label: 'My Quizzes', screen: 'dashboard' as Screen },
+          { label: 'Templates', screen: 'templates' as Screen },
           { label: 'Questions', screen: 'questions' as Screen },
           { label: 'Teams', screen: 'teams' as Screen },
           { label: 'Recent Games', screen: 'recent-games' as Screen },
@@ -1700,11 +1701,179 @@ function QuizCard({ q, go, duplicating, onRename, onDuplicate, onDelete }: {
   )
 }
 
+type QuizTemplateRow = Database['public']['Tables']['quiz_templates']['Row']
+
+async function buildQuizFromTemplate(template: QuizTemplateRow) {
+  const [quizResult, questionResult, contentResult, gameResult, tiebreakerResult, libraryResult] = await Promise.all([
+    supabase.from('quizzes').select('title,status,estimated_minutes').eq('id', template.source_quiz_id).single(),
+    supabase.from('quiz_questions').select('question_key,position,item_position,round_number,round_position,round_question_count,round_title,prompt,category,difficulty,question_type,correct_answer,accepted_answers,options,tags,image_url,points_max,bonus,metadata_snapshot,notes,source_question_id,source_revision').eq('quiz_id', template.source_quiz_id).order('position'),
+    supabase.from('quiz_content_screens').select('screen_key,item_position,round_number,round_title,title,body,image_url').eq('quiz_id', template.source_quiz_id).order('item_position'),
+    supabase.from('quiz_show_games').select('show_game_key,item_position,round_number,round_title,game_type,title,settings').eq('quiz_id', template.source_quiz_id).order('item_position'),
+    supabase.from('quiz_tiebreakers').select('tiebreaker_key,position,prompt,correct_value,answer_unit,notes').eq('quiz_id', template.source_quiz_id).order('position'),
+    supabase.from('source_question_catalog').select('*').eq('status', 'active').eq('is_verified', true).range(0, 1999),
+  ])
+  const loadError = quizResult.error ?? questionResult.error ?? contentResult.error ?? gameResult.error ?? tiebreakerResult.error ?? libraryResult.error
+  if (loadError || !quizResult.data) throw new Error('Could not load that template. Please try again.')
+
+  const library = (libraryResult.data ?? []) as PickerSourceQuestion[]
+  const used = new Set((questionResult.data ?? []).map(question => question.source_question_id).filter(Boolean))
+  const chosen = new Set<string>()
+  const replacements: Json[] = []
+  for (const original of questionResult.data ?? []) {
+    const candidates = library.filter(candidate => candidate.question_type === original.question_type && !used.has(candidate.id) && !chosen.has(candidate.id))
+    if (candidates.length === 0) throw new Error(`The Question Library does not have enough unused ${questionTypeLabel(original.question_type)} questions for this template.`)
+    const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
+    const source = candidates[randomValue % candidates.length]
+    chosen.add(source.id)
+    const replacement = sourceToBuilderQuestion(source)
+    replacements.push({
+      ...original,
+      question_key: `question-${crypto.randomUUID()}`,
+      prompt: replacement.text,
+      category: replacement.cat,
+      difficulty: replacement.diff,
+      question_type: replacement.questionType,
+      correct_answer: replacement.correctAnswer,
+      accepted_answers: replacement.acceptedAnswers,
+      options: replacement.options,
+      tags: replacement.tags,
+      image_url: replacement.imageUrl,
+      points_max: replacement.pointsMax,
+      bonus: replacement.bonus,
+      metadata_snapshot: replacement.metadataSnapshot,
+      notes: replacement.notes || null,
+      source_question_id: replacement.sourceQuestionId,
+      source_revision: replacement.sourceRevision,
+    } as Json)
+  }
+
+  const nextTitle = `${template.name} · ${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}`
+  const { data: quizId, error: saveError } = await supabase.rpc('save_quiz_with_show_games', {
+    p_quiz_id: null,
+    p_title: nextTitle,
+    p_status: quizResult.data.status,
+    p_estimated_minutes: quizResult.data.estimated_minutes,
+    p_questions: replacements,
+    p_content_screens: (contentResult.data ?? []) as Json,
+    p_tiebreakers: (tiebreakerResult.data ?? []) as Json,
+    p_show_games: (gameResult.data ?? []) as Json,
+  })
+  if (saveError || !quizId) throw new Error('Could not create a show from that template.')
+  return { quizId, title: nextTitle }
+}
+
+function openBuiltTemplateQuiz(result: { quizId: string; title: string }, go: Go) {
+  localStorage.setItem('simple-trivia-selected-quiz-id', result.quizId)
+  localStorage.setItem('simple-trivia-selected-quiz-title', result.title)
+  localStorage.setItem('simple-trivia-new-quiz-id', result.quizId)
+  go('quiz-builder')
+}
+
+function TemplatesScreen({ go }: { go: Go }) {
+  const [templates, setTemplates] = useState<QuizTemplateRow[]>([])
+  const [quizDetails, setQuizDetails] = useState<Record<string, { title: string; round_count: number; question_count: number; estimated_minutes: number }>>({})
+  const [loading, setLoading] = useState(true)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    async function loadTemplates() {
+      const templateResult = await supabase.from('quiz_templates').select('*').order('updated_at', { ascending: false })
+      if (!active) return
+      if (templateResult.error) {
+        console.error('Could not load templates:', templateResult.error)
+        setError('Could not load your templates.')
+        setLoading(false)
+        return
+      }
+      const rows = templateResult.data ?? []
+      setTemplates(rows)
+      if (rows.length > 0) {
+        const quizResult = await supabase.from('quizzes').select('id,title,round_count,question_count,estimated_minutes').in('id', rows.map(row => row.source_quiz_id))
+        if (!active) return
+        if (!quizResult.error) setQuizDetails(Object.fromEntries((quizResult.data ?? []).map(quiz => [quiz.id, quiz])))
+      }
+      setLoading(false)
+    }
+    void loadTemplates()
+    return () => { active = false }
+  }, [])
+
+  async function createShowFromTemplate(template: QuizTemplateRow) {
+    if (busyId) return
+    setBusyId(template.id)
+    setError(null)
+    try {
+      openBuiltTemplateQuiz(await buildQuizFromTemplate(template), go)
+    } catch (buildError) {
+      console.error('Could not use template:', buildError)
+      setError(buildError instanceof Error ? buildError.message : 'Could not create a show from that template.')
+      setBusyId(null)
+    }
+  }
+
+  async function renameTemplate(template: QuizTemplateRow) {
+    const name = window.prompt('Template name', template.name)?.trim()
+    if (!name || name === template.name) return
+    setBusyId(template.id)
+    setError(null)
+    const { error: renameError } = await supabase.from('quiz_templates').update({ name, updated_at: new Date().toISOString() }).eq('id', template.id)
+    if (renameError) setError('Could not rename that template.')
+    else setTemplates(current => current.map(item => item.id === template.id ? { ...item, name } : item))
+    setBusyId(null)
+  }
+
+  async function deleteTemplate(template: QuizTemplateRow) {
+    if (!window.confirm(`Delete the “${template.name}” template? The original quiz will not be deleted.`)) return
+    setBusyId(template.id)
+    setError(null)
+    const { error: deleteError } = await supabase.from('quiz_templates').delete().eq('id', template.id)
+    if (deleteError) setError('Could not delete that template.')
+    else setTemplates(current => current.filter(item => item.id !== template.id))
+    setBusyId(null)
+  }
+
+  return <div style={{ background: C.ground }} className="min-h-screen">
+    <Nav go={go} active="Templates" />
+    <main className="mx-auto max-w-6xl px-6 py-10">
+      <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 style={{ color: C.ink }} className="text-3xl font-extrabold">Templates</h1>
+          <p style={{ color: C.sub }} className="mt-2 text-sm">Reuse a show’s rounds, content and games with a fresh set of questions.</p>
+        </div>
+        <Btn onClick={() => go('dashboard')} v="secondary">Save a quiz as a template</Btn>
+      </div>
+      {error && <p className="mb-5 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
+      {loading ? <p style={{ color: C.sub }} className="py-24 text-center text-sm">Loading templates…</p> : templates.length === 0 ? (
+        <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-3xl px-6 py-20 text-center">
+          <h2 style={{ color: C.ink }} className="text-xl font-bold">No templates yet</h2>
+          <p style={{ color: C.sub }} className="mx-auto mt-2 max-w-md text-sm leading-6">Open a saved quiz and choose <strong>Save as Template</strong>. It will appear here for next week.</p>
+          <Btn cls="mt-6" onClick={() => go('dashboard')}>Choose a Quiz</Btn>
+        </div>
+      ) : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{templates.map(template => {
+        const quiz = quizDetails[template.source_quiz_id]
+        return <article key={template.id} style={{ background: C.panel, border: `1px solid ${C.line}` }} className="flex min-h-52 flex-col rounded-2xl p-5 shadow-sm">
+          <p style={{ color: C.violet }} className="text-[10px] font-extrabold uppercase tracking-wider">Show Template</p>
+          <h2 style={{ color: C.ink }} className="mt-2 text-lg font-extrabold">{template.name}</h2>
+          <p style={{ color: C.sub }} className="mt-1 text-xs">Based on {quiz?.title ?? 'saved quiz'}</p>
+          {quiz && <p style={{ color: C.sub }} className="mt-4 text-sm">{quiz.round_count} rounds · {quiz.question_count} questions · ~{quiz.estimated_minutes} min</p>}
+          <div className="mt-auto flex items-center gap-2 pt-5">
+            <Btn sz="sm" cls="flex-1 justify-center" disabled={Boolean(busyId)} onClick={() => void createShowFromTemplate(template)}>{busyId === template.id ? 'Building…' : 'Use Template'}</Btn>
+            <IBtn icon={<I.pencil />} title="Rename template" onClick={() => void renameTemplate(template)} />
+            <IBtn icon={<I.trash />} title="Delete template" onClick={() => void deleteTemplate(template)} danger />
+          </div>
+        </article>
+      })}</div>}
+    </main>
+  </div>
+}
+
 // ─── SCREEN 2: CREATE QUIZ ────────────────────────────────────────────────────
 
 function CreateQuiz({ go }: { go: Go }) {
   const [sel, setSel] = useState<'scratch' | 'auto' | null>('auto')
-  const [templates, setTemplates] = useState<Database['public']['Tables']['quiz_templates']['Row'][]>([])
+  const [templates, setTemplates] = useState<QuizTemplateRow[]>([])
   const [templateBusy, setTemplateBusy] = useState<string | null>(null)
   const [templateError, setTemplateError] = useState<string | null>(null)
 
@@ -1724,81 +1893,17 @@ function CreateQuiz({ go }: { go: Go }) {
     go(next)
   }
 
-  async function createFromTemplate(template: Database['public']['Tables']['quiz_templates']['Row']) {
+  async function createFromTemplate(template: QuizTemplateRow) {
     if (templateBusy) return
     setTemplateBusy(template.id)
     setTemplateError(null)
-    const [quizResult, questionResult, contentResult, gameResult, tiebreakerResult, libraryResult] = await Promise.all([
-      supabase.from('quizzes').select('title,status,estimated_minutes').eq('id', template.source_quiz_id).single(),
-      supabase.from('quiz_questions').select('question_key,position,item_position,round_number,round_position,round_question_count,round_title,prompt,category,difficulty,question_type,correct_answer,accepted_answers,options,tags,image_url,points_max,bonus,metadata_snapshot,notes,source_question_id,source_revision').eq('quiz_id', template.source_quiz_id).order('position'),
-      supabase.from('quiz_content_screens').select('screen_key,item_position,round_number,round_title,title,body,image_url').eq('quiz_id', template.source_quiz_id).order('item_position'),
-      supabase.from('quiz_show_games').select('show_game_key,item_position,round_number,round_title,game_type,title,settings').eq('quiz_id', template.source_quiz_id).order('item_position'),
-      supabase.from('quiz_tiebreakers').select('tiebreaker_key,position,prompt,correct_value,answer_unit,notes').eq('quiz_id', template.source_quiz_id).order('position'),
-      supabase.from('source_question_catalog').select('*').eq('status', 'active').eq('is_verified', true).range(0, 1999),
-    ])
-    const error = quizResult.error ?? questionResult.error ?? contentResult.error ?? gameResult.error ?? tiebreakerResult.error ?? libraryResult.error
-    if (error || !quizResult.data) {
+    try {
+      openBuiltTemplateQuiz(await buildQuizFromTemplate(template), go)
+    } catch (error) {
       console.error('Could not prepare template:', error)
-      setTemplateError('Could not load that template. Please try again.')
+      setTemplateError(error instanceof Error ? error.message : 'Could not create a show from that template.')
       setTemplateBusy(null)
-      return
     }
-    const library = (libraryResult.data ?? []) as PickerSourceQuestion[]
-    const used = new Set((questionResult.data ?? []).map(question => question.source_question_id).filter(Boolean))
-    const chosen = new Set<string>()
-    const replacements: Json[] = []
-    for (const original of questionResult.data ?? []) {
-      const candidates = library.filter(candidate => candidate.question_type === original.question_type && !used.has(candidate.id) && !chosen.has(candidate.id))
-      if (candidates.length === 0) {
-        setTemplateError(`The Question Library does not have enough unused ${questionTypeLabel(original.question_type)} questions for this template.`)
-        setTemplateBusy(null)
-        return
-      }
-      const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
-      const source = candidates[randomValue % candidates.length]
-      chosen.add(source.id)
-      const replacement = sourceToBuilderQuestion(source)
-      replacements.push({
-        ...original,
-        question_key: `question-${crypto.randomUUID()}`,
-        prompt: replacement.text,
-        category: replacement.cat,
-        difficulty: replacement.diff,
-        question_type: replacement.questionType,
-        correct_answer: replacement.correctAnswer,
-        accepted_answers: replacement.acceptedAnswers,
-        options: replacement.options,
-        tags: replacement.tags,
-        image_url: replacement.imageUrl,
-        points_max: replacement.pointsMax,
-        bonus: replacement.bonus,
-        metadata_snapshot: replacement.metadataSnapshot,
-        notes: replacement.notes || null,
-        source_question_id: replacement.sourceQuestionId,
-        source_revision: replacement.sourceRevision,
-      } as Json)
-    }
-    const nextTitle = `${template.name} · ${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}`
-    const { data: quizId, error: saveError } = await supabase.rpc('save_quiz_with_show_games', {
-      p_quiz_id: null,
-      p_title: nextTitle,
-      p_status: quizResult.data.status,
-      p_estimated_minutes: quizResult.data.estimated_minutes,
-      p_questions: replacements,
-      p_content_screens: (contentResult.data ?? []) as Json,
-      p_tiebreakers: (tiebreakerResult.data ?? []) as Json,
-      p_show_games: (gameResult.data ?? []) as Json,
-    })
-    if (saveError || !quizId) {
-      console.error('Could not create quiz from template:', saveError)
-      setTemplateError('Could not create a show from that template.')
-      setTemplateBusy(null)
-      return
-    }
-    localStorage.setItem('simple-trivia-selected-quiz-id', quizId)
-    localStorage.setItem('simple-trivia-selected-quiz-title', nextTitle)
-    localStorage.setItem('simple-trivia-new-quiz-id', quizId)
-    go('quiz-builder')
   }
 
   return (
@@ -2177,7 +2282,7 @@ function QuizBuilder({ go }: { go: Go }) {
   const [addMenuTarget, setAddMenuTarget] = useState<{ roundId: number; itemPosition: number } | null>(null)
   const [picker, setPicker] = useState<{ roundId: number; itemPosition: number; origin: 'user' | 'platform' } | null>(null)
   const [addTiebreakerTarget, setAddTiebreakerTarget] = useState<{ mode: 'in-show'; roundId: number; itemPosition: number } | { mode: 'backup' } | null>(null)
-  const [tiebreakerPickerTarget, setTiebreakerPickerTarget] = useState<{ mode: 'in-show'; roundId: number; itemPosition: number } | { mode: 'game'; roundId: number; showGameId: string } | { mode: 'backup' } | null>(null)
+  const [tiebreakerPickerTarget, setTiebreakerPickerTarget] = useState<{ mode: 'in-show'; roundId: number; itemPosition: number } | { mode: 'game'; roundId: number; showGameId: string } | { mode: 'backup' } | { mode: 'backup-replace'; tiebreakerId: string } | null>(null)
   const [replaceTarget, setReplaceTarget] = useState<{ roundId: number; questionId: string } | null>(null)
   const [replaceOrigin, setReplaceOrigin] = useState<'user' | 'platform' | null>(null)
   const [replacingLibraryQuestionId, setReplacingLibraryQuestionId] = useState<string | null>(null)
@@ -3274,6 +3379,7 @@ function QuizBuilder({ go }: { go: Go }) {
             replacementError={tiebreakerReplacementError}
             onAdd={() => setAddTiebreakerTarget({ mode: 'backup' })}
             onEdit={setEditingTiebreakerId}
+            onReplace={id => setTiebreakerPickerTarget({ mode: 'backup-replace', tiebreakerId: id })}
             onDelete={id => {
               setTiebreakers(current => current.filter(tiebreaker => tiebreaker.id !== id))
               setDirty(true)
@@ -3421,6 +3527,18 @@ function QuizBuilder({ go }: { go: Go }) {
           onClose={() => setTiebreakerPickerTarget(null)}
           onSelect={source => {
             if (tiebreakerPickerTarget.mode === 'backup') addBackupTiebreaker(source)
+            else if (tiebreakerPickerTarget.mode === 'backup-replace') {
+              const target = tiebreakerPickerTarget
+              setTiebreakers(current => current.map(tiebreaker => tiebreaker.id === target.tiebreakerId ? {
+                ...tiebreaker,
+                sourceTiebreakerId: source.id,
+                prompt: source.prompt,
+                correctValue: String(source.correct_value),
+                answerUnit: source.answer_unit ?? '',
+                notes: source.notes ?? '',
+              } : tiebreaker))
+              setDirty(true)
+            }
             else if (tiebreakerPickerTarget.mode === 'in-show') addInShowTiebreaker(tiebreakerPickerTarget.roundId, tiebreakerPickerTarget.itemPosition, source)
             else {
               const target = tiebreakerPickerTarget
@@ -3576,12 +3694,13 @@ function QuizBuilder({ go }: { go: Go }) {
   )
 }
 
-function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, onEdit, onDelete, onCycle, onReorder, onMoveIntoShow }: {
+function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, onEdit, onReplace, onDelete, onCycle, onReorder, onMoveIntoShow }: {
   tiebreakers: BuilderTiebreakerData[]
   replacingId: string | null
   replacementError: string | null
   onAdd: () => void
   onEdit: (id: string) => void
+  onReplace: (id: string) => void
   onDelete: (id: string) => void
   onCycle: (id: string) => void
   onReorder: (orderedIds: string[]) => void
@@ -3787,6 +3906,7 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
                       <I.refresh /> {replacing ? 'Finding…' : 'Try another'}
                     </button>
                   )}
+                  <IBtn icon={<I.browse />} title={isLibraryTiebreaker ? 'Choose another tiebreaker question' : 'Choose from Tiebreaker Library'} onClick={() => onReplace(tiebreaker.id)} />
                   <IBtn icon={<I.trash />} title="Delete" onClick={() => onDelete(tiebreaker.id)} danger />
               </div>
             </div>
@@ -4615,6 +4735,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onPickT
   onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
 }) {
   const [expanded, setExpanded] = useState(() => showGame.id.startsWith('show-game-'))
+  const usesTiebreakerLibrary = ['in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType)
 
   return (
     <div style={{ border: `1.5px solid ${C.violet}55`, background: C.violetMist }} className="rounded-xl overflow-hidden">
@@ -4634,7 +4755,15 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onPickT
             <p style={{ color: C.sub }} className="mt-1 line-clamp-2 text-xs leading-5">{showGame.audienceQuestionPrompt}</p>
           )}
         </div>
-        <div onClick={event => event.stopPropagation()}><IBtn icon={<I.trash />} title={showGame.gameType === 'in-show-tiebreaker' ? 'Delete tiebreaker' : 'Delete game'} onClick={onDelete} danger /></div>
+        <div className="flex shrink-0 items-center gap-1" onClick={event => event.stopPropagation()}>
+          {usesTiebreakerLibrary && showGame.sourceTiebreakerId && <button type="button" onClick={onCycleTiebreaker} disabled={replacingTiebreaker}
+            title="Automatically find another unused tiebreaker question"
+            className="flex items-center gap-1.5 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700 shadow-sm transition hover:border-violet-400 hover:bg-violet-50 disabled:cursor-wait disabled:opacity-60">
+            <I.refresh /> {replacingTiebreaker ? 'Finding…' : 'Try another'}
+          </button>}
+          {usesTiebreakerLibrary && <IBtn icon={<I.browse />} title={showGame.sourceTiebreakerId ? 'Choose another tiebreaker question' : 'Choose from Tiebreaker Library'} onClick={onPickTiebreaker} />}
+          <IBtn icon={<I.trash />} title={showGame.gameType === 'in-show-tiebreaker' ? 'Delete tiebreaker' : 'Delete game'} onClick={onDelete} danger />
+        </div>
       </div>
       {expanded && (
         <div style={{ borderTop: `1px solid ${C.violet}30` }} className="space-y-3 px-4 pb-4 pt-3">
@@ -4669,16 +4798,6 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onPickT
                 <option value="tiebreaker-style-question">🎯 Tiebreaker-style Question</option>
               </optgroup>
             </select>
-          </div>}
-          {['in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType) && <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={onPickTiebreaker}
-            className="cursor-pointer rounded-xl bg-violet-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-violet-700">
-            {showGame.sourceTiebreakerId ? 'Choose another question' : 'Choose from Tiebreaker Library'}
-          </button>
-          {showGame.sourceTiebreakerId && <button type="button" onClick={onCycleTiebreaker} disabled={replacingTiebreaker}
-            className="cursor-pointer rounded-xl border border-violet-200 bg-white px-4 py-2 text-xs font-bold text-violet-700 shadow-sm hover:bg-violet-50 disabled:cursor-wait disabled:opacity-60">
-            {replacingTiebreaker ? 'Finding another…' : '↻ Try another'}
-          </button>}
           </div>}
           <p style={{ color: C.sub }} className="text-xs leading-5">{showGameInstructions(showGame.gameType)}</p>
           {['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType) && <>
@@ -10987,19 +11106,20 @@ function FinalResults({ go }: { go: Go }) {
 
 const SCREENS: [Screen, string][] = [
   ['dashboard', '1 · Dashboard'],
-  ['questions', '2 · Questions'],
-  ['teams', '3 · Teams'],
-  ['account', '4 · Account'],
-  ['recent-games', '5 · Recent Games'],
-  ['create-quiz', '6 · Create Quiz'],
-  ['quiz-builder', '7 · Quiz Builder'],
-  ['auto-build', '8 · Auto-Build'],
-  ['quiz-review', '9 · Quiz Review'],
-  ['host-setup', '10 · Host Setup'],
-  ['lobby', '11 · Lobby'],
-  ['live-question', '12 · Live Console'],
-  ['end-of-round', '13 · End of Round'],
-  ['final-results', '14 · Final Results'],
+  ['templates', '2 · Templates'],
+  ['questions', '3 · Questions'],
+  ['teams', '4 · Teams'],
+  ['account', '5 · Account'],
+  ['recent-games', '6 · Recent Games'],
+  ['create-quiz', '7 · Create Quiz'],
+  ['quiz-builder', '8 · Quiz Builder'],
+  ['auto-build', '9 · Auto-Build'],
+  ['quiz-review', '10 · Quiz Review'],
+  ['host-setup', '11 · Host Setup'],
+  ['lobby', '12 · Lobby'],
+  ['live-question', '13 · Live Console'],
+  ['end-of-round', '14 · End of Round'],
+  ['final-results', '15 · Final Results'],
 ]
 
 function ScreenNav({ current, go }: { current: Screen; go: Go }) {
@@ -11168,6 +11288,7 @@ export default function App({
 
   const screens: Record<Screen, React.ReactNode> = {
     'dashboard': <Dashboard go={setScreen} />,
+    'templates': <TemplatesScreen go={setScreen} />,
     'questions': <QuestionsScreen go={setScreen} />,
     'teams': <TeamsScreen go={setScreen} />,
     'account': <AccountScreen go={setScreen} />,
