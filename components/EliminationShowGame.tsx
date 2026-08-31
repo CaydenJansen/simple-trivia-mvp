@@ -5,6 +5,13 @@ import type { EliminationShowGameState, EliminationShowGameType } from '@/lib/tr
 
 type ArenaTeam = { id: string; name: string }
 
+function RemainingTeamList({ teams, panel, line, text, dim }: { teams: ArenaTeam[]; panel: string; line: string; text: string; dim: string }) {
+  return <div style={{ background: panel, border: `1px solid ${line}` }} className="mt-5 rounded-2xl px-4 py-4 text-left">
+    <p style={{ color: dim }} className="text-[10px] font-black uppercase tracking-[0.18em]">Teams remaining · {teams.length}</p>
+    <div className="mt-3 flex flex-wrap gap-2">{teams.map(team => <span key={team.id} style={{ color: text, border: `1px solid ${line}` }} className="rounded-full px-3 py-1.5 text-xs font-bold">{team.name}</span>)}</div>
+  </div>
+}
+
 export default function EliminationShowGame({
   type,
   teams,
@@ -14,7 +21,6 @@ export default function EliminationShowGame({
   canChoose = false,
   choosing = false,
   secondsRemaining = 0,
-  choiceCounts = {},
   choicesByTeam = {},
   finished = false,
   onChoose,
@@ -38,11 +44,11 @@ export default function EliminationShowGame({
 }) {
   const [announcedCoinRound, setAnnouncedCoinRound] = useState<number | null>(null)
   const alive = new Set(state.aliveTeamIds)
-  const justEliminated = new Set(state.roundEliminatedTeamIds)
   const panel = dark ? '#181329' : '#FFFFFF'
   const line = dark ? '#302A49' : '#E8E5F4'
   const text = dark ? '#F4F1FF' : '#18171F'
   const dim = dark ? '#A9A4BF' : '#6D687F'
+  const remainingTeams = teams.filter(team => alive.has(team.id))
 
   useEffect(() => {
     if (type !== 'heads-or-tails' || state.roundPhase !== 'reveal') return
@@ -70,36 +76,24 @@ export default function EliminationShowGame({
           </p>
         </div>
 
-        {ownTeamId && canChoose && !revealed && (
-          <div className="mx-auto mt-5 max-w-sm">
-            <p style={{ color: dim }} className="mb-2 text-center text-xs font-black uppercase tracking-widest">Call the next flip</p>
-            <div className="grid grid-cols-2 gap-3">
-            {(['heads', 'tails'] as const).map(choice => {
-              const otherTeams = Math.max(0, (choiceCounts[choice] ?? 0) - (ownChoice === choice ? 1 : 0))
-              return <button key={choice} type="button" disabled={choosing} onClick={() => onChoose?.(choice)}
-                style={{ background: ownChoice === choice ? '#7C3AED' : panel, color: ownChoice === choice ? 'white' : text, border: `2px solid ${ownChoice === choice ? '#7C3AED' : line}` }}
-                className="cursor-pointer overflow-hidden rounded-2xl text-lg font-black capitalize transition active:scale-95 disabled:opacity-60">
-                <span className="block px-5 py-4">{choice}</span>
-                <span style={{ background: ownChoice === choice ? 'rgba(0,0,0,.14)' : dark ? '#211B35' : '#F3F1F8', borderTop: `1px solid ${ownChoice === choice ? 'rgba(255,255,255,.2)' : line}` }} className="block px-2 py-2 text-[11px] font-bold normal-case">
-                  {otherTeams} other team{otherTeams === 1 ? '' : 's'}
-                </span>
-              </button>
-            })}
-            </div>
-          </div>
-        )}
-
-        {resultVisible && (ownTeamId ? <>
-          <p style={{ color: dim }} className="mt-4 text-center text-sm font-bold">Only {state.aliveTeamIds.length} team{state.aliveTeamIds.length === 1 ? '' : 's'} remaining</p>
-        </> : <div className="mt-5 grid gap-2 sm:grid-cols-2">
-          {teams.map(team => {
-            const eliminated = !alive.has(team.id)
-            return <div key={team.id} style={{ background: panel, border: `1px solid ${justEliminated.has(team.id) ? '#EF4444' : line}`, opacity: eliminated && !justEliminated.has(team.id) ? 0.38 : 1 }} className="flex items-center justify-between rounded-xl px-4 py-2.5 text-left">
-              <span style={{ color: text }} className="truncate text-sm font-bold">{team.name}</span>
-              <span style={{ color: eliminated ? '#F87171' : '#34D399' }} className="ml-2 text-[10px] font-black uppercase">{eliminated ? 'Out' : 'In'}</span>
-            </div>
+        <p style={{ color: dim }} className="mb-2 mt-5 text-center text-xs font-black uppercase tracking-widest">Call the next flip</p>
+        <div className="grid grid-cols-2 gap-3">
+          {(['heads', 'tails'] as const).map(choice => {
+            const occupants = remainingTeams.filter(team => (choicesByTeam[team.id] ?? (team.id === ownTeamId ? ownChoice : null)) === choice)
+            const selected = ownChoice === choice
+            return <button key={choice} type="button" disabled={!ownTeamId || !canChoose || choosing || revealed || !alive.has(ownTeamId)} onClick={() => onChoose?.(choice)}
+              style={{ background: selected ? 'rgba(124,58,237,.18)' : panel, color: text, border: `2px solid ${selected ? '#7C3AED' : line}` }}
+              className="min-h-36 cursor-pointer rounded-2xl p-3 text-left transition active:scale-[.98] disabled:cursor-default disabled:opacity-100">
+              <span className="block text-center text-lg font-black capitalize">{choice === 'heads' ? 'H · Heads' : 'T · Tails'}</span>
+              <span className="mt-3 flex flex-wrap justify-center gap-1.5">
+                {occupants.map(team => <span key={team.id} title={team.name} style={{ background: team.id === ownTeamId ? '#7C3AED' : dark ? '#302A49' : '#EEEAF8', color: team.id === ownTeamId ? 'white' : text }} className="max-w-full truncate rounded-full px-2.5 py-1 text-[10px] font-black">{team.name}</span>)}
+              </span>
+              {occupants.length === 0 && <span style={{ color: dim }} className="mt-5 block text-center text-xs font-bold">No calls yet</span>}
+            </button>
           })}
-        </div>)}
+        </div>
+        {!revealed && ownTeamId && alive.has(ownTeamId) && <p style={{ color: dim }} className="mt-3 text-center text-xs font-semibold">Tap either side to move your team. Choices lock in {secondsRemaining}s.</p>}
+        {resultVisible && <RemainingTeamList teams={remainingTeams} panel={panel} line={line} text={text} dim={dim} />}
       </div>
     )
   }
@@ -120,7 +114,6 @@ export default function EliminationShowGame({
       { value: 'paper', emoji: '📄', label: 'Paper' },
       { value: 'rock', emoji: '🪨', label: 'Rock' },
     ] as const
-    const remainingTeams = teams.filter(team => alive.has(team.id))
     const choiceDisplay = (choice: string | undefined) => choices.find(item => item.value === choice)?.emoji ?? '—'
     const bothAdvance = Boolean(ownIsAlive && opponentId && alive.has(opponentId))
 
@@ -168,10 +161,7 @@ export default function EliminationShowGame({
               <p style={{ color: dim }} className="text-center text-sm font-bold">Pairing the next round…</p>
             )}
 
-            {!ownIsAlive && <div style={{ background: panel, border: `1px solid ${line}` }} className="mt-5 rounded-2xl px-4 py-4 text-left">
-              <p style={{ color: dim }} className="text-[10px] font-black uppercase tracking-[0.18em]">Teams remaining · {remainingTeams.length}</p>
-              <div className="mt-3 flex flex-wrap gap-2">{remainingTeams.map(team => <span key={team.id} style={{ color: text, border: `1px solid ${line}` }} className="rounded-full px-3 py-1.5 text-xs font-bold">{team.name}</span>)}</div>
-            </div>}
+            {!ownIsAlive && <RemainingTeamList teams={remainingTeams} panel={panel} line={line} text={text} dim={dim} />}
           </>
         ) : (
           <>
@@ -194,7 +184,7 @@ export default function EliminationShowGame({
                 <p style={{ color: text }} className="mt-2 truncate font-black">🍀 {teams.find(team => team.id === state.byeTeamId)?.name ?? 'Team'}</p>
               </div>}
             </div>
-            <p style={{ color: dim }} className="mt-4 text-center text-sm font-bold">{state.aliveTeamIds.length} team{state.aliveTeamIds.length === 1 ? '' : 's'} remaining</p>
+            <RemainingTeamList teams={remainingTeams} panel={panel} line={line} text={text} dim={dim} />
           </>
         )}
       </div>

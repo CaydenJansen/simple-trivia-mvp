@@ -586,6 +586,12 @@ export type Database = {
           referencedColumns: ['id']
         }]
       }
+      quiz_templates: {
+        Row: { id: string; owner_id: string; name: string; source_quiz_id: string; created_at: string; updated_at: string }
+        Insert: { id?: string; owner_id?: string; name: string; source_quiz_id: string; created_at?: string; updated_at?: string }
+        Update: Partial<{ name: string; source_quiz_id: string; updated_at: string }>
+        Relationships: []
+      }
       game_tie_resolutions: {
         Row: {
           id: string
@@ -1474,7 +1480,7 @@ type ShowGameRow = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
   title: string
   settings: Json
   created_at: string
@@ -1486,7 +1492,7 @@ type ShowGameInsert = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
   title: string
   settings?: Json
   created_at?: string

@@ -1704,6 +1704,16 @@ function QuizCard({ q, go, duplicating, onRename, onDuplicate, onDelete }: {
 
 function CreateQuiz({ go }: { go: Go }) {
   const [sel, setSel] = useState<'scratch' | 'auto' | null>('auto')
+  const [templates, setTemplates] = useState<Database['public']['Tables']['quiz_templates']['Row'][]>([])
+  const [templateBusy, setTemplateBusy] = useState<string | null>(null)
+  const [templateError, setTemplateError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void supabase.from('quiz_templates').select('*').order('updated_at', { ascending: false }).then(({ data, error }) => {
+      if (error) console.error('Could not load quiz templates:', error)
+      else setTemplates(data ?? [])
+    })
+  }, [])
 
   function openCreationPath(id: 'scratch' | 'auto', next: Screen) {
     if (id === 'scratch') {
@@ -1712,6 +1722,83 @@ function CreateQuiz({ go }: { go: Go }) {
       localStorage.removeItem('simple-trivia-new-quiz-id')
     }
     go(next)
+  }
+
+  async function createFromTemplate(template: Database['public']['Tables']['quiz_templates']['Row']) {
+    if (templateBusy) return
+    setTemplateBusy(template.id)
+    setTemplateError(null)
+    const [quizResult, questionResult, contentResult, gameResult, tiebreakerResult, libraryResult] = await Promise.all([
+      supabase.from('quizzes').select('title,status,estimated_minutes').eq('id', template.source_quiz_id).single(),
+      supabase.from('quiz_questions').select('question_key,position,item_position,round_number,round_position,round_question_count,round_title,prompt,category,difficulty,question_type,correct_answer,accepted_answers,options,tags,image_url,points_max,bonus,metadata_snapshot,notes,source_question_id,source_revision').eq('quiz_id', template.source_quiz_id).order('position'),
+      supabase.from('quiz_content_screens').select('screen_key,item_position,round_number,round_title,title,body,image_url').eq('quiz_id', template.source_quiz_id).order('item_position'),
+      supabase.from('quiz_show_games').select('show_game_key,item_position,round_number,round_title,game_type,title,settings').eq('quiz_id', template.source_quiz_id).order('item_position'),
+      supabase.from('quiz_tiebreakers').select('tiebreaker_key,position,prompt,correct_value,answer_unit,notes').eq('quiz_id', template.source_quiz_id).order('position'),
+      supabase.from('source_question_catalog').select('*').eq('status', 'active').eq('is_verified', true).range(0, 1999),
+    ])
+    const error = quizResult.error ?? questionResult.error ?? contentResult.error ?? gameResult.error ?? tiebreakerResult.error ?? libraryResult.error
+    if (error || !quizResult.data) {
+      console.error('Could not prepare template:', error)
+      setTemplateError('Could not load that template. Please try again.')
+      setTemplateBusy(null)
+      return
+    }
+    const library = (libraryResult.data ?? []) as PickerSourceQuestion[]
+    const used = new Set((questionResult.data ?? []).map(question => question.source_question_id).filter(Boolean))
+    const chosen = new Set<string>()
+    const replacements: Json[] = []
+    for (const original of questionResult.data ?? []) {
+      const candidates = library.filter(candidate => candidate.question_type === original.question_type && !used.has(candidate.id) && !chosen.has(candidate.id))
+      if (candidates.length === 0) {
+        setTemplateError(`The Question Library does not have enough unused ${questionTypeLabel(original.question_type)} questions for this template.`)
+        setTemplateBusy(null)
+        return
+      }
+      const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
+      const source = candidates[randomValue % candidates.length]
+      chosen.add(source.id)
+      const replacement = sourceToBuilderQuestion(source)
+      replacements.push({
+        ...original,
+        question_key: `question-${crypto.randomUUID()}`,
+        prompt: replacement.text,
+        category: replacement.cat,
+        difficulty: replacement.diff,
+        question_type: replacement.questionType,
+        correct_answer: replacement.correctAnswer,
+        accepted_answers: replacement.acceptedAnswers,
+        options: replacement.options,
+        tags: replacement.tags,
+        image_url: replacement.imageUrl,
+        points_max: replacement.pointsMax,
+        bonus: replacement.bonus,
+        metadata_snapshot: replacement.metadataSnapshot,
+        notes: replacement.notes || null,
+        source_question_id: replacement.sourceQuestionId,
+        source_revision: replacement.sourceRevision,
+      } as Json)
+    }
+    const nextTitle = `${template.name} · ${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}`
+    const { data: quizId, error: saveError } = await supabase.rpc('save_quiz_with_show_games', {
+      p_quiz_id: null,
+      p_title: nextTitle,
+      p_status: quizResult.data.status,
+      p_estimated_minutes: quizResult.data.estimated_minutes,
+      p_questions: replacements,
+      p_content_screens: (contentResult.data ?? []) as Json,
+      p_tiebreakers: (tiebreakerResult.data ?? []) as Json,
+      p_show_games: (gameResult.data ?? []) as Json,
+    })
+    if (saveError || !quizId) {
+      console.error('Could not create quiz from template:', saveError)
+      setTemplateError('Could not create a show from that template.')
+      setTemplateBusy(null)
+      return
+    }
+    localStorage.setItem('simple-trivia-selected-quiz-id', quizId)
+    localStorage.setItem('simple-trivia-selected-quiz-title', nextTitle)
+    localStorage.setItem('simple-trivia-new-quiz-id', quizId)
+    go('quiz-builder')
   }
 
   return (
@@ -1725,7 +1812,7 @@ function CreateQuiz({ go }: { go: Go }) {
         <h1 style={{ color: C.ink }} className="text-3xl font-extrabold mb-1">Create a Quiz</h1>
         <p style={{ color: C.sub }} className="mb-10">How would you like to build it?</p>
 
-        <div className="grid grid-cols-2 gap-5 mb-8">
+        <div className="grid grid-cols-1 gap-5 mb-8 sm:grid-cols-2">
           {[
             {
               id: 'auto' as const,
@@ -1775,6 +1862,17 @@ function CreateQuiz({ go }: { go: Go }) {
             </div>
           ))}
         </div>
+
+        {templates.length > 0 && <section className="mt-8 rounded-3xl border border-violet-200 bg-white p-6">
+          <h2 style={{ color: C.ink }} className="text-xl font-extrabold">Same as last week</h2>
+          <p style={{ color: C.sub }} className="mt-1 text-sm">Keep the rounds, content screens and games, but replace every trivia question.</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">{templates.map(template => <button key={template.id} type="button" onClick={() => void createFromTemplate(template)} disabled={Boolean(templateBusy)}
+            className="rounded-2xl border border-zinc-200 px-4 py-3 text-left hover:border-violet-300 disabled:opacity-50">
+            <span style={{ color: C.ink }} className="block font-bold">{template.name}</span>
+            <span style={{ color: C.violet }} className="mt-1 block text-xs font-bold">{templateBusy === template.id ? 'Building fresh questions…' : 'Use this template →'}</span>
+          </button>)}</div>
+          {templateError && <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{templateError}</p>}
+        </section>}
 
       </main>
     </div>
@@ -2070,6 +2168,8 @@ function QuizBuilder({ go }: { go: Go }) {
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [discarding, setDiscarding] = useState(false)
+  const [deletingQuiz, setDeletingQuiz] = useState(false)
+  const [savingTemplate, setSavingTemplate] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
   const [editingTiebreakerId, setEditingTiebreakerId] = useState<string | null>(null)
@@ -2077,7 +2177,7 @@ function QuizBuilder({ go }: { go: Go }) {
   const [addMenuTarget, setAddMenuTarget] = useState<{ roundId: number; itemPosition: number } | null>(null)
   const [picker, setPicker] = useState<{ roundId: number; itemPosition: number; origin: 'user' | 'platform' } | null>(null)
   const [addTiebreakerTarget, setAddTiebreakerTarget] = useState<{ mode: 'in-show'; roundId: number; itemPosition: number } | { mode: 'backup' } | null>(null)
-  const [tiebreakerPickerTarget, setTiebreakerPickerTarget] = useState<{ mode: 'in-show'; roundId: number; itemPosition: number } | { mode: 'backup' } | null>(null)
+  const [tiebreakerPickerTarget, setTiebreakerPickerTarget] = useState<{ mode: 'in-show'; roundId: number; itemPosition: number } | { mode: 'game'; roundId: number; showGameId: string } | { mode: 'backup' } | null>(null)
   const [replaceTarget, setReplaceTarget] = useState<{ roundId: number; questionId: string } | null>(null)
   const [replaceOrigin, setReplaceOrigin] = useState<'user' | 'platform' | null>(null)
   const [replacingLibraryQuestionId, setReplacingLibraryQuestionId] = useState<string | null>(null)
@@ -2521,7 +2621,7 @@ function QuizBuilder({ go }: { go: Go }) {
   async function cycleLibraryInShowTiebreaker(roundId: number, showGameId: string) {
     if (replacingLibraryTiebreakerId) return
     const currentShowGame = rounds.find(round => round.id === roundId)?.showGames.find(showGame => showGame.id === showGameId)
-    if (currentShowGame?.gameType !== 'in-show-tiebreaker' || !currentShowGame.sourceTiebreakerId) return
+    if (!currentShowGame || !['in-show-tiebreaker', 'tiebreaker-style-question'].includes(currentShowGame.gameType) || !currentShowGame.sourceTiebreakerId) return
 
     setReplacingLibraryTiebreakerId(showGameId)
     setTiebreakerReplacementError(null)
@@ -2645,12 +2745,11 @@ function QuizBuilder({ go }: { go: Go }) {
       setSaveError('Add a winner message for every custom game reward before saving.')
       return null
     }
-    if (rounds.some(round => round.showGames.some(showGame => ['audience-question', 'in-show-tiebreaker'].includes(showGame.gameType) && !showGame.audienceQuestionPrompt.trim()))) {
-      setSaveError('Add a prompt for every Audience Question and in-show tiebreaker before saving.')
+    if (rounds.some(round => round.showGames.some(showGame => ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType) && !showGame.audienceQuestionPrompt.trim()))) {
+      setSaveError('Add a prompt for every Audience Question and numerical question before saving.')
       return null
     }
-    if (rounds.some(round => round.showGames.some(showGame => ['audience-question', 'in-show-tiebreaker'].includes(showGame.gameType)
-      && (showGame.gameType === 'in-show-tiebreaker' || showGame.audienceQuestionMode === 'closest-number')
+    if (rounds.some(round => round.showGames.some(showGame => ['in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType)
       && (!showGame.audienceQuestionCorrectNumber.trim() || !Number.isFinite(Number(showGame.audienceQuestionCorrectNumber)))))) {
       setSaveError('Add a valid correct number for every Closest Guess game.')
       return null
@@ -2719,14 +2818,14 @@ function QuizBuilder({ go }: { go: Go }) {
                 description: item.showGame.rewardDescription.trim(),
                 winnerMessage: item.showGame.winnerMessage.trim(),
               }) as Record<string, Json>,
-              ...(['audience-question', 'in-show-tiebreaker'].includes(item.showGame.gameType) ? audienceQuestionSettings({
-                mode: item.showGame.gameType === 'in-show-tiebreaker' ? 'closest-number' : item.showGame.audienceQuestionMode,
+              ...(['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(item.showGame.gameType) ? audienceQuestionSettings({
+                mode: ['in-show-tiebreaker', 'tiebreaker-style-question'].includes(item.showGame.gameType) ? 'closest-number' : 'favourite',
                 prompt: item.showGame.audienceQuestionPrompt,
-                correctNumber: item.showGame.gameType === 'in-show-tiebreaker' || item.showGame.audienceQuestionMode === 'closest-number' ? Number(item.showGame.audienceQuestionCorrectNumber) : null,
+                correctNumber: ['in-show-tiebreaker', 'tiebreaker-style-question'].includes(item.showGame.gameType) ? Number(item.showGame.audienceQuestionCorrectNumber) : null,
                 allowMultipleWinners: item.showGame.audienceQuestionAllowMultipleWinners,
                 shareResponses: item.showGame.audienceQuestionShareResponses,
               }) : {}),
-              ...(item.showGame.gameType === 'in-show-tiebreaker' ? {
+              ...(['in-show-tiebreaker', 'tiebreaker-style-question'].includes(item.showGame.gameType) ? {
                 tiebreaker_answer_unit: item.showGame.tiebreakerAnswerUnit.trim() || null,
                 tiebreaker_notes: item.showGame.tiebreakerNotes.trim() || null,
                 source_tiebreaker_id: item.showGame.sourceTiebreakerId,
@@ -2852,6 +2951,43 @@ function QuizBuilder({ go }: { go: Go }) {
     go(next)
   }
 
+  async function deleteCurrentQuiz() {
+    if (!quizId || deletingQuiz || !window.confirm(`Delete “${title.trim() || 'Untitled Quiz'}”? This cannot be undone.`)) return
+    setDeletingQuiz(true)
+    setSaveError(null)
+    const { error } = await supabase.from('quizzes').delete().eq('id', quizId)
+    if (error) {
+      console.error('Could not delete quiz:', error)
+      setSaveError('Could not delete this show. Please try again.')
+      setDeletingQuiz(false)
+      return
+    }
+    if (localStorage.getItem('simple-trivia-selected-quiz-id') === quizId) {
+      localStorage.removeItem('simple-trivia-selected-quiz-id')
+      localStorage.removeItem('simple-trivia-selected-quiz-title')
+    }
+    if (localStorage.getItem('simple-trivia-new-quiz-id') === quizId) localStorage.removeItem('simple-trivia-new-quiz-id')
+    go('dashboard')
+  }
+
+  async function saveCurrentQuizAsTemplate() {
+    if (!quizId || savingTemplate) return
+    if (dirty || !persisted) {
+      setSaveError('Save this show before turning it into a template.')
+      return
+    }
+    const name = window.prompt('Template name', `${title.trim() || 'Untitled Quiz'} template`)?.trim()
+    if (!name) return
+    setSavingTemplate(true)
+    setSaveError(null)
+    const { error } = await supabase.from('quiz_templates').upsert({ name, source_quiz_id: quizId, updated_at: new Date().toISOString() }, { onConflict: 'owner_id,name' })
+    if (error) {
+      console.error('Could not save quiz template:', error)
+      setSaveError('Could not save this template. Please try again.')
+    } else setSaveNotice(`Saved “${name}” as a reusable template.`)
+    setSavingTemplate(false)
+  }
+
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
       {/* Builder top bar */}
@@ -2875,6 +3011,10 @@ function QuizBuilder({ go }: { go: Go }) {
             {loading ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : needsStatusSync ? 'Save to enable hosting' : persisted ? 'Saved' : 'New quiz'}
           </span>
           <Btn v="secondary" sz="sm" onClick={() => setPreviewOpen(true)}>Preview</Btn>
+          {quizId && <button type="button" onClick={() => void saveCurrentQuizAsTemplate()} disabled={savingTemplate || saving}
+            className="rounded-lg px-3 py-2 text-xs font-bold text-violet-700 hover:bg-violet-50 disabled:opacity-50">{savingTemplate ? 'Saving template…' : 'Save as Template'}</button>}
+          {quizId && <button type="button" onClick={() => void deleteCurrentQuiz()} disabled={deletingQuiz || saving}
+            className="rounded-lg px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-50">{deletingQuiz ? 'Deleting…' : 'Delete Show'}</button>}
           <Btn
             v="secondary"
             sz="sm"
@@ -3045,6 +3185,7 @@ function QuizBuilder({ go }: { go: Go }) {
                 } : item))
                 setDirty(true)
               }}
+              onPickTiebreaker={showGameId => setTiebreakerPickerTarget({ mode: 'game', roundId: round.id, showGameId })}
               onCycleTiebreaker={showGameId => { void cycleLibraryInShowTiebreaker(round.id, showGameId) }}
               onDeleteShowGame={showGameId => {
                 setRounds(current => current.map(item => item.id === round.id ? {
@@ -3280,7 +3421,23 @@ function QuizBuilder({ go }: { go: Go }) {
           onClose={() => setTiebreakerPickerTarget(null)}
           onSelect={source => {
             if (tiebreakerPickerTarget.mode === 'backup') addBackupTiebreaker(source)
-            else addInShowTiebreaker(tiebreakerPickerTarget.roundId, tiebreakerPickerTarget.itemPosition, source)
+            else if (tiebreakerPickerTarget.mode === 'in-show') addInShowTiebreaker(tiebreakerPickerTarget.roundId, tiebreakerPickerTarget.itemPosition, source)
+            else {
+              const target = tiebreakerPickerTarget
+              setRounds(current => current.map(round => round.id === target.roundId ? {
+                ...round,
+                showGames: round.showGames.map(showGame => showGame.id === target.showGameId ? {
+                  ...showGame,
+                  sourceTiebreakerId: source.id,
+                  audienceQuestionMode: 'closest-number',
+                  audienceQuestionPrompt: source.prompt,
+                  audienceQuestionCorrectNumber: String(source.correct_value),
+                  tiebreakerAnswerUnit: source.answer_unit ?? '',
+                  tiebreakerNotes: source.notes ?? '',
+                } : showGame),
+              } : round))
+              setDirty(true)
+            }
             setTiebreakerPickerTarget(null)
           }}
         />
@@ -4072,7 +4229,7 @@ function QuizPreview({ title, rounds, onClose }: {
   )
 }
 
-function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacingLibraryTiebreakerId, replacementBackCounts, onEdit, onReplace, onCycleLibrary, onCycleLibraryBack, onRoundPointerDown, onTitleChange, onAddQuestion, onAddContentScreen, onAddShowGame, onAddTiebreaker, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onCycleTiebreaker, onDeleteShowGame, onMoveShowGameToBackup, onReorderItems }: {
+function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacingLibraryTiebreakerId, replacementBackCounts, onEdit, onReplace, onCycleLibrary, onCycleLibraryBack, onRoundPointerDown, onTitleChange, onAddQuestion, onAddContentScreen, onAddShowGame, onAddTiebreaker, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onPickTiebreaker, onCycleTiebreaker, onDeleteShowGame, onMoveShowGameToBackup, onReorderItems }: {
   round: BuilderRoundData
   roundNumber: number
   replacingLibraryQuestionId: string | null
@@ -4093,6 +4250,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
   onUpdateContentScreen: (screenId: string, updates: Partial<BuilderContentScreenData>) => void
   onDeleteContentScreen: (screenId: string) => void
   onUpdateShowGame: (showGameId: string, updates: Partial<BuilderShowGameData>) => void
+  onPickTiebreaker: (showGameId: string) => void
   onCycleTiebreaker: (showGameId: string) => void
   onDeleteShowGame: (showGameId: string) => void
   onMoveShowGameToBackup: (showGameId: string) => void
@@ -4336,6 +4494,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
               onChange={updates => onUpdateShowGame(item.showGame.id, updates)}
               onDelete={() => onDeleteShowGame(item.showGame.id)}
               onMoveToBackup={() => onMoveShowGameToBackup(item.showGame.id)}
+              onPickTiebreaker={() => onPickTiebreaker(item.showGame.id)}
               onCycleTiebreaker={() => onCycleTiebreaker(item.showGame.id)}
               replacingTiebreaker={replacingLibraryTiebreakerId === item.showGame.id}
               onPointerDown={event => startItemDrag(itemKey, event)}
@@ -4445,11 +4604,12 @@ function BuilderContentScreen({ screen, onChange, onDelete, onPointerDown }: {
   )
 }
 
-function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onCycleTiebreaker, replacingTiebreaker, onPointerDown }: {
+function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onPickTiebreaker, onCycleTiebreaker, replacingTiebreaker, onPointerDown }: {
   showGame: BuilderShowGameData
   onChange: (updates: Partial<BuilderShowGameData>) => void
   onDelete: () => void
   onMoveToBackup: () => void
+  onPickTiebreaker: () => void
   onCycleTiebreaker: () => void
   replacingTiebreaker: boolean
   onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
@@ -4470,7 +4630,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onCycle
             </span>
           </div>
           <p style={{ color: C.ink }} className="truncate text-sm font-semibold group-hover:text-violet">{showGameEmoji(showGame.gameType)} {showGame.title}</p>
-          {['audience-question', 'in-show-tiebreaker'].includes(showGame.gameType) && showGame.audienceQuestionPrompt.trim() && (
+          {['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType) && showGame.audienceQuestionPrompt.trim() && (
             <p style={{ color: C.sub }} className="mt-1 line-clamp-2 text-xs leading-5">{showGame.audienceQuestionPrompt}</p>
           )}
         </div>
@@ -4486,7 +4646,12 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onCycle
             <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Game</label>
             <select value={showGame.gameType} onChange={event => {
               const type = event.target.value as ShowGameType
-              onChange({ gameType: type, title: showGameLabel(type) })
+              onChange({
+                gameType: type,
+                title: showGameLabel(type),
+                audienceQuestionMode: type === 'audience-question' ? 'favourite' : type === 'tiebreaker-style-question' ? 'closest-number' : showGame.audienceQuestionMode,
+                ...(type === 'audience-question' ? { audienceQuestionCorrectNumber: '', sourceTiebreakerId: null, tiebreakerAnswerUnit: '', tiebreakerNotes: '' } : {}),
+              })
             }} style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full cursor-pointer rounded-xl bg-white px-3 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-violet/30">
               <optgroup label="One-step games · immediate winner">
                 <option value="spin-the-wheel">🎡 Spin the Wheel</option>
@@ -4501,31 +4666,36 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onCycle
               </optgroup>
               <optgroup label="Host-picked games">
                 <option value="audience-question">💬 Audience Question</option>
+                <option value="tiebreaker-style-question">🎯 Tiebreaker-style Question</option>
               </optgroup>
             </select>
           </div>}
-          {showGame.gameType === 'in-show-tiebreaker' && showGame.sourceTiebreakerId && <button type="button" onClick={onCycleTiebreaker} disabled={replacingTiebreaker}
+          {['in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType) && <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={onPickTiebreaker}
+            className="cursor-pointer rounded-xl bg-violet-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-violet-700">
+            {showGame.sourceTiebreakerId ? 'Choose another question' : 'Choose from Tiebreaker Library'}
+          </button>
+          {showGame.sourceTiebreakerId && <button type="button" onClick={onCycleTiebreaker} disabled={replacingTiebreaker}
             className="cursor-pointer rounded-xl border border-violet-200 bg-white px-4 py-2 text-xs font-bold text-violet-700 shadow-sm hover:bg-violet-50 disabled:cursor-wait disabled:opacity-60">
             {replacingTiebreaker ? 'Finding another…' : '↻ Try another'}
           </button>}
+          </div>}
           <p style={{ color: C.sub }} className="text-xs leading-5">{showGameInstructions(showGame.gameType)}</p>
-          {['audience-question', 'in-show-tiebreaker'].includes(showGame.gameType) && <>
+          {['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType) && <>
             <div>
               <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">How is the winner chosen?</label>
-              {showGame.gameType === 'audience-question' ? <div className="grid grid-cols-2 gap-2">
-                {(['favourite', 'closest-number'] as const).map(mode => <button key={mode} type="button" onClick={() => onChange({ audienceQuestionMode: mode })}
-                  style={{ border: `1px solid ${showGame.audienceQuestionMode === mode ? C.violet : C.line}`, background: showGame.audienceQuestionMode === mode ? C.violetMist : 'white', color: showGame.audienceQuestionMode === mode ? C.violet : C.ink }}
-                  className="cursor-pointer rounded-xl px-3 py-2 text-sm font-bold">{mode === 'favourite' ? 'Favourite Answer' : 'Closest Guess'}</button>)}
-              </div> : <p style={{ color: C.violet }} className="rounded-xl bg-violet-mist px-3 py-2 text-xs font-bold">Closest numerical answer orders tied teams. No trivia points are added.</p>}
-              <p style={{ color: C.sub }} className="mt-1 text-[11px]">{showGame.gameType === 'in-show-tiebreaker' ? 'Every team enters a number. The nearest answer provides a score-neutral ordering for tied teams.' : showGame.audienceQuestionMode === 'favourite' ? 'You read the responses and choose the answer you like best.' : 'Players enter numbers and the nearest answer wins automatically.'}</p>
+              {showGame.gameType === 'audience-question'
+                ? <p style={{ color: C.violet }} className="rounded-xl bg-violet-mist px-3 py-2 text-xs font-bold">You choose your favourite open-ended answer.</p>
+                : <p style={{ color: C.violet }} className="rounded-xl bg-violet-mist px-3 py-2 text-xs font-bold">Closest numerical answer wins.{showGame.gameType === 'in-show-tiebreaker' ? ' No trivia points are added.' : ''}</p>}
+              <p style={{ color: C.sub }} className="mt-1 text-[11px]">{showGame.gameType === 'in-show-tiebreaker' ? 'The nearest answer provides a score-neutral ordering for tied teams.' : showGame.gameType === 'tiebreaker-style-question' ? 'The nearest answer receives this game’s points or prize.' : 'Read the responses and choose the answer you like best.'}</p>
             </div>
             <div>
               <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Prompt</label>
               <textarea rows={2} value={showGame.audienceQuestionPrompt} onChange={event => onChange({ audienceQuestionPrompt: event.target.value })}
-                placeholder={showGame.gameType === 'in-show-tiebreaker' ? 'Approximately how many kilometres long is the Great Wall of China?' : showGame.audienceQuestionMode === 'favourite' ? 'What’s the funniest joke you’ve heard this week?' : 'How many jellybeans are in this jar?'}
+                placeholder={showGame.gameType !== 'audience-question' ? 'Approximately how many kilometres long is the Great Wall of China?' : 'What’s the funniest joke you’ve heard this week?'}
                 style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full resize-none rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
             </div>
-            {showGame.gameType === 'in-show-tiebreaker' || showGame.audienceQuestionMode === 'closest-number' ? <div>
+            {showGame.gameType !== 'audience-question' ? <div>
               <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Correct number</label>
               <input type="number" value={showGame.audienceQuestionCorrectNumber} onChange={event => onChange({ audienceQuestionCorrectNumber: event.target.value })}
                 placeholder="e.g. 437" style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
@@ -4542,7 +4712,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onCycle
                 </span>
               </label>
             </div>}
-            {showGame.gameType === 'in-show-tiebreaker' && <div className="grid gap-3 sm:grid-cols-2">
+            {showGame.gameType !== 'audience-question' && <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">Answer unit</label>
                 <input value={showGame.tiebreakerAnswerUnit} onChange={event => onChange({ tiebreakerAnswerUnit: event.target.value })}
@@ -7131,6 +7301,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const [showGamePresses, setShowGamePresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [showGameBalloons, setShowGameBalloons] = useState<BigBalloonEntry[]>([])
   const [showGameTreasure, setShowGameTreasure] = useState<LiveTreasureEntry[]>([])
+  const [showGameChoices, setShowGameChoices] = useState<Record<string, string>>({})
   const [audienceResponses, setAudienceResponses] = useState<LiveAudienceResponse[]>([])
   const [audienceVoteCounts, setAudienceVoteCounts] = useState<Record<string, number>>({})
   const [audienceResponseOrder, setAudienceResponseOrder] = useState<AudienceResponseOrder>('submitted')
@@ -7280,7 +7451,7 @@ function LiveQuestion({ go }: { go: Go }) {
       const currentContentScreen = contentScreens.find(item => item.screen_key === game.current_content_screen_key) ?? null
       const currentShowGame = showGames.find(item => item.show_game_key === game.current_show_game_key) ?? null
 
-      if (currentShowGame && ['audience-question', 'in-show-tiebreaker'].includes(currentShowGame.game_type)) {
+      if (currentShowGame && ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(currentShowGame.game_type)) {
         if (audienceShowGameIdRef.current !== currentShowGame.id) {
           audienceShowGameIdRef.current = currentShowGame.id
           setSelectedAudienceWinnerIds([])
@@ -7302,7 +7473,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setTeams((teamResult.data ?? []) as LiveTeam[])
 
       if (currentShowGame) {
-        if (['audience-question', 'in-show-tiebreaker'].includes(currentShowGame.game_type)) {
+        if (['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(currentShowGame.game_type)) {
           const [{ data: responseRows, error: responseError }, { data: voteRows, error: voteError }] = await Promise.all([
             supabase.from('game_show_game_responses').select('*').eq('game_show_game_id', currentShowGame.id).order('submitted_at', { ascending: true }),
             supabase.from('game_show_game_response_votes').select('response_id').eq('game_show_game_id', currentShowGame.id),
@@ -7336,6 +7507,19 @@ function LiveQuestion({ go }: { go: Go }) {
           setShowGameBalloons([])
           setAudienceResponses([])
           setAudienceVoteCounts({})
+        } else if (isEliminationShowGame(currentShowGame.game_type)) {
+          const { data: choiceRows, error: choiceError } = await supabase
+            .from('game_show_game_choices')
+            .select('team_id, choice')
+            .eq('game_show_game_id', currentShowGame.id)
+            .eq('round_number', eliminationShowGameState(currentShowGame.settings).roundNumber)
+          if (choiceError) console.error('Could not load show-game choices:', choiceError)
+          else setShowGameChoices(Object.fromEntries((choiceRows ?? []).map(row => [row.team_id, row.choice])))
+          setShowGamePresses([])
+          setAudienceResponses([])
+          setAudienceVoteCounts({})
+          setShowGameBalloons([])
+          setShowGameTreasure([])
         } else {
           const { data: pressRows, error: pressError } = await supabase
             .from('game_show_game_presses')
@@ -7349,7 +7533,7 @@ function LiveQuestion({ go }: { go: Go }) {
           setShowGameBalloons([])
           setShowGameTreasure([])
         }
-      } else { setShowGamePresses([]); setAudienceResponses([]); setAudienceVoteCounts({}); setShowGameBalloons([]); setShowGameTreasure([]) }
+      } else { setShowGamePresses([]); setAudienceResponses([]); setAudienceVoteCounts({}); setShowGameBalloons([]); setShowGameTreasure([]); setShowGameChoices({}) }
 
       if (currentQuestion) {
         const [submissionResult, bonusSubmissionResult] = await Promise.all([
@@ -7387,6 +7571,11 @@ function LiveQuestion({ go }: { go: Go }) {
       if (!channel) {
         channel = supabase
           .channel(`host-live-question-${game.id}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'game_show_game_choices', filter: `game_id=eq.${game.id}` },
+            () => { void loadLiveData() },
+          )
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'game_show_games', filter: `game_id=eq.${game.id}` },
@@ -7500,7 +7689,7 @@ function LiveQuestion({ go }: { go: Go }) {
     setAudienceVoteCounts({})
     setAudienceResponseOrder('submitted')
     setSelectedAudienceWinnerIds([])
-    audienceShowGameIdRef.current = ['audience-question', 'in-show-tiebreaker'].includes(nextShowGame.game_type) ? nextShowGame.id : null
+    audienceShowGameIdRef.current = ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(nextShowGame.game_type) ? nextShowGame.id : null
     setGameScreen('show-game')
     setPhase('closed')
   }
@@ -7514,7 +7703,7 @@ function LiveQuestion({ go }: { go: Go }) {
         ? (showGame.settings as Record<string, Json>).tie_resolution_id : null
       const rpc = typeof tieResolutionId === 'string'
         ? showGame.game_type === 'big-balloon' ? 'start_big_balloon' : 'start_tie_show_game'
-        : ['audience-question', 'in-show-tiebreaker'].includes(showGame.game_type)
+        : ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.game_type)
         ? 'start_audience_question'
         : isEliminationShowGame(showGame.game_type)
         ? 'start_elimination_show_game'
@@ -7538,7 +7727,7 @@ function LiveQuestion({ go }: { go: Go }) {
   }
 
   async function resolveAudienceQuestion() {
-    if (!showGame || !['audience-question', 'in-show-tiebreaker'].includes(showGame.game_type) || showGame.status !== 'open' || actionBusy || audienceResolveBusyRef.current) return
+    if (!showGame || !['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.game_type) || showGame.status !== 'open' || actionBusy || audienceResolveBusyRef.current) return
     const config = audienceQuestionFromSettings(showGame.settings)
     if (audienceResponses.length === 0) {
       setLiveError('Wait for at least one response before choosing a winner.')
@@ -8600,7 +8789,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const winner = teams.find(team => team.id === showGame?.winner_team_id) ?? null
     const isWheel = showGame?.game_type === 'spin-the-wheel'
     const isElimination = isEliminationShowGame(showGame?.game_type)
-    const isAudienceQuestion = showGame?.game_type === 'audience-question' || showGame?.game_type === 'in-show-tiebreaker'
+    const isAudienceQuestion = showGame?.game_type === 'audience-question' || showGame?.game_type === 'in-show-tiebreaker' || showGame?.game_type === 'tiebreaker-style-question'
     const isInShowTiebreaker = showGame?.game_type === 'in-show-tiebreaker'
     const isBigBalloon = showGame?.game_type === 'big-balloon'
     const isTreasure = showGame?.game_type === 'steal-the-treasure'
@@ -8697,7 +8886,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 </div>
               </div>
             ) : isElimination && showGame ? (
-              <EliminationShowGame type={showGame.game_type as EliminationShowGameType} teams={participatingTeams} state={eliminationState} secondsRemaining={eliminationSecondsRemaining} finished={showGame.status === 'exploded'} onRevealAnimationComplete={handleCoinRevealAnimationComplete} dark />
+              <EliminationShowGame type={showGame.game_type as EliminationShowGameType} teams={participatingTeams} state={eliminationState} choicesByTeam={showGameChoices} secondsRemaining={eliminationSecondsRemaining} finished={showGame.status === 'exploded'} onRevealAnimationComplete={handleCoinRevealAnimationComplete} dark />
             ) : isBigBalloon ? (
               <BigBalloon teams={participatingTeams} balloons={showGameBalloons} dark />
             ) : isTreasure ? (
@@ -8713,7 +8902,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 </div>
               </div>
             ) : isWheel ? (
-              <div className="mt-5"><TeamWheel dark compact teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
+              <div className="mt-5 flex justify-center"><TeamWheel dark compact teamNames={wheelTeams.map(team => team.name)} spinning={showGame?.status === 'open'} winnerName={winner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
             ) : (
               <><div className={`mt-5 text-6xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={showGame?.status === 'exploded' ? 'Exploded bomb' : 'Bomb with a burning fuse'}>{showGame?.status === 'exploded' ? '💥' : '💣'}</div>
               <div style={{ background: C.liveLine }} className="mx-auto mt-3 h-2 max-w-sm overflow-hidden rounded-full"><div style={{ width: `${fuseProgress}%`, background: showGame?.status === 'exploded' ? C.stop : C.caution }} className="h-full rounded-full transition-[width] duration-100" /></div></>

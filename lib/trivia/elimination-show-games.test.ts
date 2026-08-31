@@ -32,7 +32,9 @@ describe('elimination show games', () => {
   })
 
   it('describes Audience Question as a host-picked interaction', () => {
-    expect(showGameInstructions('audience-question')).toContain('Pick your favourite response')
+    expect(showGameInstructions('audience-question')).toContain('favourite submitted answer')
+    expect(showGameInstructions('audience-question')).not.toContain('numerical')
+    expect(showGameInstructions('tiebreaker-style-question')).toContain('closest answer wins')
     expect(showGameInstructions('big-balloon')).toContain('biggest balloon')
     expect(showGameInstructions('steal-the-treasure')).toContain('bank')
     expect(showGameInstructions('in-show-tiebreaker')).toContain('closest')

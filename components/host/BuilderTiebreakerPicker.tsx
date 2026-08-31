@@ -18,8 +18,11 @@ export default function BuilderTiebreakerPicker({
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [entryMode, setEntryMode] = useState<"choose" | "search">("choose");
+  const [randomLoading, setRandomLoading] = useState(false);
 
   useEffect(() => {
+    if (entryMode !== "search") return;
     let active = true;
     const timeout = window.setTimeout(async () => {
       setLoading(true);
@@ -51,7 +54,27 @@ export default function BuilderTiebreakerPicker({
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [search]);
+  }, [entryMode, search]);
+
+  async function selectRandomTiebreaker() {
+    if (randomLoading) return;
+    setRandomLoading(true);
+    setError(null);
+    const countResult = await supabase.from("source_tiebreakers").select("id", { count: "exact", head: true }).eq("status", "active").eq("is_verified", true);
+    if (countResult.error || !countResult.count) {
+      setError("Could not find an active tiebreaker question.");
+      setRandomLoading(false);
+      return;
+    }
+    const offset = Math.floor(Math.random() * countResult.count);
+    const result = await supabase.from("source_tiebreakers").select("*").eq("status", "active").eq("is_verified", true).range(offset, offset).single();
+    setRandomLoading(false);
+    if (result.error || !result.data) {
+      setError("Could not choose a random tiebreaker. Please try again.");
+      return;
+    }
+    onSelect(result.data);
+  }
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/45 px-4 py-8 backdrop-blur-sm">
@@ -63,7 +86,20 @@ export default function BuilderTiebreakerPicker({
           </div>
           <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-semibold text-zinc-500 hover:bg-zinc-100">Close</button>
         </header>
+        {entryMode === "choose" ? <div className="grid gap-3 p-6 sm:grid-cols-2">
+          <button type="button" onClick={selectRandomTiebreaker} disabled={randomLoading} className="rounded-2xl border border-violet-200 bg-violet-50 p-5 text-left hover:border-violet-400 disabled:opacity-60">
+            <span className="block text-base font-bold text-violet-800">🎲 Select random question</span>
+            <span className="mt-1 block text-sm leading-5 text-violet-700">Choose one instantly. You can use Try another afterwards.</span>
+          </button>
+          <button type="button" onClick={() => setEntryMode("search")} className="rounded-2xl border border-zinc-200 p-5 text-left hover:border-violet-300">
+            <span className="block text-base font-bold text-zinc-900">🔎 Search for a question</span>
+            <span className="mt-1 block text-sm leading-5 text-zinc-500">Browse the full Tiebreaker Library and choose a specific one.</span>
+          </button>
+          {randomLoading ? <p className="text-sm text-zinc-500">Choosing a question…</p> : null}
+          {error ? <p className="text-sm text-red-700">{error}</p> : null}
+        </div> : <>
         <div className="border-b border-zinc-200 p-4">
+          <button type="button" onClick={() => setEntryMode("choose")} className="mb-3 text-xs font-bold text-violet-700 hover:underline">← Random or search</button>
           <input type="search" value={search} onChange={event => setSearch(event.target.value)} autoFocus
             placeholder="Search tiebreaker question or answer unit…"
             className="w-full rounded-xl border border-zinc-200 px-4 py-2.5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
@@ -84,6 +120,7 @@ export default function BuilderTiebreakerPicker({
             </article>)}
           </div>}
         </div>
+        </>}
       </section>
     </div>
   );

@@ -2815,7 +2815,7 @@ function ShowGame() {
       }, {}))
       setEliminationChoices(Object.fromEntries((roundChoices ?? []).map(item => [item.team_id, item.choice])))
     } else { setChoiceCounts({}); setEliminationChoices({}) }
-    if (activeShowGame && ['audience-question', 'in-show-tiebreaker'].includes(activeShowGame.game_type)) {
+    if (activeShowGame && ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(activeShowGame.game_type)) {
       if (audienceShowGameIdRef.current !== activeShowGame.id) {
         audienceShowGameIdRef.current = activeShowGame.id
         setAudienceResponse('')
@@ -2882,7 +2882,7 @@ function ShowGame() {
   }, [load])
 
   useEffect(() => {
-    if (!showGame || !['audience-question', 'in-show-tiebreaker'].includes(showGame.game_type) || showGame.status !== 'open' || !audienceResponseRow) return
+    if (!showGame || !['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.game_type) || showGame.status !== 'open' || !audienceResponseRow) return
     const config = audienceQuestionFromSettings(showGame.settings)
     if (config.mode !== 'favourite' || !config.shareResponses) return
     const timer = window.setInterval(() => { void load() }, 1500)
@@ -2954,7 +2954,7 @@ function ShowGame() {
   }
 
   async function submitAudienceResponse() {
-    if (!showGame || !['audience-question', 'in-show-tiebreaker'].includes(showGame.game_type) || audienceSubmitting || audienceResponseRow || !audienceResponse.trim()) return
+    if (!showGame || !['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.game_type) || audienceSubmitting || audienceResponseRow || !audienceResponse.trim()) return
     const requestId = localStorage.getItem('simple-trivia-join-request-id')
     const requestToken = localStorage.getItem('simple-trivia-join-request-token')
     if (!requestId || !requestToken) return
@@ -3073,7 +3073,7 @@ function ShowGame() {
   const isWheel = showGame?.game_type === 'spin-the-wheel'
   const isBomb = showGame?.game_type === 'beat-the-bomb'
   const isElimination = isEliminationShowGame(showGame?.game_type)
-  const isAudienceQuestion = showGame?.game_type === 'audience-question' || showGame?.game_type === 'in-show-tiebreaker'
+  const isAudienceQuestion = showGame?.game_type === 'audience-question' || showGame?.game_type === 'in-show-tiebreaker' || showGame?.game_type === 'tiebreaker-style-question'
   const isInShowTiebreaker = showGame?.game_type === 'in-show-tiebreaker'
   const isBigBalloon = showGame?.game_type === 'big-balloon'
   const isTreasure = showGame?.game_type === 'steal-the-treasure'
