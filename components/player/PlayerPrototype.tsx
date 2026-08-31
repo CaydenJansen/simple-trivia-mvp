@@ -51,6 +51,7 @@ import {
 } from "@/lib/trivia/elimination-show-games";
 import { audienceQuestionFromSettings, audienceQuestionPlayerInstructions } from "@/lib/trivia/audience-question";
 import { formatNumericResponse, formatNumericResponseInput, parseNumericResponseInput } from "@/lib/trivia/numeric-response";
+import { TREASURE_WARMUP_MS, treasureAccruedMs } from "@/lib/trivia/treasure";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
@@ -3081,8 +3082,11 @@ function ShowGame() {
   const ownTreasure = treasure.find(entry => entry.team_id === teamId)
   const currentWinningTreasureUnits = treasure.reduce((highest, entry) => Math.max(highest, entry.banked_units), 0)
   const ownBalloon = balloons.find(entry => entry.team_id === teamId)
-  const liveTreasureUnits = ownTreasure?.is_stealing && ownTreasure.stealing_started_at
+  const treasureHoldElapsedMs = ownTreasure?.is_stealing && ownTreasure.stealing_started_at
     ? Math.max(0, showGameNow - new Date(ownTreasure.stealing_started_at).getTime()) : 0
+  const liveTreasureUnits = ownTreasure?.is_stealing && ownTreasure.stealing_started_at
+    ? treasureAccruedMs(new Date(ownTreasure.stealing_started_at).getTime(), showGameNow) : 0
+  const treasureWarmingUp = treasureHolding && treasureHoldElapsedMs < TREASURE_WARMUP_MS
   const audienceQuestion = audienceQuestionFromSettings(showGame?.settings)
   const eliminationState = eliminationShowGameState(showGame?.settings)
   const showingInstructions = showGame?.status === 'ready'
@@ -3205,7 +3209,7 @@ function ShowGame() {
                 onPointerDown={() => { if (!treasureGuardAwake) void setTreasureHold(true) }}
                 onPointerUp={() => { void setTreasureHold(false) }} onPointerCancel={() => { void setTreasureHold(false) }} onPointerLeave={() => { if (treasureHolding) void setTreasureHold(false) }}
                 style={{ background: treasureHolding ? C.caution : C.violet, touchAction: 'none' }} className="mt-3 w-full select-none rounded-2xl px-6 py-4 text-xl font-black text-white disabled:opacity-40">
-                {treasureHolding ? 'RELEASE TO BANK' : 'HOLD TO STEAL'}
+                {treasureWarmingUp ? 'KEEP HOLDING…' : treasureHolding ? 'RELEASE TO BANK' : 'HOLD TO STEAL'}
               </button>}
               {(ownTreasure?.caught_count ?? 0) > 0 && <p style={{ color: C.stop }} className="mt-3 text-sm font-bold">Caught {ownTreasure?.caught_count} time{ownTreasure?.caught_count === 1 ? '' : 's'} · that unbanked haul was lost.</p>}
               {exploded && <div className="mt-5"><h2 style={{ color: won ? C.go : C.ink }} className="text-4xl font-black">{won ? 'You won!' : 'Another team stole more'}</h2>{won && <p style={{ color: C.sub }} className="mt-2 text-base font-semibold">{showGameWinnerDetail(reward)}</p>}<p style={{ color: C.sub }} className="mt-2">You banked {((ownTreasure?.banked_units ?? 0) / 1000).toFixed(1)} treasure.</p><div className="mt-5"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}
