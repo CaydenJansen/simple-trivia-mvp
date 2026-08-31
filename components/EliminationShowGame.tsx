@@ -15,6 +15,8 @@ export default function EliminationShowGame({
   choosing = false,
   secondsRemaining = 0,
   choiceCounts = {},
+  choicesByTeam = {},
+  finished = false,
   onChoose,
   onRevealAnimationComplete,
   dark = false,
@@ -28,6 +30,8 @@ export default function EliminationShowGame({
   choosing?: boolean
   secondsRemaining?: number
   choiceCounts?: Record<string, number>
+  choicesByTeam?: Record<string, string>
+  finished?: boolean
   onChoose?: (choice: string) => void
   onRevealAnimationComplete?: (roundNumber: number) => void
   dark?: boolean
@@ -96,6 +100,103 @@ export default function EliminationShowGame({
             </div>
           })}
         </div>)}
+      </div>
+    )
+  }
+
+  if (type === 'scissors-paper-rock') {
+    const revealed = state.roundPhase === 'reveal'
+    const ownMatchup = ownTeamId
+      ? state.matchups.find(matchup => matchup.teamAId === ownTeamId || matchup.teamBId === ownTeamId) ?? null
+      : null
+    const opponentId = ownMatchup && ownTeamId
+      ? ownMatchup.teamAId === ownTeamId ? ownMatchup.teamBId : ownMatchup.teamAId
+      : null
+    const opponent = teams.find(team => team.id === opponentId) ?? null
+    const ownHasBye = Boolean(ownTeamId && state.byeTeamId === ownTeamId)
+    const ownIsAlive = Boolean(ownTeamId && alive.has(ownTeamId))
+    const choices = [
+      { value: 'scissors', emoji: '✂️', label: 'Scissors' },
+      { value: 'paper', emoji: '📄', label: 'Paper' },
+      { value: 'rock', emoji: '🪨', label: 'Rock' },
+    ] as const
+    const remainingTeams = teams.filter(team => alive.has(team.id))
+    const choiceDisplay = (choice: string | undefined) => choices.find(item => item.value === choice)?.emoji ?? '—'
+    const bothAdvance = Boolean(ownIsAlive && opponentId && alive.has(opponentId))
+
+    return (
+      <div className="mx-auto mt-6 w-full max-w-2xl">
+        {ownTeamId ? (
+          <>
+            {ownHasBye ? (
+              <div style={{ background: panel, border: `1px solid ${line}` }} className="rounded-2xl px-5 py-6 text-center">
+                <p className="text-4xl">🍀</p>
+                <h2 style={{ color: text }} className="mt-3 text-2xl font-black">Lucky you!</h2>
+                <p style={{ color: dim }} className="mt-2 text-sm font-semibold leading-6">There aren’t enough teams for you to have an opponent. You’re through to the next round.</p>
+              </div>
+            ) : ownMatchup ? (
+              <>
+                <div style={{ background: panel, border: `1px solid ${line}` }} className="rounded-2xl px-5 py-4 text-center">
+                  <p style={{ color: dim }} className="text-[10px] font-black uppercase tracking-[0.18em]">Your opponent</p>
+                  <p style={{ color: text }} className="mt-1 truncate text-2xl font-black">{opponent?.name ?? 'Another team'}</p>
+                </div>
+                {!revealed && ownIsAlive && <>
+                  <p style={{ color: secondsRemaining <= 2 ? '#EF4444' : dim }} className="mt-4 text-center text-sm font-black">Choose in {secondsRemaining}s</p>
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    {choices.map(choice => <button key={choice.value} type="button" disabled={!canChoose || choosing} onClick={() => onChoose?.(choice.value)}
+                      style={{ background: ownChoice === choice.value ? '#7C3AED' : panel, color: ownChoice === choice.value ? 'white' : text, border: `2px solid ${ownChoice === choice.value ? '#7C3AED' : line}` }}
+                      className="cursor-pointer rounded-2xl px-2 py-4 font-black transition active:scale-95 disabled:opacity-60">
+                      <span className="block text-3xl">{choice.emoji}</span>
+                      <span className="mt-2 block text-xs sm:text-sm">{choice.label}</span>
+                    </button>)}
+                  </div>
+                  <p style={{ color: dim }} className="mt-3 text-xs font-semibold">Your latest choice is locked when the timer reaches zero.</p>
+                </>}
+                {revealed && <div className="mt-5 text-center">
+                  <div style={{ background: panel, border: `1px solid ${line}` }} className="mx-auto mb-4 flex max-w-sm items-center justify-center gap-5 rounded-xl px-4 py-3">
+                    <span style={{ color: text }} className="text-sm font-black">You {choiceDisplay(choicesByTeam[ownTeamId ?? ''])}</span>
+                    <span style={{ color: dim }} className="text-xs font-black">VS</span>
+                    <span style={{ color: text }} className="text-sm font-black">{choiceDisplay(choicesByTeam[opponentId ?? ''])} {opponent?.name ?? 'Opponent'}</span>
+                  </div>
+                  <h2 style={{ color: ownIsAlive ? '#10B981' : '#EF4444' }} className="text-3xl font-black">
+                    {finished ? ownIsAlive ? 'You won!' : 'Another team won' : bothAdvance ? 'You’re both through!' : ownIsAlive ? `You knocked out ${opponent?.name ?? 'the other team'}!` : 'You were eliminated'}
+                  </h2>
+                  <p style={{ color: dim }} className="mt-2 text-sm font-semibold">{finished ? 'Waiting for the host to continue…' : ownIsAlive ? 'The remaining teams will be paired again for the next round.' : 'Watch the remaining teams battle it out.'}</p>
+                </div>}
+              </>
+            ) : (
+              <p style={{ color: dim }} className="text-center text-sm font-bold">Pairing the next round…</p>
+            )}
+
+            {!ownIsAlive && <div style={{ background: panel, border: `1px solid ${line}` }} className="mt-5 rounded-2xl px-4 py-4 text-left">
+              <p style={{ color: dim }} className="text-[10px] font-black uppercase tracking-[0.18em]">Teams remaining · {remainingTeams.length}</p>
+              <div className="mt-3 flex flex-wrap gap-2">{remainingTeams.map(team => <span key={team.id} style={{ color: text, border: `1px solid ${line}` }} className="rounded-full px-3 py-1.5 text-xs font-bold">{team.name}</span>)}</div>
+            </div>}
+          </>
+        ) : (
+          <>
+            <p style={{ color: dim }} className="mb-3 text-center text-sm font-bold">{revealed ? `Round ${state.roundNumber} results` : `Choices lock in ${secondsRemaining}s`}</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {state.matchups.map((matchup, index) => {
+                const teamA = teams.find(team => team.id === matchup.teamAId)
+                const teamB = teams.find(team => team.id === matchup.teamBId)
+                return <div key={`${matchup.teamAId}:${matchup.teamBId}`} style={{ background: panel, border: `1px solid ${line}` }} className="rounded-2xl px-4 py-4 text-left">
+                  <p style={{ color: dim }} className="text-[10px] font-black uppercase tracking-widest">Match {index + 1}</p>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span style={{ color: alive.has(matchup.teamAId) ? text : '#F87171' }} className="min-w-0 flex-1 truncate font-black">{teamA?.name ?? 'Team'}</span>
+                    <span style={{ color: dim }} className="text-xs font-black">VS</span>
+                    <span style={{ color: alive.has(matchup.teamBId) ? text : '#F87171' }} className="min-w-0 flex-1 truncate text-right font-black">{teamB?.name ?? 'Team'}</span>
+                  </div>
+                </div>
+              })}
+              {state.byeTeamId && <div style={{ background: panel, border: `1px solid ${line}` }} className="rounded-2xl px-4 py-4 text-left">
+                <p style={{ color: dim }} className="text-[10px] font-black uppercase tracking-widest">Bye this round</p>
+                <p style={{ color: text }} className="mt-2 truncate font-black">🍀 {teams.find(team => team.id === state.byeTeamId)?.name ?? 'Team'}</p>
+              </div>}
+            </div>
+            <p style={{ color: dim }} className="mt-4 text-center text-sm font-bold">{state.aliveTeamIds.length} team{state.aliveTeamIds.length === 1 ? '' : 's'} remaining</p>
+          </>
+        )}
       </div>
     )
   }

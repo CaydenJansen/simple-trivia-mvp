@@ -539,9 +539,9 @@ export type Database = {
         Relationships: []
       }
       game_show_game_choices: {
-        Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2'; submitted_at: string }
-        Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2'; submitted_at?: string }
-        Update: Partial<{ id: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2'; submitted_at: string }>
+        Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2' | 'scissors' | 'paper' | 'rock'; submitted_at: string }
+        Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2' | 'scissors' | 'paper' | 'rock'; submitted_at?: string }
+        Update: Partial<{ id: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2' | 'scissors' | 'paper' | 'rock'; submitted_at: string }>
         Relationships: []
       }
       game_show_game_audience_private: {
@@ -1173,7 +1173,7 @@ export type Database = {
         Returns: LiveShowGameRow
       }
       submit_elimination_show_game_choice: {
-        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_choice: 'heads' | 'tails' | '0' | '1' | '2' }
+        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_choice: 'heads' | 'tails' | '0' | '1' | '2' | 'scissors' | 'paper' | 'rock' }
         Returns: LiveShowGameRow
       }
       resolve_elimination_show_game: {
@@ -1474,7 +1474,7 @@ type ShowGameRow = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
   title: string
   settings: Json
   created_at: string
@@ -1486,7 +1486,7 @@ type ShowGameInsert = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
+  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
   title: string
   settings?: Json
   created_at?: string

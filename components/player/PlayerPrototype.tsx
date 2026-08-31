@@ -2757,6 +2757,7 @@ function ShowGame() {
   const [bombPresses, setBombPresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [ownChoice, setOwnChoice] = useState<string | null>(null)
   const [choiceCounts, setChoiceCounts] = useState<Record<string, number>>({})
+  const [eliminationChoices, setEliminationChoices] = useState<Record<string, string>>({})
   const [choiceBusy, setChoiceBusy] = useState(false)
   const [audienceResponse, setAudienceResponse] = useState('')
   const [audienceResponseRow, setAudienceResponseRow] = useState<DatabaseAudienceResponse | null>(null)
@@ -2811,7 +2812,8 @@ function ShowGame() {
         counts[item.choice] = (counts[item.choice] ?? 0) + 1
         return counts
       }, {}))
-    } else setChoiceCounts({})
+      setEliminationChoices(Object.fromEntries((roundChoices ?? []).map(item => [item.team_id, item.choice])))
+    } else { setChoiceCounts({}); setEliminationChoices({}) }
     if (activeShowGame && ['audience-question', 'in-show-tiebreaker'].includes(activeShowGame.game_type)) {
       if (audienceShowGameIdRef.current !== activeShowGame.id) {
         audienceShowGameIdRef.current = activeShowGame.id
@@ -2942,7 +2944,7 @@ function ShowGame() {
       p_game_show_game_id: showGame.id,
       p_request_id: requestId,
       p_request_token: requestToken,
-      p_choice: choice as 'heads' | 'tails' | '0' | '1' | '2',
+      p_choice: choice as 'heads' | 'tails' | '0' | '1' | '2' | 'scissors' | 'paper' | 'rock',
     })
     if (choiceError) setError(choiceError.message.includes('CLOSED') ? 'Positions are already locked for this round.' : 'That choice did not go through. Try again.')
     else setOwnChoice(choice)
@@ -3172,6 +3174,8 @@ function ShowGame() {
           choosing={choiceBusy}
           secondsRemaining={eliminationSecondsRemaining}
           choiceCounts={choiceCounts}
+          choicesByTeam={eliminationChoices}
+          finished={exploded}
           onChoose={choice => { void chooseEliminationOption(choice) }}
           onRevealAnimationComplete={handleCoinRevealAnimationComplete}
         /> : isWheel ? <div className="mt-5"><TeamWheel compact teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
@@ -3182,8 +3186,9 @@ function ShowGame() {
               <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible && (eliminationSecondsRemaining > 0 || ownBalloon?.status === 'inflating')} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
             </div>
           : isTreasure ? <div className="mt-6 w-full max-w-sm">
-              {!exploded && <div style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className="mb-4 rounded-full px-4 py-2 text-center text-lg font-black tabular-nums">
-                {eliminationSecondsRemaining}s left
+              {!exploded && <div style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className="mb-4 rounded-2xl px-4 py-3 text-center font-black tabular-nums">
+                <span className="block text-[10px] uppercase tracking-[0.18em]">Time left</span>
+                <span className="mt-0.5 block text-2xl">{eliminationSecondsRemaining}s</span>
               </div>}
               <div className={`mx-auto flex h-28 w-28 items-center justify-center rounded-full text-6xl transition-all duration-150 ${treasureGuardAwake ? 'animate-pulse bg-red-50 ring-4 ring-red-300' : 'bg-emerald-50'}`}>{treasureGuardAwake ? '👁️' : '😴'}</div>
               <p style={{ color: treasureGuardAwake ? C.stop : C.go }} className="mt-3 text-xl font-black">{treasureGuardAwake ? 'GUARD AWAKE · HANDS OFF!' : 'GUARD ASLEEP · STEAL NOW!'}</p>
@@ -3211,12 +3216,12 @@ function ShowGame() {
           </div>}
           {bombPresses.length > 1 && <p style={{ color: C.sub }} className="text-xs font-bold">{bombPresses.length} teams have pressed so far.</p>}
         </div>}
-        {!isAudienceQuestion && !isTreasure && (isElimination && !exploded && (showGame?.game_type !== 'heads-or-tails' || eliminationState.roundPhase !== 'reveal' || coinRevealFinishedRound === eliminationState.roundNumber) ? (
+        {!isAudienceQuestion && !isTreasure && (isElimination && showGame?.game_type !== 'scissors-paper-rock' && !exploded && (showGame?.game_type !== 'heads-or-tails' || eliminationState.roundPhase !== 'reveal' || coinRevealFinishedRound === eliminationState.roundNumber) ? (
           <div className="mt-5">
             <h2 style={{ color: teamIsAlive ? C.go : C.sub }} className="text-xl font-black">{teamIsAlive ? `You’re still in · Round ${eliminationState.roundNumber}` : 'You’re out—watch the survivors'}</h2>
             {eliminationState.roundPhase === 'reveal' && eliminationState.roundEliminatedTeamIds.length === 0 && <p style={{ color: C.sub }} className="mt-2">Nobody was knocked out. Another round is coming.</p>}
           </div>
-        ) : showGameOutcome ? (
+        ) : showGameOutcome && showGame?.game_type !== 'scissors-paper-rock' ? (
           <div className="mt-7">
             <h2 style={{ color: won ? C.go : C.ink }} className="text-4xl font-black">{won ? 'You won!' : isElimination ? 'Another team survived' : isBigBalloon ? 'Another balloon was bigger' : isWheel ? 'Another team was selected' : 'The bomb exploded!'}</h2>
             <p style={{ color: C.sub }} className="mt-3 text-base font-semibold">{won ? showGameWinnerDetail(reward) : (isElimination ? 'Thanks for playing!' : isBigBalloon ? 'Better luck on the next inflation.' : isWheel ? 'Better luck on the next spin.' : 'Another team got the final press this time.')}</p>

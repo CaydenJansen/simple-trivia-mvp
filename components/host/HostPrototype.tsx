@@ -4493,6 +4493,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onCycle
               <optgroup label="Elimination games · multiple rounds">
                 <option value="heads-or-tails">🪙 Heads or Tails</option>
                 <option value="dodge-the-rock">🪨 Dodge the Rock</option>
+                <option value="scissors-paper-rock">✂️ Scissors Paper Rock</option>
               </optgroup>
               <optgroup label="Host-picked games">
                 <option value="audience-question">💬 Audience Question</option>
@@ -8634,7 +8635,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 </div>
               </div>
             ) : isElimination && showGame ? (
-              <EliminationShowGame type={showGame.game_type as EliminationShowGameType} teams={participatingTeams} state={eliminationState} secondsRemaining={eliminationSecondsRemaining} onRevealAnimationComplete={handleCoinRevealAnimationComplete} dark />
+              <EliminationShowGame type={showGame.game_type as EliminationShowGameType} teams={participatingTeams} state={eliminationState} secondsRemaining={eliminationSecondsRemaining} finished={showGame.status === 'exploded'} onRevealAnimationComplete={handleCoinRevealAnimationComplete} dark />
             ) : isBigBalloon ? (
               <BigBalloon teams={participatingTeams} balloons={showGameBalloons} dark />
             ) : isTreasure ? (

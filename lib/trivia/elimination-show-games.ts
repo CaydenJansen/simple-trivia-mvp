@@ -1,7 +1,7 @@
 import type { Json } from '@/lib/supabase/database.types'
 
-export type ShowGameType = 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
-export type EliminationShowGameType = 'heads-or-tails' | 'dodge-the-rock'
+export type ShowGameType = 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'in-show-tiebreaker'
+export type EliminationShowGameType = 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock'
 export type EliminationRoundPhase = 'choosing' | 'reveal'
 export const RANDOM_CHANCE_SHOW_GAME_TYPES = ['spin-the-wheel', 'beat-the-bomb', 'heads-or-tails', 'dodge-the-rock'] as const satisfies readonly ShowGameType[]
 
@@ -21,6 +21,8 @@ export type EliminationShowGameState = {
   roundPhase: EliminationRoundPhase
   roundOutcome: string | null
   positions: Record<string, number>
+  matchups: Array<{ teamAId: string; teamBId: string }>
+  byeTeamId: string | null
 }
 
 function objectSettings(settings: Json | null | undefined): Record<string, Json> {
@@ -34,7 +36,7 @@ function stringArray(value: Json | undefined) {
 }
 
 export function isEliminationShowGame(type: string | null | undefined): type is EliminationShowGameType {
-  return type === 'heads-or-tails' || type === 'dodge-the-rock'
+  return type === 'heads-or-tails' || type === 'dodge-the-rock' || type === 'scissors-paper-rock'
 }
 
 export function eliminationShowGameState(settings: Json | null | undefined): EliminationShowGameState {
@@ -43,6 +45,15 @@ export function eliminationShowGameState(settings: Json | null | undefined): Eli
     ? value.positions as Record<string, Json>
     : {}
   const positions = Object.fromEntries(Object.entries(rawPositions).map(([teamId, lane]) => [teamId, Math.max(0, Math.min(2, Number(lane) || 0))]))
+  const matchups = Array.isArray(value.round_matchups)
+    ? value.round_matchups.flatMap(matchup => {
+        if (!matchup || typeof matchup !== 'object' || Array.isArray(matchup)) return []
+        const row = matchup as Record<string, Json>
+        return typeof row.team_a === 'string' && typeof row.team_b === 'string'
+          ? [{ teamAId: row.team_a, teamBId: row.team_b }]
+          : []
+      })
+    : []
   return {
     eligibleTeamIds: stringArray(value.eligible_team_ids),
     aliveTeamIds: stringArray(value.alive_team_ids),
@@ -52,6 +63,8 @@ export function eliminationShowGameState(settings: Json | null | undefined): Eli
     roundPhase: value.round_phase === 'reveal' ? 'reveal' : 'choosing',
     roundOutcome: typeof value.round_outcome === 'string' ? value.round_outcome : null,
     positions,
+    matchups,
+    byeTeamId: typeof value.round_bye_team_id === 'string' ? value.round_bye_team_id : null,
   }
 }
 
@@ -59,6 +72,7 @@ export function showGameLabel(type: ShowGameType) {
   if (type === 'spin-the-wheel') return 'Spin the Wheel'
   if (type === 'beat-the-bomb') return 'Beat the Bomb'
   if (type === 'heads-or-tails') return 'Heads or Tails'
+  if (type === 'scissors-paper-rock') return 'Scissors Paper Rock'
   if (type === 'big-balloon') return 'Big Balloon'
   if (type === 'steal-the-treasure') return 'Steal the Treasure'
   if (type === 'in-show-tiebreaker') return 'In-show Tiebreaker'
@@ -70,6 +84,7 @@ export function showGameEmoji(type: ShowGameType) {
   if (type === 'spin-the-wheel') return '🎡'
   if (type === 'beat-the-bomb') return '💣'
   if (type === 'heads-or-tails') return '🪙'
+  if (type === 'scissors-paper-rock') return '✂️'
   if (type === 'big-balloon') return '🎈'
   if (type === 'steal-the-treasure') return '💰'
   if (type === 'in-show-tiebreaker') return '🎯'
@@ -81,6 +96,7 @@ export function showGameInstructions(type: ShowGameType) {
   if (type === 'spin-the-wheel') return 'Every joined team is placed on the wheel. It spins, slows down, and randomly selects one winner.'
   if (type === 'beat-the-bomb') return 'Each team can press once. Be the last team to press before the randomly timed bomb explodes.'
   if (type === 'heads-or-tails') return 'Call heads or tails before each flip. Correct teams stay in; the others are knocked out. Flips continue until one team remains.'
+  if (type === 'scissors-paper-rock') return 'Teams are paired head-to-head. Choose scissors, paper, or rock within five seconds. Winners advance, both teams advance on a draw, and an unpaired team gets a bye.'
   if (type === 'big-balloon') return 'Press and hold to inflate your balloon, then release to lock in its size. Push it too far and it pops. The biggest balloon still intact wins.'
   if (type === 'steal-the-treasure') return 'Hold to steal treasure while the guard is asleep, then release to bank it. If the guard catches you holding, that unbanked haul is lost. The most banked treasure wins.'
   if (type === 'in-show-tiebreaker') return 'Everyone submits a numerical answer. The closest answer becomes the latest tie-ordering result without changing anyone\'s score.'
