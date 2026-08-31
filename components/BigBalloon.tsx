@@ -93,7 +93,7 @@ export default function BigBalloon({
 
   if (ownTeamId && own) {
     return (
-      <div className="mt-6 flex w-full max-w-md flex-col items-center">
+      <div className="mt-6 flex w-full max-w-md select-none flex-col items-center" style={{ WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}>
         <style>{BALLOON_KEYFRAMES}</style>
         {showLosingComparison && winner ? <div className="flex h-[240px] w-full items-end justify-center gap-7 pb-4">
           <div className="flex min-w-0 flex-1 flex-col items-center">
@@ -109,10 +109,11 @@ export default function BigBalloon({
           : ownStatus === 'locked' ? <><h2 style={{ color: text }} className="text-2xl font-black">Balloon locked in</h2><p style={{ color: sub }} className="mt-2 font-semibold">Hands off—now see if it’s big enough.</p></>
           : <button
             type="button"
-            onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); onHoldStart?.() }}
+            onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); onHoldStart?.() }}
             onPointerUp={onHoldEnd}
             onPointerCancel={onHoldEnd}
             onContextMenu={event => event.preventDefault()}
+            onDragStart={event => event.preventDefault()}
             disabled={!canInflate}
             style={{ background: holding ? '#be185d' : '#7c3aed', touchAction: 'none', userSelect: 'none' }}
             className="w-full rounded-3xl px-6 py-6 text-xl font-black text-white shadow-xl transition-transform active:scale-[.98] disabled:opacity-40"

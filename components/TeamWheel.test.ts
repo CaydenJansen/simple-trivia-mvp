@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { wheelLandingFraction, wheelSpeedAtElapsed } from './TeamWheel'
+import { shouldAnimateWheelLanding, wheelLandingFraction, wheelSpeedAtElapsed } from './TeamWheel'
 
 describe('wheelLandingFraction', () => {
   it('is deterministic across host and player devices', () => {
@@ -23,5 +23,13 @@ describe('wheelSpeedAtElapsed', () => {
     expect(wheelSpeedAtElapsed(1600)).toBeLessThan(2.9)
     expect(wheelSpeedAtElapsed(2200)).toBe(2.9)
     expect(wheelSpeedAtElapsed(5000)).toBe(2.9)
+  })
+})
+
+describe('shouldAnimateWheelLanding', () => {
+  it('replays the landing after a refresh instead of exposing the result immediately', () => {
+    expect(shouldAnimateWheelLanding(false, 'game:result', null)).toBe(true)
+    expect(shouldAnimateWheelLanding(false, 'game:result', 'game:result')).toBe(false)
+    expect(shouldAnimateWheelLanding(true, 'game:result', 'game:result')).toBe(true)
   })
 })

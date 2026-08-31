@@ -134,6 +134,10 @@ import {
   type AudienceQuestionMode,
 } from "@/lib/trivia/audience-question";
 import { formatNumericResponse } from "@/lib/trivia/numeric-response";
+import {
+  AUTO_BUILD_PREFERENCES_KEY,
+  loadAutoBuildPreferences,
+} from "@/lib/trivia/auto-build-preferences";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -5324,6 +5328,7 @@ function AutoBuild({ go }: { go: Go }) {
   const [allowAdultContent, setAllowAdultContent] = useState(false)
   const [scopeMode, setScopeMode] = useState<AutoBuildScopeMode>('global_only')
   const [audienceLocale, setAudienceLocale] = useState('')
+  const [autoBuildPreferencesLoaded, setAutoBuildPreferencesLoaded] = useState(false)
 
   const startDifficultyDrag = (handle: 'minimum' | 'maximum', event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault()
@@ -5362,6 +5367,63 @@ function AutoBuild({ go }: { go: Go }) {
   const [sourcesError, setSourcesError] = useState<string | null>(null)
   const diffLabels = TRIVIA_DIFFICULTIES
   const allTopics = ['General Knowledge', ...SOURCE_QUESTION_CATEGORIES]
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      let saved = loadAutoBuildPreferences(null)
+      try {
+        saved = loadAutoBuildPreferences(localStorage.getItem(AUTO_BUILD_PREFERENCES_KEY))
+      } catch (error) {
+        console.error('Could not load remembered Auto-Build settings:', error)
+      }
+      setMode(saved.mode)
+      setDiff(saved.difficulty)
+      setQuestionCount(saved.questionCount)
+      setQuestionCountInput(String(saved.questionCount))
+      setRoundCount(saved.roundCount)
+      setIncludeGames(saved.includeGames)
+      setIncludeTiebreaker(saved.includeTiebreaker)
+      setAutoBuildTiebreakerMode(saved.tiebreakerMode)
+      setAutoBuildGameRewardType(saved.gameRewardType)
+      setAutoBuildGameRewardPoints(saved.gameRewardPoints)
+      setAutoBuildGamePrize(saved.gamePrize)
+      setTopics(saved.topics)
+      setAudienceFit(saved.audienceFit)
+      setVibe(saved.vibe)
+      setAllowAdultContent(saved.allowAdultContent)
+      setScopeMode(saved.scopeMode)
+      setAudienceLocale(saved.audienceLocale)
+      setAutoBuildPreferencesLoaded(true)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    if (!autoBuildPreferencesLoaded) return
+    try {
+      localStorage.setItem(AUTO_BUILD_PREFERENCES_KEY, JSON.stringify({
+        mode,
+        difficulty: diff,
+        questionCount,
+        roundCount,
+        includeGames,
+        includeTiebreaker,
+        tiebreakerMode: autoBuildTiebreakerMode,
+        gameRewardType: autoBuildGameRewardType,
+        gameRewardPoints: autoBuildGameRewardPoints,
+        gamePrize: autoBuildGamePrize,
+        topics,
+        audienceFit,
+        vibe,
+        allowAdultContent,
+        scopeMode,
+        audienceLocale,
+      }))
+    } catch (error) {
+      console.error('Could not remember Auto-Build settings:', error)
+    }
+  }, [allowAdultContent, audienceFit, audienceLocale, autoBuildGamePrize, autoBuildGameRewardPoints, autoBuildGameRewardType, autoBuildPreferencesLoaded, autoBuildTiebreakerMode, diff, includeGames, includeTiebreaker, mode, questionCount, roundCount, scopeMode, topics, vibe])
+
   const selectedDifficulties = useMemo(() => TRIVIA_DIFFICULTIES.slice(diff[0], diff[1] + 1), [diff])
   const selectedRoundTopics = useMemo(
     () => mode === 'mixed' ? Array.from({ length: roundCount }, () => null) : topics,
@@ -8604,7 +8666,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   {showGame?.status === 'exploded' && audienceQuestion.mode === 'closest-number' && audienceQuestion.correctNumber !== null && <p className="mt-2 text-sm font-bold text-emerald-400">Correct number: {audienceQuestion.correctNumber}</p>}
                 </div>
                 <div className="mt-4 space-y-2">
-                  {showGame?.status === 'open' && audienceQuestion.mode === 'favourite' && <p style={{ color: C.liveDim }} className="pb-1 text-sm font-bold">Select the answer you want to reward, then confirm it using the button on the right.</p>}
+                  {showGame?.status === 'open' && audienceQuestion.mode === 'favourite' && <p style={{ color: C.liveDim }} className="pb-1 text-sm font-bold">{audienceQuestion.allowMultipleWinners ? 'Select every answer you want to reward, then confirm your winners using the button on the right.' : 'Select the answer you want to reward, then confirm it using the button on the right.'}</p>}
                   {audienceQuestion.mode === 'favourite' && audienceQuestion.shareResponses && audienceResponses.length > 1 && <div className="flex items-center justify-end gap-1 pb-1">
                     <span style={{ color: C.liveDim }} className="mr-1 text-xs font-bold">Order:</span>
                     {(['submitted', 'votes'] as const).map(order => <button key={order} type="button" onClick={() => setAudienceResponseOrder(order)} style={{ background: audienceResponseOrder === order ? `${C.violet}30` : C.livePanel, border: `1px solid ${audienceResponseOrder === order ? C.violet : C.liveLine}`, color: audienceResponseOrder === order ? '#C4B5FD' : C.liveDim }} className="cursor-pointer rounded-lg px-2.5 py-1 text-xs font-black">
@@ -8697,7 +8759,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="shrink-0 space-y-3 p-5">
             <button data-host-navigation="back" disabled style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="w-full cursor-not-allowed rounded-xl py-3 text-sm font-bold opacity-35">← Previous</button>
             <button data-host-navigation="forward" onClick={showingShowGameInstructions ? startPreparedShowGame : isAudienceQuestion && showGame?.status === 'open' ? resolveAudienceQuestion : handleAdvanceShowGame} disabled={actionBusy || (!showingShowGameInstructions && !isAudienceQuestion && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled))) || (isAudienceQuestion && showGame?.status === 'open' && (audienceResponses.length === 0 || (audienceQuestion.mode === 'favourite' && selectedAudienceWinnerIds.length === 0)))} style={{ background: C.violet }} className="w-full rounded-2xl px-5 py-5 text-lg font-extrabold text-white disabled:opacity-35">
-              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : isAudienceQuestion ? showGame?.status === 'exploded' ? 'Continue →' : audienceQuestion.mode === 'favourite' ? selectedAudienceWinnerIds.length > 0 ? 'Confirm selected winner →' : 'Select an answer above' : 'Find closest guess →' : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isBigBalloon ? 'Balloons inflating…' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
+              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : isAudienceQuestion ? showGame?.status === 'exploded' ? 'Continue →' : audienceQuestion.mode === 'favourite' ? selectedAudienceWinnerIds.length > 0 ? `Confirm selected winner${selectedAudienceWinnerIds.length === 1 ? '' : 's'} →` : 'Select an answer above' : 'Find closest guess →' : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isBigBalloon ? 'Balloons inflating…' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : 'Waiting for the bomb…'}
             </button>
           </div>
         </aside>

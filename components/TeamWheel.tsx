@@ -35,6 +35,10 @@ export function wheelSpeedAtElapsed(elapsedMs: number) {
   return maximumSpeed * eased
 }
 
+export function shouldAnimateWheelLanding(wasSpinning: boolean, landingKey: string | null, settledLandingKey: string | null) {
+  return wasSpinning || Boolean(landingKey && landingKey !== settledLandingKey)
+}
+
 export default function TeamWheel({ teamNames, spinning = false, winnerName = null, landingKey = null, dark = false, compact = false, onSettled }: TeamWheelProps) {
   // Every device derives the same slice order, independent of Realtime row order.
   const names = teamNames.length > 0
@@ -50,6 +54,7 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
   const wasSpinningRef = useRef(false)
   const spinStartedAtRef = useRef<number | null>(null)
   const spinKeyRef = useRef<string | null>(null)
+  const settledLandingKeyRef = useRef<string | null>(null)
   const [selectedName, setSelectedName] = useState(names[0])
   const background = names.map((_, index) => {
     const start = index * slice
@@ -93,7 +98,7 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
       const current = rotationRef.current
       const currentMod = ((current % 360) + 360) % 360
       const targetMod = ((restingRotation % 360) + 360) % 360
-      const shouldSettle = wasSpinningRef.current
+      const shouldSettle = shouldAnimateWheelLanding(wasSpinningRef.current, landingKey, settledLandingKeyRef.current)
       const duration = 8000
       const cruisingSpeed = 2.9
       // A cubic ease starts at 3 * distance / duration. Choose the number of
@@ -118,6 +123,7 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
           if (progress < 1) frame = requestAnimationFrame(settle)
           else {
             setSelectedName(animatedNames[winnerIndex])
+            settledLandingKeyRef.current = landingKey
             if (!cancelled) onSettled?.()
           }
         }
