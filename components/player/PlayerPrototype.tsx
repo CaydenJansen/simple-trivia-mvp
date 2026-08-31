@@ -3117,7 +3117,10 @@ function ShowGame() {
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={showGame ? `Round ${showGame.round_number}` : ''} question={isInShowTiebreaker ? 'Tiebreaker' : 'Game'} />
-      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8 text-center">
+      <div
+        className={`flex flex-1 flex-col items-center justify-center overflow-x-hidden overflow-y-auto px-6 text-center ${isTreasure ? 'py-4' : 'py-8'}`}
+        style={{ scrollbarGutter: 'stable' }}
+      >
         <h1 style={{ color: C.ink }} className="text-3xl font-black">{showGame?.title ?? (showGame ? showGameLabel(showGame.game_type) : 'Game')}</h1>
         <p style={{ color: C.sub }} className="mt-3 max-w-sm text-base font-semibold">{isInShowTiebreaker ? 'This result only orders teams who finish on equal scores. It does not add points.' : showGameRewardDescription(reward)}</p>
         {showingInstructions ? (
@@ -3181,30 +3184,27 @@ function ShowGame() {
           onRevealAnimationComplete={handleCoinRevealAnimationComplete}
         /> : isWheel ? <div className="mt-5"><TeamWheel compact teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
           : isBigBalloon ? <div className="mt-5 w-full max-w-sm">
-              {!exploded && !balloonHolding && ownBalloon?.status !== 'inflating' && ownBalloon?.status !== 'locked' && ownBalloon?.status !== 'popped' && <div style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className="mb-4 rounded-full px-4 py-2 text-center text-lg font-black tabular-nums">
+              {!exploded && <div aria-hidden={balloonHolding || ownBalloon?.status === 'inflating' || ownBalloon?.status === 'locked' || ownBalloon?.status === 'popped'} style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className={`mb-4 min-h-11 rounded-full px-4 py-2 text-center text-lg font-black tabular-nums ${balloonHolding || ownBalloon?.status === 'inflating' || ownBalloon?.status === 'locked' || ownBalloon?.status === 'popped' ? 'invisible' : ''}`}>
                 {eliminationSecondsRemaining > 0 ? `${eliminationSecondsRemaining}s to start` : 'Start window closed'}
               </div>}
               <BigBalloon teams={wheelTeams} balloons={balloons} ownTeamId={teamId} winnerTeamId={exploded ? showGame?.winner_team_id : null} canInflate={showGame?.status === 'open' && teamIsEligible && (eliminationSecondsRemaining > 0 || ownBalloon?.status === 'inflating')} holding={balloonHolding} onHoldStart={startBalloonHold} onHoldEnd={() => { void stopBalloonHold() }} />
             </div>
-          : isTreasure ? <div className="mt-6 w-full max-w-sm">
-              {!exploded && <div style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className="mb-4 rounded-2xl px-4 py-3 text-center font-black tabular-nums">
-                <span className="block text-[10px] uppercase tracking-[0.18em]">Time left</span>
-                <span className="mt-0.5 block text-2xl">{eliminationSecondsRemaining}s</span>
+          : isTreasure ? <div className="mt-3 w-full max-w-sm">
+              {!exploded && <div style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className="mb-3 flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-center font-black tabular-nums">
+                <span className="text-[10px] uppercase tracking-[0.16em]">Time left</span>
+                <span className="text-xl">{eliminationSecondsRemaining}s</span>
               </div>}
-              <div className={`mx-auto flex h-28 w-28 items-center justify-center rounded-full text-6xl transition-all duration-150 ${treasureGuardAwake ? 'animate-pulse bg-red-50 ring-4 ring-red-300' : 'bg-emerald-50'}`}>{treasureGuardAwake ? '👁️' : '😴'}</div>
-              <p style={{ color: treasureGuardAwake ? C.stop : C.go }} className="mt-3 text-xl font-black">{treasureGuardAwake ? 'GUARD AWAKE · HANDS OFF!' : 'GUARD ASLEEP · STEAL NOW!'}</p>
-              <div style={{ background: C.violetPale, border: `1px solid ${C.violet}40` }} className="mt-5 rounded-2xl px-4 py-3 text-center">
-                <p style={{ color: C.sub }} className="text-[10px] font-black uppercase tracking-[0.16em]">Current winning score</p>
-                <p style={{ color: C.violet }} className="mt-1 text-3xl font-black tabular-nums">{(currentWinningTreasureUnits / 1000).toFixed(1)} 💰</p>
-              </div>
-              <div className="mt-5 grid grid-cols-2 gap-3">
-                <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-4"><p style={{ color: C.sub }} className="text-xs font-black uppercase">Banked</p><p style={{ color: C.go }} className="mt-1 text-2xl font-black tabular-nums">{((ownTreasure?.banked_units ?? 0) / 1000).toFixed(1)}</p></div>
-                <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-4"><p style={{ color: C.sub }} className="text-xs font-black uppercase">At risk</p><p style={{ color: C.caution }} className="mt-1 text-2xl font-black tabular-nums">{(liveTreasureUnits / 1000).toFixed(1)}</p></div>
+              <div className={`mx-auto flex h-20 w-20 items-center justify-center rounded-full text-5xl transition-all duration-150 ${treasureGuardAwake ? 'animate-pulse bg-red-50 ring-4 ring-red-300' : 'bg-emerald-50'}`}>{treasureGuardAwake ? '👁️' : '😴'}</div>
+              <p style={{ color: treasureGuardAwake ? C.stop : C.go }} className="mt-2 text-base font-black">{treasureGuardAwake ? 'GUARD AWAKE · HANDS OFF!' : 'GUARD ASLEEP · STEAL NOW!'}</p>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <div style={{ background: C.violetPale, border: `1px solid ${C.violet}40` }} className="rounded-xl px-2 py-2.5"><p style={{ color: C.sub }} className="text-[9px] font-black uppercase tracking-wide">Winning</p><p style={{ color: C.violet }} className="mt-1 text-lg font-black tabular-nums">{(currentWinningTreasureUnits / 1000).toFixed(1)}</p></div>
+                <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-xl px-2 py-2.5"><p style={{ color: C.sub }} className="text-[9px] font-black uppercase tracking-wide">Banked</p><p style={{ color: C.go }} className="mt-1 text-lg font-black tabular-nums">{((ownTreasure?.banked_units ?? 0) / 1000).toFixed(1)}</p></div>
+                <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-xl px-2 py-2.5"><p style={{ color: C.sub }} className="text-[9px] font-black uppercase tracking-wide">At risk</p><p style={{ color: C.caution }} className="mt-1 text-lg font-black tabular-nums">{(liveTreasureUnits / 1000).toFixed(1)}</p></div>
               </div>
               {!exploded && <button type="button" disabled={treasureGuardAwake || !teamIsEligible}
                 onPointerDown={() => { if (!treasureGuardAwake) void setTreasureHold(true) }}
                 onPointerUp={() => { void setTreasureHold(false) }} onPointerCancel={() => { void setTreasureHold(false) }} onPointerLeave={() => { if (treasureHolding) void setTreasureHold(false) }}
-                style={{ background: treasureHolding ? C.caution : C.violet, touchAction: 'none' }} className="mt-5 w-full select-none rounded-2xl px-6 py-5 text-xl font-black text-white disabled:opacity-40">
+                style={{ background: treasureHolding ? C.caution : C.violet, touchAction: 'none' }} className="mt-3 w-full select-none rounded-2xl px-6 py-4 text-xl font-black text-white disabled:opacity-40">
                 {treasureHolding ? 'RELEASE TO BANK' : 'HOLD TO STEAL'}
               </button>}
               {(ownTreasure?.caught_count ?? 0) > 0 && <p style={{ color: C.stop }} className="mt-3 text-sm font-bold">Caught {ownTreasure?.caught_count} time{ownTreasure?.caught_count === 1 ? '' : 's'} · that unbanked haul was lost.</p>}

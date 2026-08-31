@@ -132,8 +132,8 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
   }, [landingKey, namesKey, onSettled, restingRotation, slice, spinning, winnerIndex])
 
   return (
-    <div className="flex flex-col items-center">
-      <div style={{ background: dark ? '#211A38' : '#F3EEFF', color: dark ? '#F4F1FF' : '#4C1D95' }} className={`${compact ? 'mb-3 max-w-xs px-4 py-2' : 'mb-5 max-w-sm px-5 py-3'} w-full rounded-2xl text-center shadow-sm`}>
+    <div className={`flex flex-col items-center ${compact ? 'w-52 sm:w-60' : 'w-64 sm:w-72'}`}>
+      <div style={{ background: dark ? '#211A38' : '#F3EEFF', color: dark ? '#F4F1FF' : '#4C1D95' }} className={`${compact ? 'mb-3 px-4 py-2' : 'mb-5 px-5 py-3'} w-full rounded-2xl text-center shadow-sm`}>
         <p className={`${compact ? 'text-base' : 'text-xl'} truncate font-black`}>{selectedName}</p>
       </div>
       <div className={`relative ${compact ? 'h-52 w-52 sm:h-60 sm:w-60' : 'h-64 w-64 sm:h-72 sm:w-72'}`}>

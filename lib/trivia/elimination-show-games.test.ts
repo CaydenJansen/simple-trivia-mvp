@@ -27,8 +27,8 @@ describe('elimination show games', () => {
     expect(showGameInstructions('heads-or-tails')).toContain('until one team remains')
     expect(showGameInstructions('dodge-the-rock')).toContain('last one standing')
     expect(showGameInstructions('scissors-paper-rock')).toContain('ten-second timer')
-    expect(showGameInstructions('scissors-paper-rock')).toContain('If it’s a draw, you both advance')
-    expect(showGameInstructions('scissors-paper-rock')).toContain('until one team remains')
+    expect(showGameInstructions('scissors-paper-rock')).toContain('draws send both teams through')
+    expect(showGameInstructions('scissors-paper-rock')).not.toContain('unpaired')
   })
 
   it('describes Audience Question as a host-picked interaction', () => {
