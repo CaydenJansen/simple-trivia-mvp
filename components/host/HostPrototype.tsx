@@ -6933,7 +6933,7 @@ function AutoBuild({ go }: { go: Go }) {
                     <option value="guys_wearing_hats">Guys wearing hats</option>
                     <option value="oh_look_a_butterfly">Oh look, a butterfly!</option>
                     <option value="uber_dweeb">Uber Dweeb</option>
-                    <option value="pop_head">Pop Girly</option>
+                    <option value="pop_head">Pop Culture Girly</option>
                   </select>
                   {vibe === 'uber_dweeb' && <p style={{ color: C.sub }} className="mt-2 text-xs leading-5">Geography, history, science, chemistry and classic hard-trivia subjects.</p>}
                   {vibe === 'pop_head' && <p style={{ color: C.sub }} className="mt-2 text-xs leading-5">Pop culture, movies, television, music, celebrities and entertainment.</p>}
