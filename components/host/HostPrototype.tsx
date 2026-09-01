@@ -1704,6 +1704,32 @@ function QuizCard({ q, go, duplicating, onRename, onDuplicate, onDelete }: {
 
 type QuizTemplateRow = Database['public']['Tables']['quiz_templates']['Row']
 type TemplateSourceQuiz = Pick<Database['public']['Tables']['quizzes']['Row'], 'id' | 'title' | 'round_count' | 'question_count' | 'estimated_minutes' | 'updated_at'>
+type TemplateQuestionSlot = {
+  question_key: string
+  position: number
+  item_position: number
+  round_number: number
+  round_position: number
+  round_question_count: number
+  round_title: string
+  question_type: string
+  category: string | null
+  difficulty: string | null
+  source_question_id: string | null
+}
+type TemplateContentItem = { screen_key: string; item_position: number; round_number: number; round_title: string; title: string; body: string; image_url: string | null }
+type TemplateGameItem = { show_game_key: string; item_position: number; round_number: number; round_title: string; game_type: string; title: string; settings: Json }
+type TemplateTiebreakerItem = { tiebreaker_key: string; position: number; prompt: string; correct_value: number; answer_unit: string | null; notes: string | null }
+type TemplateStructure = {
+  version: 1
+  status: 'draft' | 'ready'
+  estimatedMinutes: number
+  rounds: { number: number; title: string }[]
+  questions: TemplateQuestionSlot[]
+  contentScreens: TemplateContentItem[]
+  showGames: TemplateGameItem[]
+  tiebreakers: TemplateTiebreakerItem[]
+}
 type TemplatePreviewItem = {
   id: string
   kind: 'question' | 'content' | 'game'
@@ -1714,23 +1740,85 @@ type TemplatePreviewItem = {
   detail?: string
 }
 
+function templateStructureFromJson(value: Json | null): TemplateStructure | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const structure = value as Record<string, Json | undefined>
+  if (structure.version !== 1 || !Array.isArray(structure.rounds) || !Array.isArray(structure.questions) || !Array.isArray(structure.contentScreens) || !Array.isArray(structure.showGames) || !Array.isArray(structure.tiebreakers)) return null
+  return value as unknown as TemplateStructure
+}
+
+function normalizedTemplateStructure(structure: TemplateStructure): TemplateStructure {
+  const sourceRounds = [...structure.rounds].sort((left, right) => left.number - right.number)
+  const rounds = sourceRounds
+    .map((round, index) => ({ number: index + 1, title: round.title.trim() || `Round ${index + 1}` }))
+  let globalItemPosition = 0
+  let globalQuestionPosition = 0
+  const questions: TemplateQuestionSlot[] = []
+  const contentScreens: TemplateContentItem[] = []
+  const showGames: TemplateGameItem[] = []
+  for (const [roundIndex, round] of rounds.entries()) {
+    const sourceRoundNumber = sourceRounds[roundIndex]?.number ?? round.number
+    const items = [
+      ...structure.questions.filter(item => item.round_number === sourceRoundNumber).map(item => ({ kind: 'question' as const, position: item.item_position, item })),
+      ...structure.contentScreens.filter(item => item.round_number === sourceRoundNumber).map(item => ({ kind: 'content' as const, position: item.item_position, item })),
+      ...structure.showGames.filter(item => item.round_number === sourceRoundNumber).map(item => ({ kind: 'game' as const, position: item.item_position, item })),
+    ].sort((left, right) => left.position - right.position)
+    const questionCount = items.filter(item => item.kind === 'question').length
+    let roundQuestionPosition = 0
+    for (const entry of items) {
+      globalItemPosition += 1
+      if (entry.kind === 'question') {
+        globalQuestionPosition += 1
+        roundQuestionPosition += 1
+        questions.push({ ...entry.item, position: globalQuestionPosition, item_position: globalItemPosition, round_number: round.number, round_position: roundQuestionPosition, round_question_count: questionCount, round_title: round.title })
+      } else if (entry.kind === 'content') contentScreens.push({ ...entry.item, item_position: globalItemPosition, round_number: round.number, round_title: round.title })
+      else showGames.push({ ...entry.item, item_position: globalItemPosition, round_number: round.number, round_title: round.title })
+    }
+  }
+  return { ...structure, rounds, questions, contentScreens, showGames, tiebreakers: structure.tiebreakers.map((item, index) => ({ ...item, position: index + 1 })) }
+}
+
+async function templateStructureFromSource(sourceQuizId: string): Promise<TemplateStructure> {
+  const [quizResult, questionResult, contentResult, gameResult, tiebreakerResult] = await Promise.all([
+    supabase.from('quizzes').select('status,estimated_minutes').eq('id', sourceQuizId).single(),
+    supabase.from('quiz_questions').select('question_key,position,item_position,round_number,round_position,round_question_count,round_title,question_type,category,difficulty,source_question_id').eq('quiz_id', sourceQuizId).order('position'),
+    supabase.from('quiz_content_screens').select('screen_key,item_position,round_number,round_title,title,body,image_url').eq('quiz_id', sourceQuizId).order('item_position'),
+    supabase.from('quiz_show_games').select('show_game_key,item_position,round_number,round_title,game_type,title,settings').eq('quiz_id', sourceQuizId).order('item_position'),
+    supabase.from('quiz_tiebreakers').select('tiebreaker_key,position,prompt,correct_value,answer_unit,notes').eq('quiz_id', sourceQuizId).order('position'),
+  ])
+  const loadError = quizResult.error ?? questionResult.error ?? contentResult.error ?? gameResult.error ?? tiebreakerResult.error
+  if (loadError || !quizResult.data) throw new Error('Could not load that quiz structure.')
+  const allRoundItems = [...(questionResult.data ?? []), ...(contentResult.data ?? []), ...(gameResult.data ?? [])]
+  const roundTitles = new Map<number, string>()
+  allRoundItems.forEach(item => roundTitles.set(item.round_number, item.round_title))
+  return normalizedTemplateStructure({
+    version: 1,
+    status: quizResult.data.status === 'ready' ? 'ready' : 'draft',
+    estimatedMinutes: quizResult.data.estimated_minutes,
+    rounds: [...roundTitles].sort(([left], [right]) => left - right).map(([number, title]) => ({ number, title })),
+    questions: (questionResult.data ?? []) as TemplateQuestionSlot[],
+    contentScreens: (contentResult.data ?? []) as TemplateContentItem[],
+    showGames: (gameResult.data ?? []) as TemplateGameItem[],
+    tiebreakers: (tiebreakerResult.data ?? []) as TemplateTiebreakerItem[],
+  })
+}
+
+async function loadTemplateStructure(template: QuizTemplateRow) {
+  return templateStructureFromJson(template.structure) ?? templateStructureFromSource(template.source_quiz_id)
+}
+
 async function buildQuizFromTemplate(template: QuizTemplateRow) {
-  const [quizResult, questionResult, contentResult, gameResult, tiebreakerResult, libraryResult] = await Promise.all([
-    supabase.from('quizzes').select('title,status,estimated_minutes').eq('id', template.source_quiz_id).single(),
-    supabase.from('quiz_questions').select('question_key,position,item_position,round_number,round_position,round_question_count,round_title,prompt,category,difficulty,question_type,correct_answer,accepted_answers,options,tags,image_url,points_max,bonus,metadata_snapshot,notes,source_question_id,source_revision').eq('quiz_id', template.source_quiz_id).order('position'),
-    supabase.from('quiz_content_screens').select('screen_key,item_position,round_number,round_title,title,body,image_url').eq('quiz_id', template.source_quiz_id).order('item_position'),
-    supabase.from('quiz_show_games').select('show_game_key,item_position,round_number,round_title,game_type,title,settings').eq('quiz_id', template.source_quiz_id).order('item_position'),
-    supabase.from('quiz_tiebreakers').select('tiebreaker_key,position,prompt,correct_value,answer_unit,notes').eq('quiz_id', template.source_quiz_id).order('position'),
+  const [structure, libraryResult] = await Promise.all([
+    loadTemplateStructure(template),
     supabase.from('source_question_catalog').select('*').eq('status', 'active').eq('is_verified', true).range(0, 1999),
   ])
-  const loadError = quizResult.error ?? questionResult.error ?? contentResult.error ?? gameResult.error ?? tiebreakerResult.error ?? libraryResult.error
-  if (loadError || !quizResult.data) throw new Error('Could not load that template. Please try again.')
+  if (libraryResult.error) throw new Error('Could not load that template. Please try again.')
 
   const library = (libraryResult.data ?? []) as PickerSourceQuestion[]
-  const used = new Set((questionResult.data ?? []).map(question => question.source_question_id).filter(Boolean))
+  const used = new Set(structure.questions.map(question => question.source_question_id).filter(Boolean))
   const chosen = new Set<string>()
   const replacements: Json[] = []
-  for (const original of questionResult.data ?? []) {
+  for (const original of structure.questions) {
     const candidates = library.filter(candidate => candidate.question_type === original.question_type && !used.has(candidate.id) && !chosen.has(candidate.id))
     if (candidates.length === 0) throw new Error(`The Question Library does not have enough unused ${questionTypeLabel(original.question_type)} questions for this template.`)
     const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
@@ -1762,12 +1850,12 @@ async function buildQuizFromTemplate(template: QuizTemplateRow) {
   const { data: quizId, error: saveError } = await supabase.rpc('save_quiz_with_show_games', {
     p_quiz_id: null,
     p_title: nextTitle,
-    p_status: quizResult.data.status,
-    p_estimated_minutes: quizResult.data.estimated_minutes,
+    p_status: structure.status,
+    p_estimated_minutes: structure.estimatedMinutes,
     p_questions: replacements,
-    p_content_screens: (contentResult.data ?? []) as Json,
-    p_tiebreakers: (tiebreakerResult.data ?? []) as Json,
-    p_show_games: (gameResult.data ?? []) as Json,
+    p_content_screens: structure.contentScreens as unknown as Json,
+    p_tiebreakers: structure.tiebreakers as unknown as Json,
+    p_show_games: structure.showGames as unknown as Json,
   })
   if (saveError || !quizId) throw new Error('Could not create a show from that template.')
   return { quizId, title: nextTitle }
@@ -1793,6 +1881,9 @@ function TemplatesScreen({ go }: { go: Go }) {
   const [quizPickerOpen, setQuizPickerOpen] = useState(false)
   const [availableQuizzes, setAvailableQuizzes] = useState<TemplateSourceQuiz[]>([])
   const [quizPickerLoading, setQuizPickerLoading] = useState(false)
+  const [editingTemplate, setEditingTemplate] = useState<QuizTemplateRow | null>(null)
+  const [templateDraft, setTemplateDraft] = useState<TemplateStructure | null>(null)
+  const [templateEditorLoading, setTemplateEditorLoading] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -1858,14 +1949,10 @@ function TemplatesScreen({ go }: { go: Go }) {
     setPreviewBackups(0)
     setPreviewLoading(true)
     setError(null)
-    const [questions, content, games, backups] = await Promise.all([
-      supabase.from('quiz_questions').select('question_key,item_position,round_number,round_title,question_type,category').eq('quiz_id', template.source_quiz_id),
-      supabase.from('quiz_content_screens').select('screen_key,item_position,round_number,round_title,title,body').eq('quiz_id', template.source_quiz_id),
-      supabase.from('quiz_show_games').select('show_game_key,item_position,round_number,round_title,title,game_type').eq('quiz_id', template.source_quiz_id),
-      supabase.from('quiz_tiebreakers').select('id', { count: 'exact', head: true }).eq('quiz_id', template.source_quiz_id),
-    ])
-    const previewError = questions.error ?? content.error ?? games.error ?? backups.error
-    if (previewError) {
+    let structure: TemplateStructure
+    try {
+      structure = await loadTemplateStructure(template)
+    } catch (previewError) {
       console.error('Could not preview template:', previewError)
       setError('Could not load that template structure.')
       setPreviewTemplate(null)
@@ -1873,7 +1960,7 @@ function TemplatesScreen({ go }: { go: Go }) {
       return
     }
     setPreviewItems([
-      ...(questions.data ?? []).map(item => ({
+      ...structure.questions.map(item => ({
         id: item.question_key,
         kind: 'question' as const,
         roundNumber: item.round_number,
@@ -1882,7 +1969,7 @@ function TemplatesScreen({ go }: { go: Go }) {
         label: 'Question will be here',
         detail: `${questionTypeLabel(item.question_type)}${item.category ? ` · ${item.category}` : ''}`,
       })),
-      ...(content.data ?? []).map(item => ({
+      ...structure.contentScreens.map(item => ({
         id: item.screen_key,
         kind: 'content' as const,
         roundNumber: item.round_number,
@@ -1891,18 +1978,57 @@ function TemplatesScreen({ go }: { go: Go }) {
         label: item.title,
         detail: item.body || 'Content screen',
       })),
-      ...(games.data ?? []).map(item => ({
+      ...structure.showGames.map(item => ({
         id: item.show_game_key,
         kind: 'game' as const,
         roundNumber: item.round_number,
         roundTitle: item.round_title,
         itemPosition: item.item_position,
         label: item.title,
-        detail: showGameLabel(item.game_type),
+        detail: showGameLabel(item.game_type as ShowGameType),
       })),
     ].sort((a, b) => a.roundNumber - b.roundNumber || a.itemPosition - b.itemPosition))
-    setPreviewBackups(backups.count ?? 0)
+    setPreviewBackups(structure.tiebreakers.length)
     setPreviewLoading(false)
+  }
+
+  async function editTemplate(template: QuizTemplateRow) {
+    setEditingTemplate(template)
+    setTemplateDraft(null)
+    setTemplateEditorLoading(true)
+    setError(null)
+    try {
+      setTemplateDraft(await loadTemplateStructure(template))
+    } catch (editError) {
+      console.error('Could not edit template:', editError)
+      setError('Could not load that template for editing.')
+      setEditingTemplate(null)
+    }
+    setTemplateEditorLoading(false)
+  }
+
+  async function saveTemplateDraft(structure: TemplateStructure) {
+    if (!editingTemplate || busyId) return
+    const normalized = normalizedTemplateStructure({
+      ...structure,
+      estimatedMinutes: estimatedQuizMinutes(structure.questions.length, 0, structure.showGames.filter(game => game.game_type !== 'in-show-tiebreaker').length),
+    })
+    setBusyId(editingTemplate.id)
+    setError(null)
+    const { data, error: updateError } = await supabase.from('quiz_templates')
+      .update({ structure: normalized as unknown as Json, updated_at: new Date().toISOString() })
+      .eq('id', editingTemplate.id)
+      .select('*')
+      .single()
+    if (updateError || !data) {
+      console.error('Could not save template structure:', updateError)
+      setError('Could not save those template changes. Please try again.')
+    } else {
+      setTemplates(current => current.map(item => item.id === data.id ? data : item))
+      setEditingTemplate(null)
+      setTemplateDraft(null)
+    }
+    setBusyId(null)
   }
 
   async function openQuizPicker() {
@@ -1926,9 +2052,18 @@ function TemplatesScreen({ go }: { go: Go }) {
     if (!name || busyId) return
     setBusyId(quiz.id)
     setError(null)
+    let structure: TemplateStructure
+    try {
+      structure = await templateStructureFromSource(quiz.id)
+    } catch (structureError) {
+      console.error('Could not snapshot quiz template structure:', structureError)
+      setError('Could not prepare that quiz as a template. Please try again.')
+      setBusyId(null)
+      return
+    }
     const { data, error: saveError } = await supabase
       .from('quiz_templates')
-      .upsert({ name, source_quiz_id: quiz.id, updated_at: new Date().toISOString() }, { onConflict: 'owner_id,name' })
+      .upsert({ name, source_quiz_id: quiz.id, structure: structure as unknown as Json, updated_at: new Date().toISOString() }, { onConflict: 'owner_id,name' })
       .select('*')
       .single()
     if (saveError || !data) {
@@ -1965,15 +2100,20 @@ function TemplatesScreen({ go }: { go: Go }) {
         </div>
       ) : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{templates.map(template => {
         const quiz = quizDetails[template.source_quiz_id]
+        const savedStructure = templateStructureFromJson(template.structure)
+        const roundCount = savedStructure?.rounds.length ?? quiz?.round_count
+        const questionCount = savedStructure?.questions.length ?? quiz?.question_count
+        const estimatedMinutes = savedStructure?.estimatedMinutes ?? quiz?.estimated_minutes
         return <article key={template.id} style={{ background: C.panel, border: `1px solid ${C.line}` }} className="flex min-h-52 flex-col rounded-2xl p-5 shadow-sm">
           <p style={{ color: C.violet }} className="text-[10px] font-extrabold uppercase tracking-wider">Show Template</p>
           <h2 style={{ color: C.ink }} className="mt-2 text-lg font-extrabold">{template.name}</h2>
           <p style={{ color: C.sub }} className="mt-1 text-xs">Based on {quiz?.title ?? 'saved quiz'}</p>
-          {quiz && <p style={{ color: C.sub }} className="mt-4 text-sm">{quiz.round_count} rounds · {quiz.question_count} questions · ~{quiz.estimated_minutes} min</p>}
+          {roundCount !== undefined && questionCount !== undefined && estimatedMinutes !== undefined && <p style={{ color: C.sub }} className="mt-4 text-sm">{roundCount} rounds · {questionCount} question slots · ~{estimatedMinutes} min</p>}
           <div className="mt-auto flex items-center gap-2 pt-5">
             <Btn sz="sm" cls="flex-1 justify-center" disabled={Boolean(busyId)} onClick={() => void createShowFromTemplate(template)}>{busyId === template.id ? 'Building…' : 'Use Template'}</Btn>
-            <Btn sz="sm" v="secondary" onClick={() => void viewTemplate(template)}>View</Btn>
-            <IBtn icon={<I.pencil />} title="Rename template" onClick={() => void renameTemplate(template)} />
+            <Btn sz="sm" v="secondary" onClick={() => void editTemplate(template)}>Edit</Btn>
+            <IBtn icon={<I.browse />} title="View template structure" onClick={() => void viewTemplate(template)} />
+            <button type="button" title="Rename template" onClick={() => void renameTemplate(template)} style={{ color: C.sub }} className="rounded-lg px-2 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Rename</button>
             <IBtn icon={<I.trash />} title="Delete template" onClick={() => void deleteTemplate(template)} danger />
           </div>
         </article>
@@ -2016,6 +2156,181 @@ function TemplatesScreen({ go }: { go: Go }) {
         </div>
       </section>
     </div>}
+    {editingTemplate && <TemplateStructureEditor
+      template={editingTemplate}
+      structure={templateDraft}
+      loading={templateEditorLoading}
+      saving={busyId === editingTemplate.id}
+      onClose={() => { setEditingTemplate(null); setTemplateDraft(null) }}
+      onSave={structure => void saveTemplateDraft(structure)}
+    />}
+  </div>
+}
+
+const TEMPLATE_EDITOR_GAME_TYPES: ShowGameType[] = [
+  'spin-the-wheel',
+  'beat-the-bomb',
+  'heads-or-tails',
+  'dodge-the-rock',
+  'scissors-paper-rock',
+  'big-balloon',
+  'steal-the-treasure',
+]
+
+const TEMPLATE_QUESTION_TYPES = ['single-answer', 'multiple-choice', 'multi-answer', 'multi-part', 'ranking', 'image-question'] as const
+
+function TemplateStructureEditor({ template, structure, loading, saving, onClose, onSave }: {
+  template: QuizTemplateRow
+  structure: TemplateStructure | null
+  loading: boolean
+  saving: boolean
+  onClose: () => void
+  onSave: (structure: TemplateStructure) => void
+}) {
+  const [draft, setDraft] = useState<TemplateStructure | null>(structure)
+
+  useEffect(() => {
+    // The structure is loaded asynchronously after the editor shell opens.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDraft(structure)
+  }, [structure])
+
+  function allItemPositions(current: TemplateStructure) {
+    return [...current.questions.map(item => item.item_position), ...current.contentScreens.map(item => item.item_position), ...current.showGames.map(item => item.item_position)]
+  }
+
+  function moveItem(roundNumber: number, key: string, direction: -1 | 1) {
+    setDraft(current => {
+      if (!current) return current
+      const items = [
+        ...current.questions.filter(item => item.round_number === roundNumber).map(item => ({ kind: 'question' as const, key: item.question_key, position: item.item_position })),
+        ...current.contentScreens.filter(item => item.round_number === roundNumber).map(item => ({ kind: 'content' as const, key: item.screen_key, position: item.item_position })),
+        ...current.showGames.filter(item => item.round_number === roundNumber).map(item => ({ kind: 'game' as const, key: item.show_game_key, position: item.item_position })),
+      ].sort((left, right) => left.position - right.position)
+      const index = items.findIndex(item => `${item.kind}:${item.key}` === key)
+      const target = items[index + direction]
+      const source = items[index]
+      if (!source || !target) return current
+      const swap = (itemKey: string, position: number) => itemKey === key ? target.position : itemKey === `${target.kind}:${target.key}` ? source.position : position
+      return {
+        ...current,
+        questions: current.questions.map(item => ({ ...item, item_position: swap(`question:${item.question_key}`, item.item_position) })),
+        contentScreens: current.contentScreens.map(item => ({ ...item, item_position: swap(`content:${item.screen_key}`, item.item_position) })),
+        showGames: current.showGames.map(item => ({ ...item, item_position: swap(`game:${item.show_game_key}`, item.item_position) })),
+      }
+    })
+  }
+
+  function deleteItem(key: string) {
+    setDraft(current => current ? {
+      ...current,
+      questions: current.questions.filter(item => `question:${item.question_key}` !== key),
+      contentScreens: current.contentScreens.filter(item => `content:${item.screen_key}` !== key),
+      showGames: current.showGames.filter(item => `game:${item.show_game_key}` !== key),
+    } : current)
+  }
+
+  function addQuestionSlot(roundNumber: number) {
+    setDraft(current => {
+      if (!current) return current
+      const round = current.rounds.find(item => item.number === roundNumber)
+      const nextPosition = nextBuilderItemPosition(allItemPositions(current))
+      return { ...current, questions: [...current.questions, {
+        question_key: `template-question-${crypto.randomUUID()}`,
+        position: current.questions.length + 1,
+        item_position: nextPosition,
+        round_number: roundNumber,
+        round_position: 1,
+        round_question_count: 1,
+        round_title: round?.title ?? `Round ${roundNumber}`,
+        question_type: 'single-answer',
+        category: null,
+        difficulty: null,
+        source_question_id: null,
+      }] }
+    })
+  }
+
+  function addContentScreen(roundNumber: number) {
+    setDraft(current => {
+      if (!current) return current
+      const round = current.rounds.find(item => item.number === roundNumber)
+      return { ...current, contentScreens: [...current.contentScreens, {
+        screen_key: `template-content-${crypto.randomUUID()}`,
+        item_position: nextBuilderItemPosition(allItemPositions(current)),
+        round_number: roundNumber,
+        round_title: round?.title ?? `Round ${roundNumber}`,
+        title: 'New content screen',
+        body: '',
+        image_url: null,
+      }] }
+    })
+  }
+
+  function addGame(roundNumber: number) {
+    setDraft(current => {
+      if (!current) return current
+      const round = current.rounds.find(item => item.number === roundNumber)
+      const gameType: ShowGameType = 'spin-the-wheel'
+      return { ...current, showGames: [...current.showGames, {
+        show_game_key: `template-game-${crypto.randomUUID()}`,
+        item_position: nextBuilderItemPosition(allItemPositions(current)),
+        round_number: roundNumber,
+        round_title: round?.title ?? `Round ${roundNumber}`,
+        game_type: gameType,
+        title: showGameLabel(gameType),
+        settings: showGameRewardSettings(DEFAULT_SHOW_GAME_REWARD),
+      }] }
+    })
+  }
+
+  function addRound() {
+    setDraft(current => current ? { ...current, rounds: [...current.rounds, { number: current.rounds.length + 1, title: `Round ${current.rounds.length + 1}` }] } : current)
+  }
+
+  function deleteRound(roundNumber: number) {
+    if (!draft || draft.rounds.length <= 1 || !window.confirm(`Delete Round ${roundNumber} and everything in it?`)) return
+    setDraft(current => current ? {
+      ...current,
+      rounds: current.rounds.filter(item => item.number !== roundNumber),
+      questions: current.questions.filter(item => item.round_number !== roundNumber),
+      contentScreens: current.contentScreens.filter(item => item.round_number !== roundNumber),
+      showGames: current.showGames.filter(item => item.round_number !== roundNumber),
+    } : current)
+  }
+
+  if (!draft || loading) return <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 p-4"><div className="rounded-2xl bg-white px-8 py-7 text-sm font-semibold text-zinc-500">Loading template editor…</div></div>
+
+  return <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-3" onMouseDown={event => { if (event.currentTarget === event.target && !saving) onClose() }}>
+    <section className="flex max-h-[94dvh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+      <header style={{ borderBottom: `1px solid ${C.line}` }} className="flex shrink-0 items-center gap-4 px-6 py-4">
+        <div className="min-w-0 flex-1"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Template editor</p><h2 style={{ color: C.ink }} className="truncate text-2xl font-extrabold">{template.name}</h2><p style={{ color: C.sub }} className="mt-1 text-xs">Question slots receive fresh random library questions when this template is used.</p></div>
+        <Btn v="secondary" sz="sm" disabled={saving} onClick={onClose}>Cancel</Btn>
+        <Btn sz="sm" disabled={saving || draft.rounds.length === 0} onClick={() => onSave(draft)}>{saving ? 'Saving…' : 'Save Template'}</Btn>
+      </header>
+      <div className="flex-1 overflow-y-auto bg-zinc-50 px-5 py-5">
+        <div className="mx-auto max-w-4xl space-y-4">
+          {draft.rounds.map(round => {
+            const items = [
+              ...draft.questions.filter(item => item.round_number === round.number).map(item => ({ kind: 'question' as const, key: `question:${item.question_key}`, position: item.item_position, item })),
+              ...draft.contentScreens.filter(item => item.round_number === round.number).map(item => ({ kind: 'content' as const, key: `content:${item.screen_key}`, position: item.item_position, item })),
+              ...draft.showGames.filter(item => item.round_number === round.number).map(item => ({ kind: 'game' as const, key: `game:${item.show_game_key}`, position: item.item_position, item })),
+            ].sort((left, right) => left.position - right.position)
+            return <section key={round.number} className="rounded-2xl border border-zinc-200 bg-white p-4">
+              <div className="mb-3 flex items-center gap-3"><span style={{ color: C.sub }} className="shrink-0 text-[10px] font-black uppercase tracking-widest">Round {round.number}</span><input aria-label={`Round ${round.number} title`} value={round.title} onChange={event => setDraft(current => current ? { ...current, rounds: current.rounds.map(item => item.number === round.number ? { ...item, title: event.target.value } : item) } : current)} className="min-w-0 flex-1 rounded-lg border border-zinc-200 px-3 py-2 text-sm font-bold text-zinc-900" /><button type="button" disabled={draft.rounds.length <= 1} onClick={() => deleteRound(round.number)} className="rounded-lg px-2 py-1 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-30">Delete round</button></div>
+              <div className="space-y-2">{items.map((entry, index) => <div key={entry.key} className="flex items-start gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-3">
+                <div className="flex shrink-0 flex-col gap-1"><button type="button" disabled={index === 0} onClick={() => moveItem(round.number, entry.key, -1)} className="rounded border border-zinc-200 px-1.5 text-xs disabled:opacity-25">↑</button><button type="button" disabled={index === items.length - 1} onClick={() => moveItem(round.number, entry.key, 1)} className="rounded border border-zinc-200 px-1.5 text-xs disabled:opacity-25">↓</button></div>
+                <div className="min-w-0 flex-1">{entry.kind === 'question' ? <div className="flex flex-wrap items-center gap-2"><span className="font-bold text-zinc-900">❓ Question will be here</span><select value={entry.item.question_type} onChange={event => setDraft(current => current ? { ...current, questions: current.questions.map(item => item.question_key === entry.item.question_key ? { ...item, question_type: event.target.value, source_question_id: null } : item) } : current)} className="rounded-lg border border-zinc-200 px-2 py-1 text-xs font-semibold text-zinc-700">{TEMPLATE_QUESTION_TYPES.map(type => <option key={type} value={type}>{questionTypeLabel(type)}</option>)}</select><span style={{ color: C.sub }} className="text-xs">Fresh random replacement</span></div> : entry.kind === 'content' ? <div className="space-y-2"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Content screen</p><input value={entry.item.title} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, title: event.target.value } : item) } : current)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-bold text-zinc-900" /><textarea value={entry.item.body} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, body: event.target.value } : item) } : current)} placeholder="Content shown to players" rows={2} className="w-full resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-700" /></div> : <div className="flex flex-wrap items-center gap-2"><span className="font-bold text-zinc-900">🎮</span><select value={entry.item.game_type} disabled={!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType)} onChange={event => { const type = event.target.value as ShowGameType; setDraft(current => current ? { ...current, showGames: current.showGames.map(item => item.show_game_key === entry.item.show_game_key ? { ...item, game_type: type, title: showGameLabel(type) } : item) } : current) }} className="rounded-lg border border-zinc-200 px-2 py-1 text-sm font-bold text-zinc-800">{TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) ? TEMPLATE_EDITOR_GAME_TYPES.map(type => <option key={type} value={type}>{showGameLabel(type)}</option>) : <option value={entry.item.game_type}>{entry.item.title}</option>}</select>{!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) && <span style={{ color: C.sub }} className="text-xs">Configure this special game in a quiz before saving it as a template.</span>}</div>}</div>
+                <button type="button" aria-label="Delete template item" onClick={() => deleteItem(entry.key)} className="shrink-0 rounded-lg px-2 py-1 text-sm font-bold text-red-600 hover:bg-red-50">Delete</button>
+              </div>)}</div>
+              <div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => addQuestionSlot(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Question slot</button><button type="button" onClick={() => addContentScreen(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Content screen</button><button type="button" onClick={() => addGame(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Game</button></div>
+            </section>
+          })}
+          <button type="button" onClick={addRound} className="w-full rounded-2xl border-2 border-dashed border-violet-200 bg-white px-4 py-4 text-sm font-extrabold text-violet-700 hover:bg-violet-50">＋ Add Round</button>
+          {draft.tiebreakers.length > 0 && <div className="rounded-xl border border-dashed border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-600"><strong className="text-zinc-900">{draft.tiebreakers.length} backup tiebreaker{draft.tiebreakers.length === 1 ? '' : 's'}</strong> will remain attached to this template.</div>}
+        </div>
+      </div>
+    </section>
   </div>
 }
 
@@ -3236,7 +3551,16 @@ function QuizBuilder({ go }: { go: Go }) {
     if (!name) return
     setSavingTemplate(true)
     setSaveError(null)
-    const { error } = await supabase.from('quiz_templates').upsert({ name, source_quiz_id: quizId, updated_at: new Date().toISOString() }, { onConflict: 'owner_id,name' })
+    let structure: TemplateStructure
+    try {
+      structure = await templateStructureFromSource(quizId)
+    } catch (structureError) {
+      console.error('Could not snapshot quiz template structure:', structureError)
+      setSaveError('Could not prepare this quiz as a template. Please try again.')
+      setSavingTemplate(false)
+      return
+    }
+    const { error } = await supabase.from('quiz_templates').upsert({ name, source_quiz_id: quizId, structure: structure as unknown as Json, updated_at: new Date().toISOString() }, { onConflict: 'owner_id,name' })
     if (error) {
       console.error('Could not save quiz template:', error)
       setSaveError('Could not save this template. Please try again.')

@@ -587,9 +587,9 @@ export type Database = {
         }]
       }
       quiz_templates: {
-        Row: { id: string; owner_id: string; name: string; source_quiz_id: string; created_at: string; updated_at: string }
-        Insert: { id?: string; owner_id?: string; name: string; source_quiz_id: string; created_at?: string; updated_at?: string }
-        Update: Partial<{ name: string; source_quiz_id: string; updated_at: string }>
+        Row: { id: string; owner_id: string; name: string; source_quiz_id: string; structure: Json | null; created_at: string; updated_at: string }
+        Insert: { id?: string; owner_id?: string; name: string; source_quiz_id: string; structure?: Json | null; created_at?: string; updated_at?: string }
+        Update: Partial<{ name: string; source_quiz_id: string; structure: Json | null; updated_at: string }>
         Relationships: []
       }
       game_tie_resolutions: {

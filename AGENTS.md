@@ -87,6 +87,7 @@
 - Templates have their own top-level host navigation tab. From that screen hosts can create a fresh show, rename a template, or delete only the template without deleting its source quiz.
 - Choosing a quiz from the Templates screen creates a template from that saved quiz in place; it must not merely redirect to My Quizzes and leave the conversion unfinished.
 - Template previews show the preserved show structure rather than the source quiz's concrete library prompts: ordinary questions appear as replacement slots, while rounds, games, content screens, and backup tiebreaker counts remain visible.
+- Templates store an independent editable structure snapshot. Editing a template can rename or add rounds, add/reorder/delete typed question placeholders, edit content screens, and add/reorder/delete games without mutating the source quiz. Using the template fills its question slots with fresh verified library questions while preserving the edited structure.
 - Keep the Quiz Builder top bar focused on Save and Host. Preview, Save as Template, and destructive show actions belong in the overflow actions menu.
 - Quiz Preview supports Space or Right Arrow to advance and Left Arrow to go back, while keeping the visible Previous and Next controls.
 - Quiz Builder overview cards expose the complete question and answer information needed for review, including accepted alternatives, choices, multi-part clues, ranking order, and bonuses. Omit absent optional category/difficulty metadata instead of showing placeholder labels such as Uncategorised or Unrated.
