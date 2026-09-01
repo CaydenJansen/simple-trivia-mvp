@@ -23,7 +23,7 @@ export type AutoBuildTiebreaker = {
 export type AutoBuildAudienceFit = 'broad' | 'kids' | 'young_adults' | 'older_adults'
 export type AutoBuildAudiencePreference = AutoBuildAudienceFit | 'all'
 export type AutoBuildScopeMode = 'global_only' | 'include_locale'
-export type AutoBuildVibe = 'none' | 'guys_wearing_hats' | 'oh_look_a_butterfly'
+export type AutoBuildVibe = 'none' | 'guys_wearing_hats' | 'oh_look_a_butterfly' | 'uber_dweeb' | 'pop_head'
 
 export type AutoBuildContentSettings = {
   audienceFit: AutoBuildAudiencePreference
@@ -123,6 +123,25 @@ const BUTTERFLY_VIBE_TAGS = new Set([
   'festivals', 'holidays', 'mythology', 'plants', 'poetry', 'theatre', 'toys',
 ])
 
+const UBER_DWEEB_CATEGORIES = new Set([
+  'arts & literature', 'geography', 'history', 'language & words', 'politics & government',
+  'science & nature', 'technology & inventions',
+])
+
+const UBER_DWEEB_TAGS = new Set([
+  'ancient history', 'archaeology', 'astronomy', 'biology', 'capitals', 'chemistry',
+  'classical literature', 'geology', 'mathematics', 'physics', 'world history',
+])
+
+const POP_HEAD_CATEGORIES = new Set(['film & television', 'music'])
+
+const POP_HEAD_TAGS = new Set([
+  'actors', 'actresses', 'albums', 'animation', 'awards', 'bands', 'celebrities',
+  'cinema', 'entertainment', 'fashion', 'film', 'hollywood', 'influencers', 'movies',
+  'music', 'musicians', 'pop culture', 'reality television', 'singers', 'social media',
+  'songs', 'streaming', 'television', 'tv',
+])
+
 export function matchesAutoBuildVibe(
   item: Pick<AutoBuildQuestion, 'category' | 'prompt' | 'tags'>,
   vibe: AutoBuildVibe = 'none',
@@ -135,6 +154,17 @@ export function matchesAutoBuildVibe(
   if (vibe === 'guys_wearing_hats') {
     return category === 'sport'
       || tags.some(tag => GUYS_WEARING_HATS_TAGS.has(tag))
+  }
+
+  if (vibe === 'uber_dweeb') {
+    return UBER_DWEEB_CATEGORIES.has(category)
+      || tags.some(tag => UBER_DWEEB_TAGS.has(tag))
+  }
+
+  if (vibe === 'pop_head') {
+    return POP_HEAD_CATEGORIES.has(category)
+      || tags.some(tag => POP_HEAD_TAGS.has(tag))
+      || /\b(celebrity|celebrities|movie|movies|pop star|singer|television|tv show)\b/.test(prompt)
   }
 
   return tags.some(tag => BUTTERFLY_VIBE_TAGS.has(tag))

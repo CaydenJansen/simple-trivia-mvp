@@ -185,6 +185,18 @@ describe('Auto-Build selection semantics', () => {
     expect(matchesAutoBuildVibe({ category: 'Sport', tags: ['Combat Sports'], prompt: 'Who won this bout?' }, 'oh_look_a_butterfly')).toBe(false)
   })
 
+  it('filters the uber-dweeb vibe to traditional hard-trivia subjects', () => {
+    expect(matchesAutoBuildVibe({ category: 'Geography', tags: [], prompt: 'Which capital lies furthest north?' }, 'uber_dweeb')).toBe(true)
+    expect(matchesAutoBuildVibe({ category: 'Science & Nature', tags: ['Chemistry'], prompt: 'Which element has this symbol?' }, 'uber_dweeb')).toBe(true)
+    expect(matchesAutoBuildVibe({ category: 'Film & Television', tags: ['Celebrities'], prompt: 'Who starred in this film?' }, 'uber_dweeb')).toBe(false)
+  })
+
+  it('filters the pop-head vibe to entertainment and celebrity culture', () => {
+    expect(matchesAutoBuildVibe({ category: 'Film & Television', tags: [], prompt: 'Who played this character?' }, 'pop_head')).toBe(true)
+    expect(matchesAutoBuildVibe({ category: 'Society & Culture', tags: ['Celebrities'], prompt: 'Which celebrity launched this brand?' }, 'pop_head')).toBe(true)
+    expect(matchesAutoBuildVibe({ category: 'History', tags: ['World History'], prompt: 'Which empire came first?' }, 'pop_head')).toBe(false)
+  })
+
   it('applies adult-content and locale rules to prepared tiebreakers', () => {
     const eligible = getEligibleAutoBuildTiebreakers([
       { id: 'global', adult_content: false, audience_scope: 'global' },

@@ -33,4 +33,9 @@ describe('Auto-Build preferences', () => {
   it('falls back safely when stored JSON is invalid', () => {
     expect(loadAutoBuildPreferences('{not json')).toEqual(DEFAULT_AUTO_BUILD_PREFERENCES)
   })
+
+  it('restores the newer vibe filters', () => {
+    expect(parseAutoBuildPreferences({ vibe: 'uber_dweeb' }).vibe).toBe('uber_dweeb')
+    expect(parseAutoBuildPreferences({ vibe: 'pop_head' }).vibe).toBe('pop_head')
+  })
 })

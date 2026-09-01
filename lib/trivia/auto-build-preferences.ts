@@ -77,7 +77,7 @@ export function parseAutoBuildPreferences(value: unknown): AutoBuildPreferences 
     topics: Array.from({ length: roundCount }, (_, index) => storedTopics[index] ?? DEFAULT_AUTO_BUILD_PREFERENCES.topics[index] ?? 'General Knowledge'),
     audienceFit: ['broad', 'kids', 'young_adults', 'older_adults'].includes(String(stored.audienceFit))
       ? stored.audienceFit as AutoBuildAudiencePreference : 'all',
-    vibe: ['guys_wearing_hats', 'oh_look_a_butterfly'].includes(String(stored.vibe))
+    vibe: ['guys_wearing_hats', 'oh_look_a_butterfly', 'uber_dweeb', 'pop_head'].includes(String(stored.vibe))
       ? stored.vibe as AutoBuildVibe : 'none',
     allowAdultContent: stored.allowAdultContent === true,
     scopeMode: stored.scopeMode === 'include_locale' ? 'include_locale' : 'global_only',
