@@ -1796,7 +1796,7 @@ async function templateStructureFromSource(sourceQuizId: string): Promise<Templa
     status: quizResult.data.status === 'ready' ? 'ready' : 'draft',
     estimatedMinutes: quizResult.data.estimated_minutes,
     rounds: [...roundTitles].sort(([left], [right]) => left - right).map(([number, title]) => ({ number, title })),
-    questions: (questionResult.data ?? []) as TemplateQuestionSlot[],
+    questions: (questionResult.data ?? []).map(question => ({ ...question, question_type: 'any' })) as TemplateQuestionSlot[],
     contentScreens: (contentResult.data ?? []) as TemplateContentItem[],
     showGames: (gameResult.data ?? []) as TemplateGameItem[],
     tiebreakers: (tiebreakerResult.data ?? []) as TemplateTiebreakerItem[],
@@ -1819,8 +1819,9 @@ async function buildQuizFromTemplate(template: QuizTemplateRow) {
   const chosen = new Set<string>()
   const replacements: Json[] = []
   for (const original of structure.questions) {
-    const candidates = library.filter(candidate => candidate.question_type === original.question_type && !used.has(candidate.id) && !chosen.has(candidate.id))
-    if (candidates.length === 0) throw new Error(`The Question Library does not have enough unused ${questionTypeLabel(original.question_type)} questions for this template.`)
+    const candidates = library.filter(candidate => (original.question_type === 'any' || candidate.question_type === original.question_type) && !used.has(candidate.id) && !chosen.has(candidate.id))
+    const requestedType = original.question_type === 'any' ? '' : ` ${questionTypeLabel(original.question_type)}`
+    if (candidates.length === 0) throw new Error(`The Question Library does not have enough unused${requestedType} questions for this template.`)
     const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
     const source = candidates[randomValue % candidates.length]
     chosen.add(source.id)
@@ -2089,7 +2090,7 @@ function TemplatesScreen({ go }: { go: Go }) {
       </div>
       <div style={{ background: C.violetMist, border: `1px solid ${C.violet}30` }} className="mb-6 rounded-2xl px-5 py-4">
         <p style={{ color: C.ink }} className="text-sm font-extrabold">Same show shape, fresh questions</p>
-        <p style={{ color: C.sub }} className="mt-1 text-sm leading-6">When you use a template, every ordinary Question Library question is swapped for a fresh random replacement of the same question type. Your rounds, order, games, content screens, in-show tiebreakers and backup tiebreakers stay in place.</p>
+        <p style={{ color: C.sub }} className="mt-1 text-sm leading-6">When you use a template, every ordinary Question Library question is swapped for a fresh random replacement. A slot can accept any question type or be restricted to a specific type. Your rounds, order, games, content screens, in-show tiebreakers and backup tiebreakers stay in place.</p>
       </div>
       {error && <p className="mb-5 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
       {loading ? <p style={{ color: C.sub }} className="py-24 text-center text-sm">Loading templates…</p> : templates.length === 0 ? (
@@ -2177,7 +2178,11 @@ const TEMPLATE_EDITOR_GAME_TYPES: ShowGameType[] = [
   'steal-the-treasure',
 ]
 
-const TEMPLATE_QUESTION_TYPES = ['single-answer', 'multiple-choice', 'multi-answer', 'multi-part', 'ranking', 'image-question'] as const
+const TEMPLATE_QUESTION_TYPES = ['any', 'single-answer', 'multiple-choice', 'multi-answer', 'multi-part', 'ranking', 'image-question'] as const
+
+function templateQuestionTypeLabel(type: string) {
+  return type === 'any' ? 'Any question type' : questionTypeLabel(type)
+}
 
 function TemplateStructureEditor({ template, structure, loading, saving, onClose, onSave }: {
   template: QuizTemplateRow
@@ -2188,6 +2193,8 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
   onSave: (structure: TemplateStructure) => void
 }) {
   const [draft, setDraft] = useState<TemplateStructure | null>(structure)
+  const [draggedItem, setDraggedItem] = useState<{ roundNumber: number; key: string } | null>(null)
+  const [draggedRound, setDraggedRound] = useState<number | null>(null)
 
   useEffect(() => {
     // The structure is loaded asynchronously after the editor shell opens.
@@ -2199,7 +2206,7 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
     return [...current.questions.map(item => item.item_position), ...current.contentScreens.map(item => item.item_position), ...current.showGames.map(item => item.item_position)]
   }
 
-  function moveItem(roundNumber: number, key: string, direction: -1 | 1) {
+  function moveItemBefore(roundNumber: number, key: string, targetKey: string) {
     setDraft(current => {
       if (!current) return current
       const items = [
@@ -2207,16 +2214,40 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
         ...current.contentScreens.filter(item => item.round_number === roundNumber).map(item => ({ kind: 'content' as const, key: item.screen_key, position: item.item_position })),
         ...current.showGames.filter(item => item.round_number === roundNumber).map(item => ({ kind: 'game' as const, key: item.show_game_key, position: item.item_position })),
       ].sort((left, right) => left.position - right.position)
-      const index = items.findIndex(item => `${item.kind}:${item.key}` === key)
-      const target = items[index + direction]
-      const source = items[index]
-      if (!source || !target) return current
-      const swap = (itemKey: string, position: number) => itemKey === key ? target.position : itemKey === `${target.kind}:${target.key}` ? source.position : position
+      const keys = items.map(item => `${item.kind}:${item.key}`)
+      const fromIndex = keys.indexOf(key)
+      const targetIndex = keys.indexOf(targetKey)
+      if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex) return current
+      const reordered = [...keys]
+      const [moved] = reordered.splice(fromIndex, 1)
+      reordered.splice(targetIndex, 0, moved)
+      const positionByKey = new Map(reordered.map((itemKey, index) => [itemKey, items[index]?.position ?? index + 1]))
       return {
         ...current,
-        questions: current.questions.map(item => ({ ...item, item_position: swap(`question:${item.question_key}`, item.item_position) })),
-        contentScreens: current.contentScreens.map(item => ({ ...item, item_position: swap(`content:${item.screen_key}`, item.item_position) })),
-        showGames: current.showGames.map(item => ({ ...item, item_position: swap(`game:${item.show_game_key}`, item.item_position) })),
+        questions: current.questions.map(item => item.round_number === roundNumber ? { ...item, item_position: positionByKey.get(`question:${item.question_key}`) ?? item.item_position } : item),
+        contentScreens: current.contentScreens.map(item => item.round_number === roundNumber ? { ...item, item_position: positionByKey.get(`content:${item.screen_key}`) ?? item.item_position } : item),
+        showGames: current.showGames.map(item => item.round_number === roundNumber ? { ...item, item_position: positionByKey.get(`game:${item.show_game_key}`) ?? item.item_position } : item),
+      }
+    })
+  }
+
+  function moveRoundBefore(roundNumber: number, targetRoundNumber: number) {
+    setDraft(current => {
+      if (!current || roundNumber === targetRoundNumber) return current
+      const ordered = [...current.rounds].sort((left, right) => left.number - right.number)
+      const fromIndex = ordered.findIndex(round => round.number === roundNumber)
+      const targetIndex = ordered.findIndex(round => round.number === targetRoundNumber)
+      if (fromIndex < 0 || targetIndex < 0) return current
+      const [moved] = ordered.splice(fromIndex, 1)
+      ordered.splice(targetIndex, 0, moved)
+      const numberByOldNumber = new Map(ordered.map((round, index) => [round.number, index + 1]))
+      const titleByOldNumber = new Map(ordered.map(round => [round.number, round.title]))
+      return {
+        ...current,
+        rounds: ordered.map((round, index) => ({ ...round, number: index + 1 })),
+        questions: current.questions.map(item => ({ ...item, round_number: numberByOldNumber.get(item.round_number) ?? item.round_number, round_title: titleByOldNumber.get(item.round_number) ?? item.round_title })),
+        contentScreens: current.contentScreens.map(item => ({ ...item, round_number: numberByOldNumber.get(item.round_number) ?? item.round_number, round_title: titleByOldNumber.get(item.round_number) ?? item.round_title })),
+        showGames: current.showGames.map(item => ({ ...item, round_number: numberByOldNumber.get(item.round_number) ?? item.round_number, round_title: titleByOldNumber.get(item.round_number) ?? item.round_title })),
       }
     })
   }
@@ -2243,7 +2274,7 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
         round_position: 1,
         round_question_count: 1,
         round_title: round?.title ?? `Round ${roundNumber}`,
-        question_type: 'single-answer',
+        question_type: 'any',
         category: null,
         difficulty: null,
         source_question_id: null,
@@ -2302,28 +2333,28 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
   if (!draft || loading) return <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 p-4"><div className="rounded-2xl bg-white px-8 py-7 text-sm font-semibold text-zinc-500">Loading template editor…</div></div>
 
   return <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-3" onMouseDown={event => { if (event.currentTarget === event.target && !saving) onClose() }}>
-    <section className="flex max-h-[94dvh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+    <section className="flex max-h-[94dvh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
       <header style={{ borderBottom: `1px solid ${C.line}` }} className="flex shrink-0 items-center gap-4 px-6 py-4">
         <div className="min-w-0 flex-1"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Template editor</p><h2 style={{ color: C.ink }} className="truncate text-2xl font-extrabold">{template.name}</h2><p style={{ color: C.sub }} className="mt-1 text-xs">Question slots receive fresh random library questions when this template is used.</p></div>
         <Btn v="secondary" sz="sm" disabled={saving} onClick={onClose}>Cancel</Btn>
         <Btn sz="sm" disabled={saving || draft.rounds.length === 0} onClick={() => onSave(draft)}>{saving ? 'Saving…' : 'Save Template'}</Btn>
       </header>
-      <div className="flex-1 overflow-y-auto bg-zinc-50 px-5 py-5">
-        <div className="mx-auto max-w-4xl space-y-4">
+      <div style={{ background: C.ground }} className="flex-1 overflow-y-auto px-5 py-5">
+        <div className="mx-auto max-w-5xl space-y-4">
           {draft.rounds.map(round => {
             const items = [
               ...draft.questions.filter(item => item.round_number === round.number).map(item => ({ kind: 'question' as const, key: `question:${item.question_key}`, position: item.item_position, item })),
               ...draft.contentScreens.filter(item => item.round_number === round.number).map(item => ({ kind: 'content' as const, key: `content:${item.screen_key}`, position: item.item_position, item })),
               ...draft.showGames.filter(item => item.round_number === round.number).map(item => ({ kind: 'game' as const, key: `game:${item.show_game_key}`, position: item.item_position, item })),
             ].sort((left, right) => left.position - right.position)
-            return <section key={round.number} className="rounded-2xl border border-zinc-200 bg-white p-4">
-              <div className="mb-3 flex items-center gap-3"><span style={{ color: C.sub }} className="shrink-0 text-[10px] font-black uppercase tracking-widest">Round {round.number}</span><input aria-label={`Round ${round.number} title`} value={round.title} onChange={event => setDraft(current => current ? { ...current, rounds: current.rounds.map(item => item.number === round.number ? { ...item, title: event.target.value } : item) } : current)} className="min-w-0 flex-1 rounded-lg border border-zinc-200 px-3 py-2 text-sm font-bold text-zinc-900" /><button type="button" disabled={draft.rounds.length <= 1} onClick={() => deleteRound(round.number)} className="rounded-lg px-2 py-1 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-30">Delete round</button></div>
-              <div className="space-y-2">{items.map((entry, index) => <div key={entry.key} className="flex items-start gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-3">
-                <div className="flex shrink-0 flex-col gap-1"><button type="button" disabled={index === 0} onClick={() => moveItem(round.number, entry.key, -1)} className="rounded border border-zinc-200 px-1.5 text-xs disabled:opacity-25">↑</button><button type="button" disabled={index === items.length - 1} onClick={() => moveItem(round.number, entry.key, 1)} className="rounded border border-zinc-200 px-1.5 text-xs disabled:opacity-25">↓</button></div>
-                <div className="min-w-0 flex-1">{entry.kind === 'question' ? <div className="flex flex-wrap items-center gap-2"><span className="font-bold text-zinc-900">❓ Question will be here</span><select value={entry.item.question_type} onChange={event => setDraft(current => current ? { ...current, questions: current.questions.map(item => item.question_key === entry.item.question_key ? { ...item, question_type: event.target.value, source_question_id: null } : item) } : current)} className="rounded-lg border border-zinc-200 px-2 py-1 text-xs font-semibold text-zinc-700">{TEMPLATE_QUESTION_TYPES.map(type => <option key={type} value={type}>{questionTypeLabel(type)}</option>)}</select><span style={{ color: C.sub }} className="text-xs">Fresh random replacement</span></div> : entry.kind === 'content' ? <div className="space-y-2"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Content screen</p><input value={entry.item.title} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, title: event.target.value } : item) } : current)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-bold text-zinc-900" /><textarea value={entry.item.body} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, body: event.target.value } : item) } : current)} placeholder="Content shown to players" rows={2} className="w-full resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-700" /></div> : <div className="flex flex-wrap items-center gap-2"><span className="font-bold text-zinc-900">🎮</span><select value={entry.item.game_type} disabled={!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType)} onChange={event => { const type = event.target.value as ShowGameType; setDraft(current => current ? { ...current, showGames: current.showGames.map(item => item.show_game_key === entry.item.show_game_key ? { ...item, game_type: type, title: showGameLabel(type) } : item) } : current) }} className="rounded-lg border border-zinc-200 px-2 py-1 text-sm font-bold text-zinc-800">{TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) ? TEMPLATE_EDITOR_GAME_TYPES.map(type => <option key={type} value={type}>{showGameLabel(type)}</option>) : <option value={entry.item.game_type}>{entry.item.title}</option>}</select>{!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) && <span style={{ color: C.sub }} className="text-xs">Configure this special game in a quiz before saving it as a template.</span>}</div>}</div>
+            return <section key={round.number} onDragOver={event => { if (draggedRound !== null && draggedRound !== round.number) event.preventDefault() }} onDrop={event => { event.preventDefault(); if (draggedRound !== null) moveRoundBefore(draggedRound, round.number); setDraggedRound(null) }} style={{ borderColor: C.line, background: C.panel }} className={`overflow-hidden rounded-2xl border shadow-sm transition-opacity ${draggedRound === round.number ? 'opacity-60' : ''}`}>
+              <div style={{ borderBottom: `1px solid ${C.line}`, background: C.ground }} className="flex items-center gap-3 px-4 py-3"><button type="button" draggable onDragStart={event => { setDraggedRound(round.number); event.dataTransfer.effectAllowed = 'move' }} onDragEnd={() => setDraggedRound(null)} aria-label={`Drag Round ${round.number}`} title="Drag to reorder round" className="cursor-grab touch-none text-zinc-400 active:cursor-grabbing"><I.grip /></button><span style={{ color: C.sub }} className="shrink-0 text-[10px] font-black uppercase tracking-widest">Round {round.number}</span><input aria-label={`Round ${round.number} title`} value={round.title} onChange={event => setDraft(current => current ? { ...current, rounds: current.rounds.map(item => item.number === round.number ? { ...item, title: event.target.value } : item) } : current)} className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-bold text-zinc-900" /><button type="button" disabled={draft.rounds.length <= 1} onClick={() => deleteRound(round.number)} className="rounded-lg px-2 py-1 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-30">Delete round</button></div>
+              <div className="space-y-2 p-4">{items.map(entry => <div key={entry.key} onDragOver={event => { if (draggedItem?.roundNumber === round.number && draggedItem.key !== entry.key) { event.preventDefault(); event.stopPropagation() } }} onDrop={event => { if (draggedItem?.roundNumber !== round.number) return; event.preventDefault(); event.stopPropagation(); moveItemBefore(round.number, draggedItem.key, entry.key); setDraggedItem(null) }} style={entry.kind === 'question' ? { borderColor: '#C4A7FF', background: '#F5F0FF' } : { borderColor: C.line, background: C.panel }} className={`flex items-start gap-3 rounded-xl border px-3 py-3 transition-opacity ${draggedItem?.key === entry.key ? 'opacity-60' : ''}`}>
+                <button type="button" draggable onDragStart={event => { event.stopPropagation(); setDraggedItem({ roundNumber: round.number, key: entry.key }); event.dataTransfer.effectAllowed = 'move' }} onDragEnd={() => setDraggedItem(null)} aria-label="Drag template item" title="Drag to reorder" className="mt-1 shrink-0 cursor-grab touch-none text-zinc-400 active:cursor-grabbing"><I.grip /></button>
+                <div className="min-w-0 flex-1">{entry.kind === 'question' ? <div className="flex flex-wrap items-center gap-2"><span style={{ color: C.violet }} className="rounded-md bg-violet-600 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-white">Question Library</span><span style={{ color: C.violet }} className="font-extrabold">Question will be here</span><select aria-label="Replacement question type" value={entry.item.question_type} onChange={event => setDraft(current => current ? { ...current, questions: current.questions.map(item => item.question_key === entry.item.question_key ? { ...item, question_type: event.target.value, source_question_id: null } : item) } : current)} className="rounded-lg border border-violet-200 bg-white px-2 py-1 text-xs font-semibold text-violet-800">{TEMPLATE_QUESTION_TYPES.map(type => <option key={type} value={type}>{templateQuestionTypeLabel(type)}</option>)}</select><span style={{ color: C.sub }} className="text-xs">Fresh random replacement</span></div> : entry.kind === 'content' ? <div className="space-y-2"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Content screen</p><input value={entry.item.title} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, title: event.target.value } : item) } : current)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-bold text-zinc-900" /><textarea value={entry.item.body} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, body: event.target.value } : item) } : current)} placeholder="Content shown to players" rows={2} className="w-full resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-700" /></div> : <div className="flex flex-wrap items-center gap-2"><span style={{ color: C.violet }} className="rounded-md bg-violet-600 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-white">Game</span><select value={entry.item.game_type} disabled={!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType)} onChange={event => { const type = event.target.value as ShowGameType; setDraft(current => current ? { ...current, showGames: current.showGames.map(item => item.show_game_key === entry.item.show_game_key ? { ...item, game_type: type, title: showGameLabel(type) } : item) } : current) }} className="rounded-lg border border-zinc-200 px-2 py-1 text-sm font-bold text-zinc-800">{TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) ? TEMPLATE_EDITOR_GAME_TYPES.map(type => <option key={type} value={type}>{showGameLabel(type)}</option>) : <option value={entry.item.game_type}>{entry.item.title}</option>}</select>{!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) && <span style={{ color: C.sub }} className="text-xs">Configure this special game in a quiz before saving it as a template.</span>}</div>}</div>
                 <button type="button" aria-label="Delete template item" onClick={() => deleteItem(entry.key)} className="shrink-0 rounded-lg px-2 py-1 text-sm font-bold text-red-600 hover:bg-red-50">Delete</button>
               </div>)}</div>
-              <div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => addQuestionSlot(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Question slot</button><button type="button" onClick={() => addContentScreen(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Content screen</button><button type="button" onClick={() => addGame(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Game</button></div>
+              <div style={{ borderTop: `1px solid ${C.line}` }} className="flex flex-wrap gap-2 px-4 py-3"><button type="button" onClick={() => addQuestionSlot(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Question</button><button type="button" onClick={() => addContentScreen(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Content Screen</button><button type="button" onClick={() => addGame(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Game</button></div>
             </section>
           })}
           <button type="button" onClick={addRound} className="w-full rounded-2xl border-2 border-dashed border-violet-200 bg-white px-4 py-4 text-sm font-extrabold text-violet-700 hover:bg-violet-50">＋ Add Round</button>
