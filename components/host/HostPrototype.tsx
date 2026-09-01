@@ -1739,6 +1739,20 @@ type TemplatePreviewItem = {
   label: string
   detail?: string
 }
+type TemplateRoundTopicMode = 'none' | 'keep' | 'random'
+
+const TEMPLATE_ROUND_TOPICS = ['General Knowledge', ...SOURCE_QUESTION_CATEGORIES] as const
+
+function recognizedTemplateRoundTopic(title: string) {
+  return TEMPLATE_ROUND_TOPICS.find(topic => topic.toLocaleLowerCase() === title.trim().toLocaleLowerCase()) ?? null
+}
+
+function templateQuestionMatchesTopic(question: PickerSourceQuestion, topic: string | null) {
+  if (!topic || topic === 'General Knowledge') return true
+  const normalizedTopic = topic.toLocaleLowerCase()
+  return question.category?.toLocaleLowerCase() === normalizedTopic
+    || question.category_names.some(category => category.toLocaleLowerCase() === normalizedTopic)
+}
 
 function templateStructureFromJson(value: Json | null): TemplateStructure | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -1807,7 +1821,7 @@ async function loadTemplateStructure(template: QuizTemplateRow) {
   return templateStructureFromJson(template.structure) ?? templateStructureFromSource(template.source_quiz_id)
 }
 
-async function buildQuizFromTemplate(template: QuizTemplateRow) {
+async function buildQuizFromTemplate(template: QuizTemplateRow, roundTopicMode: TemplateRoundTopicMode = 'none') {
   const [structure, libraryResult, tiebreakerLibraryResult] = await Promise.all([
     loadTemplateStructure(template),
     supabase.from('source_question_catalog').select('*').eq('origin', 'platform').eq('status', 'active').eq('is_verified', true).range(0, 1999),
@@ -1818,11 +1832,45 @@ async function buildQuizFromTemplate(template: QuizTemplateRow) {
   const library = (libraryResult.data ?? []) as PickerSourceQuestion[]
   const used = new Set(structure.questions.map(question => question.source_question_id).filter(Boolean))
   const chosen = new Set<string>()
+  const roundTopics = new Map<number, string | null>()
+  const alreadyRandomizedTopics = new Set<string>()
+  for (const round of structure.rounds) {
+    if (roundTopicMode === 'keep') {
+      roundTopics.set(round.number, recognizedTemplateRoundTopic(round.title))
+      continue
+    }
+    if (roundTopicMode !== 'random') {
+      roundTopics.set(round.number, null)
+      continue
+    }
+    const originalTopic = recognizedTemplateRoundTopic(round.title)
+    const roundQuestions = structure.questions.filter(question => question.round_number === round.number)
+    const allFeasibleTopics = TEMPLATE_ROUND_TOPICS.filter(topic => {
+      if (topic === originalTopic) return false
+      const matching = library.filter(candidate => !used.has(candidate.id) && templateQuestionMatchesTopic(candidate, topic))
+      const remaining = [...matching]
+      return roundQuestions.every(question => {
+        const candidateIndex = remaining.findIndex(candidate => question.question_type === 'any' || candidate.question_type === question.question_type)
+        if (candidateIndex < 0) return false
+        remaining.splice(candidateIndex, 1)
+        return true
+      })
+    })
+    const unusedFeasibleTopics = allFeasibleTopics.filter(topic => !alreadyRandomizedTopics.has(topic))
+    const candidateTopics = unusedFeasibleTopics.length > 0 ? unusedFeasibleTopics : allFeasibleTopics
+    if (candidateTopics.length === 0) throw new Error(`The Question Library does not have another viable topic for ${round.title}.`)
+    const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
+    const selectedTopic = candidateTopics[randomValue % candidateTopics.length]
+    roundTopics.set(round.number, selectedTopic)
+    alreadyRandomizedTopics.add(selectedTopic)
+  }
   const replacements: Json[] = []
   for (const original of structure.questions) {
-    const candidates = library.filter(candidate => (original.question_type === 'any' || candidate.question_type === original.question_type) && !used.has(candidate.id) && !chosen.has(candidate.id))
+    const roundTopic = roundTopics.get(original.round_number) ?? null
+    const candidates = library.filter(candidate => (original.question_type === 'any' || candidate.question_type === original.question_type) && templateQuestionMatchesTopic(candidate, roundTopic) && !used.has(candidate.id) && !chosen.has(candidate.id))
     const requestedType = original.question_type === 'any' ? '' : ` ${questionTypeLabel(original.question_type)}`
-    if (candidates.length === 0) throw new Error(`The Question Library does not have enough unused${requestedType} questions for this template.`)
+    const requestedTopic = roundTopic ? ` for ${roundTopic}` : ''
+    if (candidates.length === 0) throw new Error(`The Question Library does not have enough unused${requestedType} questions${requestedTopic} for this template.`)
     const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
     const source = candidates[randomValue % candidates.length]
     chosen.add(source.id)
@@ -1830,6 +1878,7 @@ async function buildQuizFromTemplate(template: QuizTemplateRow) {
     replacements.push({
       ...original,
       question_key: `question-${crypto.randomUUID()}`,
+      round_title: roundTopic ?? original.round_title,
       prompt: replacement.text,
       category: replacement.cat,
       difficulty: replacement.diff,
@@ -1886,13 +1935,15 @@ async function buildQuizFromTemplate(template: QuizTemplateRow) {
     }
   })
   const replacementShowGames = structure.showGames.map(original => {
-    if (!['in-show-tiebreaker', 'tiebreaker-style-question'].includes(original.game_type)) return original
+    const roundTitle = roundTopics.get(original.round_number) ?? original.round_title
+    if (!['in-show-tiebreaker', 'tiebreaker-style-question'].includes(original.game_type)) return { ...original, round_title: roundTitle }
     const source = randomTiebreakerReplacement()
     const current = audienceQuestionFromSettings(original.settings)
     const settings = original.settings && typeof original.settings === 'object' && !Array.isArray(original.settings) ? original.settings as Record<string, Json> : {}
     return {
       ...original,
       show_game_key: `show-game-${crypto.randomUUID()}`,
+      round_title: roundTitle,
       settings: {
         ...settings,
         ...audienceQuestionSettings({ ...current, prompt: source.prompt, correctNumber: source.correct_value }),
@@ -1902,6 +1953,10 @@ async function buildQuizFromTemplate(template: QuizTemplateRow) {
       },
     }
   })
+  const replacementContentScreens = structure.contentScreens.map(original => ({
+    ...original,
+    round_title: roundTopics.get(original.round_number) ?? original.round_title,
+  }))
 
   const nextTitle = `${template.name} · ${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}`
   const { data: quizId, error: saveError } = await supabase.rpc('save_quiz_with_show_games', {
@@ -1910,7 +1965,7 @@ async function buildQuizFromTemplate(template: QuizTemplateRow) {
     p_status: structure.status,
     p_estimated_minutes: structure.estimatedMinutes,
     p_questions: replacements,
-    p_content_screens: structure.contentScreens as unknown as Json,
+    p_content_screens: replacementContentScreens as unknown as Json,
     p_tiebreakers: replacementTiebreakers as unknown as Json,
     p_show_games: replacementShowGames as unknown as Json,
   })
@@ -1941,6 +1996,7 @@ function TemplatesScreen({ go }: { go: Go }) {
   const [editingTemplate, setEditingTemplate] = useState<QuizTemplateRow | null>(null)
   const [templateDraft, setTemplateDraft] = useState<TemplateStructure | null>(null)
   const [templateEditorLoading, setTemplateEditorLoading] = useState(false)
+  const [topicChoiceTemplate, setTopicChoiceTemplate] = useState<QuizTemplateRow | null>(null)
 
   useEffect(() => {
     let active = true
@@ -1966,15 +2022,36 @@ function TemplatesScreen({ go }: { go: Go }) {
     return () => { active = false }
   }, [])
 
-  async function createShowFromTemplate(template: QuizTemplateRow) {
+  async function createShowFromTemplate(template: QuizTemplateRow, roundTopicMode: TemplateRoundTopicMode = 'none') {
+    if (busyId) return
+    setTopicChoiceTemplate(null)
+    setBusyId(template.id)
+    setError(null)
+    try {
+      openBuiltTemplateQuiz(await buildQuizFromTemplate(template, roundTopicMode), go)
+    } catch (buildError) {
+      console.error('Could not use template:', buildError)
+      setError(buildError instanceof Error ? buildError.message : 'Could not create a show from that template.')
+      setBusyId(null)
+    }
+  }
+
+  async function requestUseTemplate(template: QuizTemplateRow) {
     if (busyId) return
     setBusyId(template.id)
     setError(null)
     try {
-      openBuiltTemplateQuiz(await buildQuizFromTemplate(template), go)
-    } catch (buildError) {
-      console.error('Could not use template:', buildError)
-      setError(buildError instanceof Error ? buildError.message : 'Could not create a show from that template.')
+      const structure = await loadTemplateStructure(template)
+      if (structure.rounds.some(round => recognizedTemplateRoundTopic(round.title))) {
+        setTopicChoiceTemplate(template)
+        setBusyId(null)
+      } else {
+        setBusyId(null)
+        await createShowFromTemplate(template)
+      }
+    } catch (loadError) {
+      console.error('Could not inspect template topics:', loadError)
+      setError('Could not load that template. Please try again.')
       setBusyId(null)
     }
   }
@@ -2146,7 +2223,7 @@ function TemplatesScreen({ go }: { go: Go }) {
       </div>
       <div style={{ background: C.violetMist, border: `1px solid ${C.violet}30` }} className="mb-6 rounded-2xl px-5 py-4">
         <p style={{ color: C.ink }} className="text-sm font-extrabold">Same show shape, fresh questions</p>
-        <p style={{ color: C.sub }} className="mt-1 text-sm leading-6">When you use a template, every ordinary Question Library question is swapped for a fresh random replacement. A slot can accept any question type or be restricted to a specific type. Your rounds, order, games, content screens, in-show tiebreakers and backup tiebreakers stay in place.</p>
+        <p style={{ color: C.sub }} className="mt-1 text-sm leading-6">When you use a template, every ordinary Question Library question and tiebreaker is swapped for a fresh random replacement. A slot can accept any question type or be restricted to a specific type. If the template has round topics, you can keep them or choose fresh topics. Your rounds, order, games and content screens stay in place.</p>
       </div>
       {error && <p className="mb-5 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
       {loading ? <p style={{ color: C.sub }} className="py-24 text-center text-sm">Loading templates…</p> : templates.length === 0 ? (
@@ -2167,7 +2244,7 @@ function TemplatesScreen({ go }: { go: Go }) {
           <p style={{ color: C.sub }} className="mt-1 text-xs">Based on {quiz?.title ?? 'saved quiz'}</p>
           {roundCount !== undefined && questionCount !== undefined && estimatedMinutes !== undefined && <p style={{ color: C.sub }} className="mt-4 text-sm">{roundCount} rounds · {questionCount} question slots · ~{estimatedMinutes} min</p>}
           <div className="mt-auto flex items-center gap-2 pt-5">
-            <Btn sz="sm" cls="flex-1 justify-center" disabled={Boolean(busyId)} onClick={() => void createShowFromTemplate(template)}>{busyId === template.id ? 'Building…' : 'Use Template'}</Btn>
+            <Btn sz="sm" cls="flex-1 justify-center" disabled={Boolean(busyId)} onClick={() => void requestUseTemplate(template)}>{busyId === template.id ? 'Building…' : 'Use Template'}</Btn>
             <Btn sz="sm" v="secondary" onClick={() => void editTemplate(template)}>Edit</Btn>
             <IBtn icon={<I.browse />} title="View template structure" onClick={() => void viewTemplate(template)} />
             <button type="button" title="Rename template" onClick={() => void renameTemplate(template)} style={{ color: C.sub }} className="rounded-lg px-2 py-1 text-xs font-bold hover:bg-violet-mist hover:text-violet">Rename</button>
@@ -2176,6 +2253,18 @@ function TemplatesScreen({ go }: { go: Go }) {
         </article>
       })}</div>}
     </main>
+    {topicChoiceTemplate && <div className="fixed inset-0 z-[85] flex items-center justify-center bg-black/45 p-4" onMouseDown={event => { if (event.currentTarget === event.target) setTopicChoiceTemplate(null) }}>
+      <section className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl">
+        <p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Round topics</p>
+        <h2 style={{ color: C.ink }} className="mt-1 text-2xl font-extrabold">Use the same topics or mix them up?</h2>
+        <p style={{ color: C.sub }} className="mt-2 text-sm leading-6">This template has topic-based rounds. Either option keeps its rounds, games, content screens and ordering.</p>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <button type="button" onClick={() => void createShowFromTemplate(topicChoiceTemplate, 'keep')} className="rounded-2xl border border-violet-200 bg-violet-50 p-4 text-left transition-colors hover:bg-violet-100"><span className="block font-extrabold text-violet-800">Keep round topics</span><span className="mt-1 block text-xs leading-5 text-violet-700">Fresh questions, using the template’s existing topics.</span></button>
+          <button type="button" onClick={() => void createShowFromTemplate(topicChoiceTemplate, 'random')} className="rounded-2xl border border-zinc-200 bg-white p-4 text-left transition-colors hover:border-violet-200 hover:bg-violet-50"><span style={{ color: C.ink }} className="block font-extrabold">Choose new topics randomly</span><span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">Fresh questions with different topics selected for the rounds.</span></button>
+        </div>
+        <div className="mt-5 flex justify-end"><Btn v="secondary" sz="sm" onClick={() => setTopicChoiceTemplate(null)}>Cancel</Btn></div>
+      </section>
+    </div>}
     {previewTemplate && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4" onMouseDown={event => { if (event.currentTarget === event.target) setPreviewTemplate(null) }}>
       <section className="max-h-[88dvh] w-full max-w-3xl overflow-hidden rounded-3xl bg-white shadow-2xl">
         <header style={{ borderBottom: `1px solid ${C.line}` }} className="flex items-start justify-between gap-4 px-6 py-5">
