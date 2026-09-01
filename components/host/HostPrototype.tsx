@@ -1808,11 +1808,12 @@ async function loadTemplateStructure(template: QuizTemplateRow) {
 }
 
 async function buildQuizFromTemplate(template: QuizTemplateRow) {
-  const [structure, libraryResult] = await Promise.all([
+  const [structure, libraryResult, tiebreakerLibraryResult] = await Promise.all([
     loadTemplateStructure(template),
-    supabase.from('source_question_catalog').select('*').eq('status', 'active').eq('is_verified', true).range(0, 1999),
+    supabase.from('source_question_catalog').select('*').eq('origin', 'platform').eq('status', 'active').eq('is_verified', true).range(0, 1999),
+    supabase.from('source_tiebreakers').select('*').eq('status', 'active').eq('is_verified', true).range(0, 1999),
   ])
-  if (libraryResult.error) throw new Error('Could not load that template. Please try again.')
+  if (libraryResult.error || tiebreakerLibraryResult.error) throw new Error('Could not load that template. Please try again.')
 
   const library = (libraryResult.data ?? []) as PickerSourceQuestion[]
   const used = new Set(structure.questions.map(question => question.source_question_id).filter(Boolean))
@@ -1847,6 +1848,61 @@ async function buildQuizFromTemplate(template: QuizTemplateRow) {
     } as Json)
   }
 
+  const tiebreakerLibrary = (tiebreakerLibraryResult.data ?? []) as AutoBuildSourceTiebreaker[]
+  const tiebreakerGames = structure.showGames.filter(game => ['in-show-tiebreaker', 'tiebreaker-style-question'].includes(game.game_type))
+  const usedTiebreakerContent = new Set([
+    ...structure.tiebreakers.map(item => tiebreakerMatchKey(item.prompt, item.correct_value)),
+    ...tiebreakerGames.map(game => {
+      const parsed = audienceQuestionFromSettings(game.settings)
+      return tiebreakerMatchKey(parsed.prompt, parsed.correctNumber ?? '')
+    }),
+  ])
+  const usedTiebreakerIds = new Set(tiebreakerGames.flatMap(game => {
+    const settings = game.settings && typeof game.settings === 'object' && !Array.isArray(game.settings) ? game.settings as Record<string, Json> : {}
+    return typeof settings.source_tiebreaker_id === 'string' ? [settings.source_tiebreaker_id] : []
+  }))
+  const chosenTiebreakerIds = new Set<string>()
+
+  function randomTiebreakerReplacement() {
+    const candidates = tiebreakerLibrary.filter(candidate => !usedTiebreakerIds.has(candidate.id)
+      && !usedTiebreakerContent.has(tiebreakerMatchKey(candidate.prompt, candidate.correct_value))
+      && !chosenTiebreakerIds.has(candidate.id))
+    if (candidates.length === 0) throw new Error('The Tiebreaker Library does not have enough unused questions for this template.')
+    const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
+    const source = candidates[randomValue % candidates.length]
+    chosenTiebreakerIds.add(source.id)
+    return source
+  }
+
+  const replacementTiebreakers = structure.tiebreakers.map(original => {
+    const source = randomTiebreakerReplacement()
+    return {
+      ...original,
+      tiebreaker_key: `tiebreaker-${crypto.randomUUID()}`,
+      prompt: source.prompt,
+      correct_value: source.correct_value,
+      answer_unit: source.answer_unit,
+      notes: source.notes,
+    }
+  })
+  const replacementShowGames = structure.showGames.map(original => {
+    if (!['in-show-tiebreaker', 'tiebreaker-style-question'].includes(original.game_type)) return original
+    const source = randomTiebreakerReplacement()
+    const current = audienceQuestionFromSettings(original.settings)
+    const settings = original.settings && typeof original.settings === 'object' && !Array.isArray(original.settings) ? original.settings as Record<string, Json> : {}
+    return {
+      ...original,
+      show_game_key: `show-game-${crypto.randomUUID()}`,
+      settings: {
+        ...settings,
+        ...audienceQuestionSettings({ ...current, prompt: source.prompt, correctNumber: source.correct_value }),
+        tiebreaker_answer_unit: source.answer_unit,
+        tiebreaker_notes: source.notes,
+        source_tiebreaker_id: source.id,
+      },
+    }
+  })
+
   const nextTitle = `${template.name} · ${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}`
   const { data: quizId, error: saveError } = await supabase.rpc('save_quiz_with_show_games', {
     p_quiz_id: null,
@@ -1855,8 +1911,8 @@ async function buildQuizFromTemplate(template: QuizTemplateRow) {
     p_estimated_minutes: structure.estimatedMinutes,
     p_questions: replacements,
     p_content_screens: structure.contentScreens as unknown as Json,
-    p_tiebreakers: structure.tiebreakers as unknown as Json,
-    p_show_games: structure.showGames as unknown as Json,
+    p_tiebreakers: replacementTiebreakers as unknown as Json,
+    p_show_games: replacementShowGames as unknown as Json,
   })
   if (saveError || !quizId) throw new Error('Could not create a show from that template.')
   return { quizId, title: nextTitle }
@@ -2349,16 +2405,16 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
             ].sort((left, right) => left.position - right.position)
             return <section key={round.number} onDragOver={event => { if (draggedRound !== null && draggedRound !== round.number) event.preventDefault() }} onDrop={event => { event.preventDefault(); if (draggedRound !== null) moveRoundBefore(draggedRound, round.number); setDraggedRound(null) }} style={{ borderColor: C.line, background: C.panel }} className={`overflow-hidden rounded-2xl border shadow-sm transition-opacity ${draggedRound === round.number ? 'opacity-60' : ''}`}>
               <div style={{ borderBottom: `1px solid ${C.line}`, background: C.ground }} className="flex items-center gap-3 px-4 py-3"><button type="button" draggable onDragStart={event => { setDraggedRound(round.number); event.dataTransfer.effectAllowed = 'move' }} onDragEnd={() => setDraggedRound(null)} aria-label={`Drag Round ${round.number}`} title="Drag to reorder round" className="cursor-grab touch-none text-zinc-400 active:cursor-grabbing"><I.grip /></button><span style={{ color: C.sub }} className="shrink-0 text-[10px] font-black uppercase tracking-widest">Round {round.number}</span><input aria-label={`Round ${round.number} title`} value={round.title} onChange={event => setDraft(current => current ? { ...current, rounds: current.rounds.map(item => item.number === round.number ? { ...item, title: event.target.value } : item) } : current)} className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-bold text-zinc-900" /><button type="button" disabled={draft.rounds.length <= 1} onClick={() => deleteRound(round.number)} className="rounded-lg px-2 py-1 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-30">Delete round</button></div>
-              <div className="space-y-2 p-4">{items.map(entry => <div key={entry.key} onDragOver={event => { if (draggedItem?.roundNumber === round.number && draggedItem.key !== entry.key) { event.preventDefault(); event.stopPropagation() } }} onDrop={event => { if (draggedItem?.roundNumber !== round.number) return; event.preventDefault(); event.stopPropagation(); moveItemBefore(round.number, draggedItem.key, entry.key); setDraggedItem(null) }} style={entry.kind === 'question' ? { borderColor: '#C4A7FF', background: '#F5F0FF' } : { borderColor: C.line, background: C.panel }} className={`flex items-start gap-3 rounded-xl border px-3 py-3 transition-opacity ${draggedItem?.key === entry.key ? 'opacity-60' : ''}`}>
+              <div className="space-y-2 p-4">{items.map(entry => <div key={entry.key} onDragOver={event => { if (draggedItem?.roundNumber === round.number && draggedItem.key !== entry.key) { event.preventDefault(); event.stopPropagation() } }} onDrop={event => { if (draggedItem?.roundNumber !== round.number) return; event.preventDefault(); event.stopPropagation(); moveItemBefore(round.number, draggedItem.key, entry.key); setDraggedItem(null) }} style={entry.kind === 'question' ? { borderColor: '#C4A7FF', borderLeftWidth: 4, background: C.panel } : { borderColor: C.line, background: C.panel }} className={`flex items-start gap-3 rounded-xl border px-3 py-3 transition-opacity ${draggedItem?.key === entry.key ? 'opacity-60' : ''}`}>
                 <button type="button" draggable onDragStart={event => { event.stopPropagation(); setDraggedItem({ roundNumber: round.number, key: entry.key }); event.dataTransfer.effectAllowed = 'move' }} onDragEnd={() => setDraggedItem(null)} aria-label="Drag template item" title="Drag to reorder" className="mt-1 shrink-0 cursor-grab touch-none text-zinc-400 active:cursor-grabbing"><I.grip /></button>
-                <div className="min-w-0 flex-1">{entry.kind === 'question' ? <div className="flex flex-wrap items-center gap-2"><span style={{ color: C.violet }} className="rounded-md bg-violet-600 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-white">Question Library</span><span style={{ color: C.violet }} className="font-extrabold">Question will be here</span><select aria-label="Replacement question type" value={entry.item.question_type} onChange={event => setDraft(current => current ? { ...current, questions: current.questions.map(item => item.question_key === entry.item.question_key ? { ...item, question_type: event.target.value, source_question_id: null } : item) } : current)} className="rounded-lg border border-violet-200 bg-white px-2 py-1 text-xs font-semibold text-violet-800">{TEMPLATE_QUESTION_TYPES.map(type => <option key={type} value={type}>{templateQuestionTypeLabel(type)}</option>)}</select><span style={{ color: C.sub }} className="text-xs">Fresh random replacement</span></div> : entry.kind === 'content' ? <div className="space-y-2"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Content screen</p><input value={entry.item.title} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, title: event.target.value } : item) } : current)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-bold text-zinc-900" /><textarea value={entry.item.body} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, body: event.target.value } : item) } : current)} placeholder="Content shown to players" rows={2} className="w-full resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-700" /></div> : <div className="flex flex-wrap items-center gap-2"><span style={{ color: C.violet }} className="rounded-md bg-violet-600 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-white">Game</span><select value={entry.item.game_type} disabled={!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType)} onChange={event => { const type = event.target.value as ShowGameType; setDraft(current => current ? { ...current, showGames: current.showGames.map(item => item.show_game_key === entry.item.show_game_key ? { ...item, game_type: type, title: showGameLabel(type) } : item) } : current) }} className="rounded-lg border border-zinc-200 px-2 py-1 text-sm font-bold text-zinc-800">{TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) ? TEMPLATE_EDITOR_GAME_TYPES.map(type => <option key={type} value={type}>{showGameLabel(type)}</option>) : <option value={entry.item.game_type}>{entry.item.title}</option>}</select>{!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) && <span style={{ color: C.sub }} className="text-xs">Configure this special game in a quiz before saving it as a template.</span>}</div>}</div>
+                <div className="min-w-0 flex-1">{entry.kind === 'question' ? <div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">Question Library</span><span style={{ color: C.violet }} className="font-extrabold">Question will be here</span><select aria-label="Replacement question type" value={entry.item.question_type} onChange={event => setDraft(current => current ? { ...current, questions: current.questions.map(item => item.question_key === entry.item.question_key ? { ...item, question_type: event.target.value, source_question_id: null } : item) } : current)} className="rounded-lg border border-violet-200 bg-white px-2 py-1 text-xs font-semibold text-violet-800">{TEMPLATE_QUESTION_TYPES.map(type => <option key={type} value={type}>{templateQuestionTypeLabel(type)}</option>)}</select><span style={{ color: C.sub }} className="text-xs">Fresh random replacement</span></div> : entry.kind === 'content' ? <div className="space-y-2"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Content screen</p><input value={entry.item.title} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, title: event.target.value } : item) } : current)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-bold text-zinc-900" /><textarea value={entry.item.body} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, body: event.target.value } : item) } : current)} placeholder="Content shown to players" rows={2} className="w-full resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-700" /></div> : <div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">Game</span><select value={entry.item.game_type} disabled={!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType)} onChange={event => { const type = event.target.value as ShowGameType; setDraft(current => current ? { ...current, showGames: current.showGames.map(item => item.show_game_key === entry.item.show_game_key ? { ...item, game_type: type, title: showGameLabel(type) } : item) } : current) }} className="rounded-lg border border-zinc-200 px-2 py-1 text-sm font-bold text-zinc-800">{TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) ? TEMPLATE_EDITOR_GAME_TYPES.map(type => <option key={type} value={type}>{showGameLabel(type)}</option>) : <option value={entry.item.game_type}>{entry.item.title}</option>}</select>{!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) && <span style={{ color: C.sub }} className="text-xs">Configure this special game in a quiz before saving it as a template.</span>}</div>}</div>
                 <button type="button" aria-label="Delete template item" onClick={() => deleteItem(entry.key)} className="shrink-0 rounded-lg px-2 py-1 text-sm font-bold text-red-600 hover:bg-red-50">Delete</button>
               </div>)}</div>
               <div style={{ borderTop: `1px solid ${C.line}` }} className="flex flex-wrap gap-2 px-4 py-3"><button type="button" onClick={() => addQuestionSlot(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Question</button><button type="button" onClick={() => addContentScreen(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Content Screen</button><button type="button" onClick={() => addGame(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Game</button></div>
             </section>
           })}
           <button type="button" onClick={addRound} className="w-full rounded-2xl border-2 border-dashed border-violet-200 bg-white px-4 py-4 text-sm font-extrabold text-violet-700 hover:bg-violet-50">＋ Add Round</button>
-          {draft.tiebreakers.length > 0 && <div className="rounded-xl border border-dashed border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-600"><strong className="text-zinc-900">{draft.tiebreakers.length} backup tiebreaker{draft.tiebreakers.length === 1 ? '' : 's'}</strong> will remain attached to this template.</div>}
+          {draft.tiebreakers.length > 0 && <div className="rounded-xl border border-violet-200 bg-white px-4 py-3 text-sm text-zinc-600"><strong className="text-violet-700">{draft.tiebreakers.length} backup tiebreaker{draft.tiebreakers.length === 1 ? '' : 's'}</strong> will receive fresh random Tiebreaker Library replacements when this template is used.</div>}
         </div>
       </div>
     </section>
@@ -2784,6 +2840,8 @@ function QuizBuilder({ go }: { go: Go }) {
   const [replacingLibraryQuestionId, setReplacingLibraryQuestionId] = useState<string | null>(null)
   const [replacingLibraryTiebreakerId, setReplacingLibraryTiebreakerId] = useState<string | null>(null)
   const [replacementError, setReplacementError] = useState<string | null>(null)
+  const [roundTopicError, setRoundTopicError] = useState<string | null>(null)
+  const [roundTopicBusyId, setRoundTopicBusyId] = useState<number | null>(null)
   const [tiebreakerReplacementError, setTiebreakerReplacementError] = useState<string | null>(null)
   const replacementHistoryRef = useRef(new Map<string, Set<string>>())
   const replacementBackStackRef = useRef(new Map<string, BuilderQuestionData[]>())
@@ -3158,6 +3216,66 @@ function QuizBuilder({ go }: { go: Go }) {
       } : question),
     } : round))
     setDirty(true)
+  }
+
+  async function replaceRoundTopic(roundId: number, topic: string) {
+    const currentRound = rounds.find(round => round.id === roundId)
+    if (!currentRound || currentRound.questions.length === 0 || roundTopicBusyId !== null) return
+    setRoundTopicBusyId(roundId)
+    setRoundTopicError(null)
+
+    const { data, error } = await supabase
+      .from('source_question_catalog')
+      .select('*')
+      .eq('origin', 'platform')
+      .eq('status', 'active')
+      .eq('is_verified', true)
+      .range(0, 1999)
+
+    if (error) {
+      console.error('Could not change the round topic:', error)
+      setRoundTopicError('Could not load matching Question Library questions. Please try again.')
+      setRoundTopicBusyId(null)
+      return
+    }
+
+    const usedOutsideRound = new Set(rounds
+      .filter(round => round.id !== roundId)
+      .flatMap(round => round.questions.map(question => question.sourceQuestionId).filter((id): id is string => Boolean(id))))
+    const currentRoundSourceIds = new Set(currentRound.questions.map(question => question.sourceQuestionId).filter((id): id is string => Boolean(id)))
+    const selectedIds = new Set<string>()
+    const pool = (data ?? []).filter(candidate => topic === 'General Knowledge'
+      || candidate.category?.toLocaleLowerCase() === topic.toLocaleLowerCase()
+      || candidate.category_names.some(category => category.toLocaleLowerCase() === topic.toLocaleLowerCase()))
+    const replacements: BuilderQuestionData[] = []
+
+    for (const question of currentRound.questions) {
+      const mechanic = question.questionType === 'image-question' ? 'single-answer' : question.questionType
+      const candidates = pool.filter(candidate => {
+        const candidateMechanic = candidate.question_type === 'image-question' ? 'single-answer' : candidate.question_type
+        return candidateMechanic === mechanic
+          && !usedOutsideRound.has(candidate.id)
+          && !currentRoundSourceIds.has(candidate.id)
+          && !selectedIds.has(candidate.id)
+      })
+      if (candidates.length === 0) {
+        setRoundTopicError(`The Question Library does not have enough unused ${topic} questions in the required question types for this round.`)
+        setRoundTopicBusyId(null)
+        return
+      }
+      candidates.sort((left, right) => libraryReplacementFit(question, right) - libraryReplacementFit(question, left))
+      const bestScore = libraryReplacementFit(question, candidates[0])
+      const bestCandidates = candidates.filter(candidate => libraryReplacementFit(question, candidate) === bestScore)
+      const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
+      const selected = bestCandidates[randomValue % bestCandidates.length]
+      selectedIds.add(selected.id)
+      const snapshot = sourceToBuilderQuestion(selected)
+      replacements.push({ ...snapshot, id: question.id, questionKey: question.questionKey, itemPosition: question.itemPosition })
+    }
+
+    setRounds(current => current.map(round => round.id === roundId ? { ...round, title: topic, questions: replacements } : round))
+    setDirty(true)
+    setRoundTopicBusyId(null)
   }
 
   async function cycleLibraryTiebreaker(tiebreakerId: string) {
@@ -3708,6 +3826,11 @@ function QuizBuilder({ go }: { go: Go }) {
               {replacementError}
             </div>
           )}
+          {roundTopicError && (
+            <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="rounded-xl px-4 py-3 text-sm font-semibold">
+              {roundTopicError}
+            </div>
+          )}
           {loading && <div style={{ color: C.sub }} className="py-24 text-center text-sm">Loading quiz…</div>}
           {!loading && !loadError && rounds.map((round, roundIndex) => {
             const roundDropPlacement = roundDropTarget?.id === round.id ? roundDropTarget.placement : null
@@ -3728,6 +3851,8 @@ function QuizBuilder({ go }: { go: Go }) {
               onCycleLibrary={questionId => void cycleLibraryQuestion(round.id, questionId)}
               onCycleLibraryBack={questionId => cycleLibraryQuestionBack(round.id, questionId)}
               replacementBackCounts={replacementBackCounts}
+              roundTopicBusy={roundTopicBusyId === round.id}
+              onTopicChange={topic => void replaceRoundTopic(round.id, topic)}
               onRoundPointerDown={event => startRoundDrag(round.id, event)}
               onTitleChange={nextTitle => {
                 setRounds(current => current.map(item => item.id === round.id ? { ...item, title: nextTitle } : item))
@@ -4858,7 +4983,7 @@ function QuizPreview({ title, rounds, onClose }: {
   )
 }
 
-function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacingLibraryTiebreakerId, replacementBackCounts, onEdit, onReplace, onCycleLibrary, onCycleLibraryBack, onRoundPointerDown, onTitleChange, onAddQuestion, onAddContentScreen, onAddShowGame, onAddTiebreaker, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onPickTiebreaker, onCycleTiebreaker, onDeleteShowGame, onMoveShowGameToBackup, onReorderItems }: {
+function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacingLibraryTiebreakerId, replacementBackCounts, roundTopicBusy, onEdit, onReplace, onCycleLibrary, onCycleLibraryBack, onRoundPointerDown, onTitleChange, onTopicChange, onAddQuestion, onAddContentScreen, onAddShowGame, onAddTiebreaker, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onPickTiebreaker, onCycleTiebreaker, onDeleteShowGame, onMoveShowGameToBackup, onReorderItems }: {
   round: BuilderRoundData
   roundNumber: number
   replacingLibraryQuestionId: string | null
@@ -4868,8 +4993,10 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
   onCycleLibrary: (questionId: string) => void
   onCycleLibraryBack: (questionId: string) => void
   replacementBackCounts: Record<string, number>
+  roundTopicBusy: boolean
   onRoundPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
   onTitleChange: (title: string) => void
+  onTopicChange: (topic: string) => void
   onAddQuestion: (itemPosition: number) => void
   onAddContentScreen: (itemPosition: number) => void
   onAddShowGame: (itemPosition: number) => void
@@ -4905,6 +5032,9 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
   const itemKeys = items.map(item => item.kind === 'question'
     ? `question:${item.question.id}`
     : item.kind === 'content' ? `content:${item.screen.id}` : `show-game:${item.showGame.id}`)
+  const selectedRoundTopic = round.title === 'General Knowledge' || SOURCE_QUESTION_CATEGORIES.includes(round.title as (typeof SOURCE_QUESTION_CATEGORIES)[number])
+    ? round.title
+    : ''
 
   function itemDragTransform(itemKey: string) {
     if (!itemDragPreview) return undefined
@@ -5066,6 +5196,20 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
             className="rounded-md p-1 transition-colors hover:bg-violet-mist hover:text-violet group-hover:text-violet"
           ><I.pencil /></button>
         </div>
+        <label className="hidden items-center gap-1.5 lg:flex">
+          <span style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-wider">Topic</span>
+          <select
+            aria-label={`Set topic for Round ${roundNumber}`}
+            value={selectedRoundTopic}
+            disabled={round.questions.length === 0 || roundTopicBusy}
+            onChange={event => { if (event.target.value) onTopicChange(event.target.value) }}
+            className="max-w-44 rounded-lg border border-violet-200 bg-white px-2.5 py-1.5 text-xs font-bold text-violet-700 disabled:opacity-40"
+          >
+            <option value="">{roundTopicBusy ? 'Replacing…' : 'Set round topic…'}</option>
+            <option value="General Knowledge">General Knowledge</option>
+            {SOURCE_QUESTION_CATEGORIES.map(topic => <option key={topic} value={topic}>{topic}</option>)}
+          </select>
+        </label>
         <span style={{ color: C.sub }} className="text-xs font-mono">{round.questions.length}q</span>
         <button onClick={() => setOpen(o => !o)} style={{ color: C.sub }} className="hover:text-ink transition-colors p-0.5">
           <I.down r={!open} />
