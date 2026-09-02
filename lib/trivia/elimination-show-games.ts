@@ -39,6 +39,10 @@ export function isEliminationShowGame(type: string | null | undefined): type is 
   return type === 'heads-or-tails' || type === 'dodge-the-rock' || type === 'scissors-paper-rock'
 }
 
+export function isTiebreakerLibraryShowGame(type: string | null | undefined) {
+  return type === 'in-show-tiebreaker' || type === 'tiebreaker-style-question'
+}
+
 export function eliminationShowGameState(settings: Json | null | undefined): EliminationShowGameState {
   const value = objectSettings(settings)
   const rawPositions = value.positions && typeof value.positions === 'object' && !Array.isArray(value.positions)

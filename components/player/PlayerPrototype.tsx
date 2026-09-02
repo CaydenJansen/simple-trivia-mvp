@@ -4106,7 +4106,7 @@ export default function App() {
         justifyContent: 'center',
         padding: '32px 24px',
       }}>
-        <div style={{
+        <div data-testid="player-prototype-phone" style={{
           width: 390,
           height: 844,
           background: C.ground,

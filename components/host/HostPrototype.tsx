@@ -120,6 +120,7 @@ import {
   eliminationShowGameState,
   autoBuildShowGameTypes,
   isEliminationShowGame,
+  isTiebreakerLibraryShowGame,
   showGameEmoji,
   showGameInstructions,
   showGameLabel,
@@ -1732,7 +1733,7 @@ type TemplateStructure = {
 }
 type TemplatePreviewItem = {
   id: string
-  kind: 'question' | 'content' | 'game'
+  kind: 'question' | 'tiebreaker' | 'content' | 'game'
   roundNumber: number
   roundTitle: string
   itemPosition: number
@@ -1898,7 +1899,7 @@ async function buildQuizFromTemplate(template: QuizTemplateRow, roundTopicMode: 
   }
 
   const tiebreakerLibrary = (tiebreakerLibraryResult.data ?? []) as AutoBuildSourceTiebreaker[]
-  const tiebreakerGames = structure.showGames.filter(game => ['in-show-tiebreaker', 'tiebreaker-style-question'].includes(game.game_type))
+  const tiebreakerGames = structure.showGames.filter(game => isTiebreakerLibraryShowGame(game.game_type))
   const usedTiebreakerContent = new Set([
     ...structure.tiebreakers.map(item => tiebreakerMatchKey(item.prompt, item.correct_value)),
     ...tiebreakerGames.map(game => {
@@ -1936,7 +1937,7 @@ async function buildQuizFromTemplate(template: QuizTemplateRow, roundTopicMode: 
   })
   const replacementShowGames = structure.showGames.map(original => {
     const roundTitle = roundTopics.get(original.round_number) ?? original.round_title
-    if (!['in-show-tiebreaker', 'tiebreaker-style-question'].includes(original.game_type)) return { ...original, round_title: roundTitle }
+    if (!isTiebreakerLibraryShowGame(original.game_type)) return { ...original, round_title: roundTitle }
     const source = randomTiebreakerReplacement()
     const current = audienceQuestionFromSettings(original.settings)
     const settings = original.settings && typeof original.settings === 'object' && !Array.isArray(original.settings) ? original.settings as Record<string, Json> : {}
@@ -2112,15 +2113,18 @@ function TemplatesScreen({ go }: { go: Go }) {
         label: item.title,
         detail: item.body || 'Content screen',
       })),
-      ...structure.showGames.map(item => ({
-        id: item.show_game_key,
-        kind: 'game' as const,
-        roundNumber: item.round_number,
-        roundTitle: item.round_title,
-        itemPosition: item.item_position,
-        label: item.title,
-        detail: showGameLabel(item.game_type as ShowGameType),
-      })),
+      ...structure.showGames.map(item => {
+        const isTiebreakerSlot = isTiebreakerLibraryShowGame(item.game_type)
+        return {
+          id: item.show_game_key,
+          kind: isTiebreakerSlot ? 'tiebreaker' as const : 'game' as const,
+          roundNumber: item.round_number,
+          roundTitle: item.round_title,
+          itemPosition: item.item_position,
+          label: isTiebreakerSlot ? 'Tiebreaker will be here' : item.title,
+          detail: isTiebreakerSlot ? `Fresh random Tiebreaker Library replacement · ${showGameLabel(item.game_type as ShowGameType)}` : showGameLabel(item.game_type as ShowGameType),
+        }
+      }),
     ].sort((a, b) => a.roundNumber - b.roundNumber || a.itemPosition - b.itemPosition))
     setPreviewBackups(structure.tiebreakers.length)
     setPreviewLoading(false)
@@ -2277,10 +2281,12 @@ function TemplatesScreen({ go }: { go: Go }) {
               const items = previewItems.filter(item => item.roundNumber === roundNumber)
               return <div key={roundNumber} className="mb-6 last:mb-0">
                 <h3 style={{ color: C.ink }} className="mb-2 font-extrabold">Round {roundNumber} · {items[0]?.roundTitle || `Round ${roundNumber}`}</h3>
-                <div className="space-y-2">{items.map(item => <div key={`${item.kind}-${item.id}`} style={{ border: `1px solid ${item.kind === 'question' ? `${C.violet}45` : C.line}`, background: item.kind === 'question' ? C.violetMist : C.panel }} className="rounded-xl px-4 py-3">
-                  <div className="flex items-center gap-2"><span className="text-sm">{item.kind === 'question' ? '❓' : item.kind === 'content' ? '▣' : '🎮'}</span><p style={{ color: C.ink }} className="font-bold">{item.label}</p></div>
+                <div className="space-y-2">{items.map(item => {
+                  const isLibrarySlot = item.kind === 'question' || item.kind === 'tiebreaker'
+                  return <div key={`${item.kind}-${item.id}`} style={{ border: `1px solid ${isLibrarySlot ? `${C.violet}45` : C.line}`, background: isLibrarySlot ? C.violetMist : C.panel }} className="rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-2"><span className="text-sm">{item.kind === 'question' ? '❓' : item.kind === 'tiebreaker' ? '🎯' : item.kind === 'content' ? '▣' : '🎮'}</span><p style={{ color: isLibrarySlot ? C.violet : C.ink }} className="font-bold">{item.label}</p></div>
                   {item.detail && <p style={{ color: C.sub }} className="mt-1 pl-7 text-xs">{item.detail}</p>}
-                </div>)}</div>
+                </div>})}</div>
               </div>
             })}
             {previewBackups > 0 && <div style={{ border: `1px dashed ${C.line}` }} className="rounded-xl px-4 py-3 text-sm"><strong style={{ color: C.ink }}>{previewBackups} backup tiebreaker{previewBackups === 1 ? '' : 's'}</strong><span style={{ color: C.sub }}> will also be kept in reserve.</span></div>}
@@ -2460,6 +2466,29 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
     })
   }
 
+  function addTiebreaker(roundNumber: number) {
+    setDraft(current => {
+      if (!current) return current
+      const round = current.rounds.find(item => item.number === roundNumber)
+      const gameType: ShowGameType = 'in-show-tiebreaker'
+      return { ...current, showGames: [...current.showGames, {
+        show_game_key: `template-tiebreaker-${crypto.randomUUID()}`,
+        item_position: nextBuilderItemPosition(allItemPositions(current)),
+        round_number: roundNumber,
+        round_title: round?.title ?? `Round ${roundNumber}`,
+        game_type: gameType,
+        title: showGameLabel(gameType),
+        settings: {
+          ...showGameRewardSettings(DEFAULT_SHOW_GAME_REWARD) as Record<string, Json>,
+          ...audienceQuestionSettings({ mode: 'closest-number', prompt: '', correctNumber: null, allowMultipleWinners: false, shareResponses: false }),
+          source_tiebreaker_id: null,
+          tiebreaker_answer_unit: null,
+          tiebreaker_notes: null,
+        },
+      }] }
+    })
+  }
+
   function addRound() {
     setDraft(current => current ? { ...current, rounds: [...current.rounds, { number: current.rounds.length + 1, title: `Round ${current.rounds.length + 1}` }] } : current)
   }
@@ -2494,12 +2523,15 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
             ].sort((left, right) => left.position - right.position)
             return <section key={round.number} onDragOver={event => { if (draggedRound !== null && draggedRound !== round.number) event.preventDefault() }} onDrop={event => { event.preventDefault(); if (draggedRound !== null) moveRoundBefore(draggedRound, round.number); setDraggedRound(null) }} style={{ borderColor: C.line, background: C.panel }} className={`overflow-hidden rounded-2xl border shadow-sm transition-opacity ${draggedRound === round.number ? 'opacity-60' : ''}`}>
               <div style={{ borderBottom: `1px solid ${C.line}`, background: C.ground }} className="flex items-center gap-3 px-4 py-3"><button type="button" draggable onDragStart={event => { setDraggedRound(round.number); event.dataTransfer.effectAllowed = 'move' }} onDragEnd={() => setDraggedRound(null)} aria-label={`Drag Round ${round.number}`} title="Drag to reorder round" className="cursor-grab touch-none text-zinc-400 active:cursor-grabbing"><I.grip /></button><span style={{ color: C.sub }} className="shrink-0 text-[10px] font-black uppercase tracking-widest">Round {round.number}</span><input aria-label={`Round ${round.number} title`} value={round.title} onChange={event => setDraft(current => current ? { ...current, rounds: current.rounds.map(item => item.number === round.number ? { ...item, title: event.target.value } : item) } : current)} className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-bold text-zinc-900" /><button type="button" disabled={draft.rounds.length <= 1} onClick={() => deleteRound(round.number)} className="rounded-lg px-2 py-1 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-30">Delete round</button></div>
-              <div className="space-y-2 p-4">{items.map(entry => <div key={entry.key} onDragOver={event => { if (draggedItem?.roundNumber === round.number && draggedItem.key !== entry.key) { event.preventDefault(); event.stopPropagation() } }} onDrop={event => { if (draggedItem?.roundNumber !== round.number) return; event.preventDefault(); event.stopPropagation(); moveItemBefore(round.number, draggedItem.key, entry.key); setDraggedItem(null) }} style={entry.kind === 'question' ? { borderColor: '#C4A7FF', borderLeftWidth: 4, background: C.panel } : { borderColor: C.line, background: C.panel }} className={`flex items-start gap-3 rounded-xl border px-3 py-3 transition-opacity ${draggedItem?.key === entry.key ? 'opacity-60' : ''}`}>
+              <div className="space-y-2 p-4">{items.map(entry => {
+                const isTiebreakerSlot = entry.kind === 'game' && isTiebreakerLibraryShowGame(entry.item.game_type)
+                const isLibrarySlot = entry.kind === 'question' || isTiebreakerSlot
+                return <div key={entry.key} onDragOver={event => { if (draggedItem?.roundNumber === round.number && draggedItem.key !== entry.key) { event.preventDefault(); event.stopPropagation() } }} onDrop={event => { if (draggedItem?.roundNumber !== round.number) return; event.preventDefault(); event.stopPropagation(); moveItemBefore(round.number, draggedItem.key, entry.key); setDraggedItem(null) }} style={isLibrarySlot ? { borderColor: '#C4A7FF', borderLeftWidth: 4, background: C.panel } : { borderColor: C.line, background: C.panel }} className={`flex items-start gap-3 rounded-xl border px-3 py-3 transition-opacity ${draggedItem?.key === entry.key ? 'opacity-60' : ''}`}>
                 <button type="button" draggable onDragStart={event => { event.stopPropagation(); setDraggedItem({ roundNumber: round.number, key: entry.key }); event.dataTransfer.effectAllowed = 'move' }} onDragEnd={() => setDraggedItem(null)} aria-label="Drag template item" title="Drag to reorder" className="mt-1 shrink-0 cursor-grab touch-none text-zinc-400 active:cursor-grabbing"><I.grip /></button>
-                <div className="min-w-0 flex-1">{entry.kind === 'question' ? <div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">Question Library</span><span style={{ color: C.violet }} className="font-extrabold">Question will be here</span><select aria-label="Replacement question type" value={entry.item.question_type} onChange={event => setDraft(current => current ? { ...current, questions: current.questions.map(item => item.question_key === entry.item.question_key ? { ...item, question_type: event.target.value, source_question_id: null } : item) } : current)} className="rounded-lg border border-violet-200 bg-white px-2 py-1 text-xs font-semibold text-violet-800">{TEMPLATE_QUESTION_TYPES.map(type => <option key={type} value={type}>{templateQuestionTypeLabel(type)}</option>)}</select><span style={{ color: C.sub }} className="text-xs">Fresh random replacement</span></div> : entry.kind === 'content' ? <div className="space-y-2"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Content screen</p><input value={entry.item.title} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, title: event.target.value } : item) } : current)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-bold text-zinc-900" /><textarea value={entry.item.body} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, body: event.target.value } : item) } : current)} placeholder="Content shown to players" rows={2} className="w-full resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-700" /></div> : <div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">Game</span><select value={entry.item.game_type} disabled={!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType)} onChange={event => { const type = event.target.value as ShowGameType; setDraft(current => current ? { ...current, showGames: current.showGames.map(item => item.show_game_key === entry.item.show_game_key ? { ...item, game_type: type, title: showGameLabel(type) } : item) } : current) }} className="rounded-lg border border-zinc-200 px-2 py-1 text-sm font-bold text-zinc-800">{TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) ? TEMPLATE_EDITOR_GAME_TYPES.map(type => <option key={type} value={type}>{showGameLabel(type)}</option>) : <option value={entry.item.game_type}>{entry.item.title}</option>}</select>{!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) && <span style={{ color: C.sub }} className="text-xs">Configure this special game in a quiz before saving it as a template.</span>}</div>}</div>
+                <div className="min-w-0 flex-1">{entry.kind === 'question' ? <div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">Question Library</span><span style={{ color: C.violet }} className="font-extrabold">Question will be here</span><select aria-label="Replacement question type" value={entry.item.question_type} onChange={event => setDraft(current => current ? { ...current, questions: current.questions.map(item => item.question_key === entry.item.question_key ? { ...item, question_type: event.target.value, source_question_id: null } : item) } : current)} className="rounded-lg border border-violet-200 bg-white px-2 py-1 text-xs font-semibold text-violet-800">{TEMPLATE_QUESTION_TYPES.map(type => <option key={type} value={type}>{templateQuestionTypeLabel(type)}</option>)}</select><span style={{ color: C.sub }} className="text-xs">Fresh random replacement</span></div> : entry.kind === 'content' ? <div className="space-y-2"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Content screen</p><input value={entry.item.title} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, title: event.target.value } : item) } : current)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-bold text-zinc-900" /><textarea value={entry.item.body} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, body: event.target.value } : item) } : current)} placeholder="Content shown to players" rows={2} className="w-full resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-700" /></div> : isTiebreakerSlot ? <div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">Tiebreaker Library</span><span style={{ color: C.violet }} className="font-extrabold">Tiebreaker will be here</span><span style={{ color: C.sub }} className="text-xs">Fresh random replacement · {showGameLabel(entry.item.game_type as ShowGameType)}</span></div> : <div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">Game</span><select value={entry.item.game_type} disabled={!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType)} onChange={event => { const type = event.target.value as ShowGameType; setDraft(current => current ? { ...current, showGames: current.showGames.map(item => item.show_game_key === entry.item.show_game_key ? { ...item, game_type: type, title: showGameLabel(type) } : item) } : current) }} className="rounded-lg border border-zinc-200 px-2 py-1 text-sm font-bold text-zinc-800">{TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) ? TEMPLATE_EDITOR_GAME_TYPES.map(type => <option key={type} value={type}>{showGameLabel(type)}</option>) : <option value={entry.item.game_type}>{entry.item.title}</option>}</select>{!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) && <span style={{ color: C.sub }} className="text-xs">Configure this special game in a quiz before saving it as a template.</span>}</div>}</div>
                 <button type="button" aria-label="Delete template item" onClick={() => deleteItem(entry.key)} className="shrink-0 rounded-lg px-2 py-1 text-sm font-bold text-red-600 hover:bg-red-50">Delete</button>
-              </div>)}</div>
-              <div style={{ borderTop: `1px solid ${C.line}` }} className="flex flex-wrap gap-2 px-4 py-3"><button type="button" onClick={() => addQuestionSlot(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Question</button><button type="button" onClick={() => addContentScreen(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Content Screen</button><button type="button" onClick={() => addGame(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Game</button></div>
+              </div>})}</div>
+              <div style={{ borderTop: `1px solid ${C.line}` }} className="flex flex-wrap gap-2 px-4 py-3"><button type="button" onClick={() => addQuestionSlot(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Question</button><button type="button" onClick={() => addContentScreen(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Content Screen</button><button type="button" onClick={() => addGame(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Game</button><button type="button" onClick={() => addTiebreaker(round.number)} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">＋ Add Tiebreaker</button></div>
             </section>
           })}
           <button type="button" onClick={addRound} className="w-full rounded-2xl border-2 border-dashed border-violet-200 bg-white px-4 py-4 text-sm font-extrabold text-violet-700 hover:bg-violet-50">＋ Add Round</button>
@@ -3430,7 +3462,7 @@ function QuizBuilder({ go }: { go: Go }) {
   async function cycleLibraryInShowTiebreaker(roundId: number, showGameId: string) {
     if (replacingLibraryTiebreakerId) return
     const currentShowGame = rounds.find(round => round.id === roundId)?.showGames.find(showGame => showGame.id === showGameId)
-    if (!currentShowGame || !['in-show-tiebreaker', 'tiebreaker-style-question'].includes(currentShowGame.gameType) || !currentShowGame.sourceTiebreakerId) return
+    if (!currentShowGame || !isTiebreakerLibraryShowGame(currentShowGame.gameType) || !currentShowGame.sourceTiebreakerId) return
 
     setReplacingLibraryTiebreakerId(showGameId)
     setTiebreakerReplacementError(null)
@@ -3554,11 +3586,11 @@ function QuizBuilder({ go }: { go: Go }) {
       setSaveError('Add a winner message for every custom game reward before saving.')
       return null
     }
-    if (rounds.some(round => round.showGames.some(showGame => ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType) && !showGame.audienceQuestionPrompt.trim()))) {
+    if (rounds.some(round => round.showGames.some(showGame => (showGame.gameType === 'audience-question' || isTiebreakerLibraryShowGame(showGame.gameType)) && !showGame.audienceQuestionPrompt.trim()))) {
       setSaveError('Add a prompt for every Audience Question and numerical question before saving.')
       return null
     }
-    if (rounds.some(round => round.showGames.some(showGame => ['in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType)
+    if (rounds.some(round => round.showGames.some(showGame => isTiebreakerLibraryShowGame(showGame.gameType)
       && (!showGame.audienceQuestionCorrectNumber.trim() || !Number.isFinite(Number(showGame.audienceQuestionCorrectNumber)))))) {
       setSaveError('Add a valid correct number for every Closest Guess game.')
       return null
@@ -3627,14 +3659,14 @@ function QuizBuilder({ go }: { go: Go }) {
                 description: item.showGame.rewardDescription.trim(),
                 winnerMessage: item.showGame.winnerMessage.trim(),
               }) as Record<string, Json>,
-              ...(['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(item.showGame.gameType) ? audienceQuestionSettings({
-                mode: ['in-show-tiebreaker', 'tiebreaker-style-question'].includes(item.showGame.gameType) ? 'closest-number' : 'favourite',
+              ...(item.showGame.gameType === 'audience-question' || isTiebreakerLibraryShowGame(item.showGame.gameType) ? audienceQuestionSettings({
+                mode: isTiebreakerLibraryShowGame(item.showGame.gameType) ? 'closest-number' : 'favourite',
                 prompt: item.showGame.audienceQuestionPrompt,
-                correctNumber: ['in-show-tiebreaker', 'tiebreaker-style-question'].includes(item.showGame.gameType) ? Number(item.showGame.audienceQuestionCorrectNumber) : null,
+                correctNumber: isTiebreakerLibraryShowGame(item.showGame.gameType) ? Number(item.showGame.audienceQuestionCorrectNumber) : null,
                 allowMultipleWinners: item.showGame.audienceQuestionAllowMultipleWinners,
                 shareResponses: item.showGame.audienceQuestionShareResponses,
               }) : {}),
-              ...(['in-show-tiebreaker', 'tiebreaker-style-question'].includes(item.showGame.gameType) ? {
+              ...(isTiebreakerLibraryShowGame(item.showGame.gameType) ? {
                 tiebreaker_answer_unit: item.showGame.tiebreakerAnswerUnit.trim() || null,
                 tiebreaker_notes: item.showGame.tiebreakerNotes.trim() || null,
                 source_tiebreaker_id: item.showGame.sourceTiebreakerId,
@@ -4592,7 +4624,7 @@ function TiebreakerBuilder({ tiebreakers, replacingId, replacementError, onAdd, 
                 {isLibraryTiebreaker && (
                   <div className="mb-2 flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-violet-700">
                     <span className="flex h-5 w-5 items-center justify-center rounded-md bg-violet-100">★</span>
-                    Question Library
+                    Tiebreaker Library
                   </div>
                 )}
                 <div className="mb-2 flex items-start gap-2">
@@ -5478,7 +5510,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onPickT
   onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
 }) {
   const [expanded, setExpanded] = useState(() => showGame.id.startsWith('show-game-'))
-  const usesTiebreakerLibrary = ['in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType)
+  const usesTiebreakerLibrary = isTiebreakerLibraryShowGame(showGame.gameType)
 
   return (
     <div style={{ border: `1.5px solid ${C.violet}55`, background: C.violetMist }} className="rounded-xl overflow-hidden">
@@ -5487,6 +5519,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onPickT
           style={{ color: C.sub }} className="mt-0.5 touch-none select-none cursor-grab hover:text-ink active:cursor-grabbing transition-colors shrink-0"
           onClick={event => event.stopPropagation()}><I.grip /></button>
         <div className="min-w-0 flex-1">
+          {usesTiebreakerLibrary && showGame.sourceTiebreakerId && <div className="mb-2 flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-violet-700"><span className="flex h-5 w-5 items-center justify-center rounded-md bg-violet-100">★</span>Tiebreaker Library</div>}
           <div className="mb-1.5 flex items-center gap-2">
             <span style={{ background: C.violet, color: 'white' }} className="rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest">{showGame.gameType === 'in-show-tiebreaker' ? 'Tiebreaker' : 'Game'}</span>
             <span style={{ color: C.sub }} className="text-[10px]">
@@ -5494,7 +5527,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onPickT
             </span>
           </div>
           <p style={{ color: C.ink }} className="truncate text-sm font-semibold group-hover:text-violet">{showGameEmoji(showGame.gameType)} {showGame.title}</p>
-          {['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType) && showGame.audienceQuestionPrompt.trim() && (
+          {(showGame.gameType === 'audience-question' || isTiebreakerLibraryShowGame(showGame.gameType)) && showGame.audienceQuestionPrompt.trim() && (
             <p style={{ color: C.sub }} className="mt-1 line-clamp-2 text-xs leading-5">{showGame.audienceQuestionPrompt}</p>
           )}
         </div>
@@ -5543,7 +5576,7 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onPickT
             </select>
           </div>}
           <p style={{ color: C.sub }} className="text-xs leading-5">{showGameInstructions(showGame.gameType)}</p>
-          {['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.gameType) && <>
+          {(showGame.gameType === 'audience-question' || isTiebreakerLibraryShowGame(showGame.gameType)) && <>
             <div>
               <label style={{ color: C.sub }} className="mb-1 block text-[10px] font-bold uppercase tracking-wider">How is the winner chosen?</label>
               {showGame.gameType === 'audience-question'
@@ -8317,7 +8350,7 @@ function LiveQuestion({ go }: { go: Go }) {
       const currentContentScreen = contentScreens.find(item => item.screen_key === game.current_content_screen_key) ?? null
       const currentShowGame = showGames.find(item => item.show_game_key === game.current_show_game_key) ?? null
 
-      if (currentShowGame && ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(currentShowGame.game_type)) {
+      if (currentShowGame && (currentShowGame.game_type === 'audience-question' || isTiebreakerLibraryShowGame(currentShowGame.game_type))) {
         if (audienceShowGameIdRef.current !== currentShowGame.id) {
           audienceShowGameIdRef.current = currentShowGame.id
           setSelectedAudienceWinnerIds([])
@@ -8339,7 +8372,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setTeams((teamResult.data ?? []) as LiveTeam[])
 
       if (currentShowGame) {
-        if (['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(currentShowGame.game_type)) {
+        if (currentShowGame.game_type === 'audience-question' || isTiebreakerLibraryShowGame(currentShowGame.game_type)) {
           const [{ data: responseRows, error: responseError }, { data: voteRows, error: voteError }] = await Promise.all([
             supabase.from('game_show_game_responses').select('*').eq('game_show_game_id', currentShowGame.id).order('submitted_at', { ascending: true }),
             supabase.from('game_show_game_response_votes').select('response_id').eq('game_show_game_id', currentShowGame.id),
@@ -8555,7 +8588,7 @@ function LiveQuestion({ go }: { go: Go }) {
     setAudienceVoteCounts({})
     setAudienceResponseOrder('submitted')
     setSelectedAudienceWinnerIds([])
-    audienceShowGameIdRef.current = ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(nextShowGame.game_type) ? nextShowGame.id : null
+    audienceShowGameIdRef.current = nextShowGame.game_type === 'audience-question' || isTiebreakerLibraryShowGame(nextShowGame.game_type) ? nextShowGame.id : null
     setGameScreen('show-game')
     setPhase('closed')
   }
@@ -8569,7 +8602,7 @@ function LiveQuestion({ go }: { go: Go }) {
         ? (showGame.settings as Record<string, Json>).tie_resolution_id : null
       const rpc = typeof tieResolutionId === 'string'
         ? showGame.game_type === 'big-balloon' ? 'start_big_balloon' : 'start_tie_show_game'
-        : ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.game_type)
+        : showGame.game_type === 'audience-question' || isTiebreakerLibraryShowGame(showGame.game_type)
         ? 'start_audience_question'
         : isEliminationShowGame(showGame.game_type)
         ? 'start_elimination_show_game'
@@ -8593,7 +8626,7 @@ function LiveQuestion({ go }: { go: Go }) {
   }
 
   async function resolveAudienceQuestion() {
-    if (!showGame || !['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.game_type) || showGame.status !== 'open' || actionBusy || audienceResolveBusyRef.current) return
+    if (!showGame || (showGame.game_type !== 'audience-question' && !isTiebreakerLibraryShowGame(showGame.game_type)) || showGame.status !== 'open' || actionBusy || audienceResolveBusyRef.current) return
     const config = audienceQuestionFromSettings(showGame.settings)
     if (audienceResponses.length === 0) {
       setLiveError('Wait for at least one response before choosing a winner.')

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { autoBuildShowGameTypes, eliminationShowGameState, isEliminationShowGame, showGameInstructions } from './elimination-show-games'
+import { autoBuildShowGameTypes, eliminationShowGameState, isEliminationShowGame, isTiebreakerLibraryShowGame, showGameInstructions } from './elimination-show-games'
 
 describe('elimination show games', () => {
   it('recognises only multi-round elimination games', () => {
@@ -11,6 +11,13 @@ describe('elimination show games', () => {
     expect(isEliminationShowGame('big-balloon')).toBe(false)
     expect(isEliminationShowGame('steal-the-treasure')).toBe(false)
     expect(isEliminationShowGame('in-show-tiebreaker')).toBe(false)
+  })
+
+  it('keeps every Tiebreaker Library-backed show-game surface in sync', () => {
+    expect(isTiebreakerLibraryShowGame('in-show-tiebreaker')).toBe(true)
+    expect(isTiebreakerLibraryShowGame('tiebreaker-style-question')).toBe(true)
+    expect(isTiebreakerLibraryShowGame('audience-question')).toBe(false)
+    expect(isTiebreakerLibraryShowGame('spin-the-wheel')).toBe(false)
   })
 
   it('parses safe defaults and clamps dodge lanes', () => {

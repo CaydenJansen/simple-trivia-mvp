@@ -75,3 +75,16 @@ test('ranking controls visibly reorder answers', async ({ page }, testInfo) => {
   const labels = await page.locator('span').filter({ hasText: /^(Jupiter|Saturn|Uranus|Neptune)$/ }).allTextContents()
   expect(labels).toEqual(['Saturn', 'Jupiter', 'Uranus', 'Neptune'])
 })
+
+test('every player prototype state avoids horizontal overflow', async ({ page }) => {
+  await page.goto('/play/prototype')
+  const stateButtons = await page.locator('button').filter({ hasText: /^\d/ }).allTextContents()
+  const phone = page.getByTestId('player-prototype-phone')
+
+  for (const state of stateButtons) {
+    await page.getByRole('button', { name: state, exact: true }).click({ force: true })
+    await expect.poll(() => phone.evaluate(
+      element => element.scrollWidth <= element.clientWidth + 1,
+    ), { message: `${state} should fit the viewport without horizontal scrolling` }).toBe(true)
+  }
+})
