@@ -117,8 +117,14 @@ import { submittedAnswersEditableFromSettings } from "@/lib/trivia/answer-editin
 import { hostGameSettingsRecord, persistentHostGameSettings } from "@/lib/trivia/host-preferences";
 import { isTeamDormant } from "@/lib/trivia/team-presence";
 import {
+  ELIMINATION_SHOW_GAME_TYPES,
+  HOST_PICKED_SHOW_GAME_TYPES,
+  IMMEDIATE_WINNER_SHOW_GAME_TYPES,
+  TEMPLATE_EDITOR_SHOW_GAME_TYPES,
+  TIE_RESOLUTION_SHOW_GAME_TYPES,
   eliminationShowGameState,
   autoBuildShowGameTypes,
+  isArchivedShowGame,
   isEliminationShowGame,
   isTiebreakerLibraryShowGame,
   showGameEmoji,
@@ -2319,16 +2325,7 @@ function TemplatesScreen({ go }: { go: Go }) {
   </div>
 }
 
-const TEMPLATE_EDITOR_GAME_TYPES: ShowGameType[] = [
-  'spin-the-wheel',
-  'beat-the-bomb',
-  'heads-or-tails',
-  'dodge-the-rock',
-  'scissors-paper-rock',
-  'big-balloon',
-  'steal-the-treasure',
-]
-
+const TEMPLATE_EDITOR_GAME_TYPES: ShowGameType[] = [...TEMPLATE_EDITOR_SHOW_GAME_TYPES]
 const TEMPLATE_QUESTION_TYPES = ['any', 'single-answer', 'multiple-choice', 'multi-answer', 'multi-part', 'ranking', 'image-question'] as const
 
 function templateQuestionTypeLabel(type: string) {
@@ -5558,20 +5555,15 @@ function BuilderShowGame({ showGame, onChange, onDelete, onMoveToBackup, onPickT
                 ...(type === 'audience-question' ? { audienceQuestionCorrectNumber: '', sourceTiebreakerId: null, tiebreakerAnswerUnit: '', tiebreakerNotes: '' } : {}),
               })
             }} style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full cursor-pointer rounded-xl bg-white px-3 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-violet/30">
+              {isArchivedShowGame(showGame.gameType) && <option value={showGame.gameType}>Archived · {showGameEmoji(showGame.gameType)} {showGameLabel(showGame.gameType)}</option>}
               <optgroup label="One-step games · immediate winner">
-                <option value="spin-the-wheel">🎡 Spin the Wheel</option>
-                <option value="beat-the-bomb">💣 Beat the Bomb</option>
-                <option value="big-balloon">🎈 Big Balloon</option>
-                <option value="steal-the-treasure">💰 Steal the Treasure</option>
+                {IMMEDIATE_WINNER_SHOW_GAME_TYPES.map(type => <option key={type} value={type}>{showGameEmoji(type)} {showGameLabel(type)}</option>)}
               </optgroup>
               <optgroup label="Elimination games · multiple rounds">
-                <option value="heads-or-tails">🪙 Heads or Tails</option>
-                <option value="dodge-the-rock">🪨 Dodge the Rock</option>
-                <option value="scissors-paper-rock">✂️ Scissors Paper Rock</option>
+                {ELIMINATION_SHOW_GAME_TYPES.map(type => <option key={type} value={type}>{showGameEmoji(type)} {showGameLabel(type)}</option>)}
               </optgroup>
               <optgroup label="Host-picked games">
-                <option value="audience-question">💬 Audience Question</option>
-                <option value="tiebreaker-style-question">🎯 Tiebreaker-style Question</option>
+                {HOST_PICKED_SHOW_GAME_TYPES.map(type => <option key={type} value={type}>{showGameEmoji(type)} {showGameLabel(type)}</option>)}
               </optgroup>
             </select>
           </div>}
@@ -11462,11 +11454,7 @@ function TieResolutionChooser({
       {selected === 'show_game' && <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="mt-4 space-y-3 rounded-2xl p-4">
         <label style={{ color: C.liveDim }} className="block text-xs font-black uppercase tracking-wider">Tiebreak game</label>
         <select value={tieGameType} onChange={event => onTieGameTypeChange(event.target.value as ShowGameType)} style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="w-full cursor-pointer rounded-xl px-3 py-2.5 text-sm font-bold">
-          <option value="spin-the-wheel">🎡 Spin the Wheel</option>
-          <option value="beat-the-bomb">💣 Beat the Bomb</option>
-          <option value="heads-or-tails">🪙 Heads or Tails</option>
-          <option value="dodge-the-rock">🪨 Dodge the Rock</option>
-          <option value="big-balloon">🎈 Big Balloon</option>
+          {TIE_RESOLUTION_SHOW_GAME_TYPES.map(type => <option key={type} value={type}>{showGameEmoji(type)} {showGameLabel(type)}</option>)}
           <option value="audience-question">💬 Audience Question · Closest Guess</option>
         </select>
         {tieGameType === 'audience-question' && <div className="grid gap-3 sm:grid-cols-[1fr_160px]">

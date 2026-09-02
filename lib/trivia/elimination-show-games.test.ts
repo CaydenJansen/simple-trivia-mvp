@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { autoBuildShowGameTypes, eliminationShowGameState, isEliminationShowGame, isTiebreakerLibraryShowGame, showGameInstructions } from './elimination-show-games'
+import { ARCHIVED_SHOW_GAME_TYPES, ELIMINATION_SHOW_GAME_TYPES, HOST_PICKED_SHOW_GAME_TYPES, IMMEDIATE_WINNER_SHOW_GAME_TYPES, RANDOM_CHANCE_SHOW_GAME_TYPES, TEMPLATE_EDITOR_SHOW_GAME_TYPES, TIE_RESOLUTION_SHOW_GAME_TYPES, autoBuildShowGameTypes, eliminationShowGameState, isArchivedShowGame, isEliminationShowGame, isTiebreakerLibraryShowGame, showGameInstructions } from './elimination-show-games'
 
 describe('elimination show games', () => {
   it('recognises only multi-round elimination games', () => {
@@ -50,5 +50,20 @@ describe('elimination show games', () => {
   it('adds one random-chance game per requested round without auto-authoring Audience Questions', () => {
     expect(autoBuildShowGameTypes(4, () => 0.999)).toEqual(['dodge-the-rock', 'dodge-the-rock', 'dodge-the-rock', 'dodge-the-rock'])
     expect(autoBuildShowGameTypes(0)).toEqual([])
+  })
+
+  it('keeps archived games playable but out of automatic generation', () => {
+    expect(ARCHIVED_SHOW_GAME_TYPES).toEqual(['beat-the-bomb', 'big-balloon', 'steal-the-treasure'])
+    expect(isArchivedShowGame('beat-the-bomb')).toBe(true)
+    expect(isArchivedShowGame('spin-the-wheel')).toBe(false)
+    const authoringSurfaces = [
+      IMMEDIATE_WINNER_SHOW_GAME_TYPES,
+      ELIMINATION_SHOW_GAME_TYPES,
+      HOST_PICKED_SHOW_GAME_TYPES,
+      TEMPLATE_EDITOR_SHOW_GAME_TYPES,
+      TIE_RESOLUTION_SHOW_GAME_TYPES,
+      RANDOM_CHANCE_SHOW_GAME_TYPES,
+    ].flat()
+    ARCHIVED_SHOW_GAME_TYPES.forEach(type => expect(authoringSurfaces).not.toContain(type))
   })
 })

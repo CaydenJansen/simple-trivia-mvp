@@ -3,7 +3,17 @@ import type { Json } from '@/lib/supabase/database.types'
 export type ShowGameType = 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
 export type EliminationShowGameType = 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock'
 export type EliminationRoundPhase = 'choosing' | 'reveal'
-export const RANDOM_CHANCE_SHOW_GAME_TYPES = ['spin-the-wheel', 'beat-the-bomb', 'heads-or-tails', 'dodge-the-rock'] as const satisfies readonly ShowGameType[]
+export const ARCHIVED_SHOW_GAME_TYPES = ['beat-the-bomb', 'big-balloon', 'steal-the-treasure'] as const satisfies readonly ShowGameType[]
+export const IMMEDIATE_WINNER_SHOW_GAME_TYPES = ['spin-the-wheel'] as const satisfies readonly ShowGameType[]
+export const ELIMINATION_SHOW_GAME_TYPES = ['heads-or-tails', 'dodge-the-rock', 'scissors-paper-rock'] as const satisfies readonly ShowGameType[]
+export const HOST_PICKED_SHOW_GAME_TYPES = ['audience-question', 'tiebreaker-style-question'] as const satisfies readonly ShowGameType[]
+export const TEMPLATE_EDITOR_SHOW_GAME_TYPES = [...IMMEDIATE_WINNER_SHOW_GAME_TYPES, ...ELIMINATION_SHOW_GAME_TYPES] as const satisfies readonly ShowGameType[]
+export const TIE_RESOLUTION_SHOW_GAME_TYPES = ['spin-the-wheel', 'heads-or-tails', 'dodge-the-rock'] as const satisfies readonly ShowGameType[]
+export const RANDOM_CHANCE_SHOW_GAME_TYPES = [...IMMEDIATE_WINNER_SHOW_GAME_TYPES, 'heads-or-tails', 'dodge-the-rock'] as const satisfies readonly ShowGameType[]
+
+export function isArchivedShowGame(type: string | null | undefined) {
+  return ARCHIVED_SHOW_GAME_TYPES.some(archivedType => archivedType === type)
+}
 
 export function autoBuildShowGameTypes(roundCount: number, random: () => number = Math.random): ShowGameType[] {
   return Array.from({ length: Math.max(0, Math.trunc(roundCount)) }, () => {
