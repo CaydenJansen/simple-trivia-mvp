@@ -38,6 +38,28 @@ export function moveKeyToIndex(
   return reordered
 }
 
+export function moveKeyBetweenGroups<GroupId extends string | number>(
+  groups: readonly { id: GroupId; keys: readonly string[] }[],
+  draggedKey: string,
+  targetGroupId: GroupId,
+  targetIndex: number,
+) {
+  const sourceGroup = groups.find(group => group.keys.includes(draggedKey))
+  const targetGroup = groups.find(group => group.id === targetGroupId)
+  if (!sourceGroup || !targetGroup) return groups.map(group => ({ ...group, keys: [...group.keys] }))
+
+  const withoutDragged = groups.map(group => ({
+    ...group,
+    keys: group.keys.filter(key => key !== draggedKey),
+  }))
+  const nextTarget = withoutDragged.find(group => group.id === targetGroupId)
+  if (!nextTarget) return withoutDragged
+
+  const safeIndex = Math.max(0, Math.min(nextTarget.keys.length, targetIndex))
+  nextTarget.keys.splice(safeIndex, 0, draggedKey)
+  return withoutDragged
+}
+
 export function insertionIndexWithHysteresis(
   itemCentres: readonly number[],
   currentIndex: number,

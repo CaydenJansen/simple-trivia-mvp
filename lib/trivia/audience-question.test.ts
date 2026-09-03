@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { audienceQuestionFromSettings, audienceQuestionHostInstructions, audienceQuestionPlayerInstructions, audienceQuestionSettings, compareAudienceResponses } from './audience-question'
+import { audienceQuestionFromSettings, audienceQuestionHostInstructions, audienceQuestionPlayerInstructions, audienceQuestionSettings, audienceResponseDraftAfterRefresh, compareAudienceResponses } from './audience-question'
 
 describe('audience question settings', () => {
   it('defaults legacy settings to a single host-picked favourite', () => {
@@ -30,5 +30,10 @@ describe('audience question settings', () => {
     const popular = { submittedAt: '2026-08-30T01:01:00Z', voteCount: 4 }
     expect([popular, early].sort((a, b) => compareAudienceResponses(a, b, 'submitted'))).toEqual([early, popular])
     expect([early, popular].sort((a, b) => compareAudienceResponses(a, b, 'votes'))).toEqual([popular, early])
+  })
+
+  it('preserves an unsubmitted local draft when another team triggers a refresh', () => {
+    expect(audienceResponseDraftAfterRefresh('Still typing this', null)).toBe('Still typing this')
+    expect(audienceResponseDraftAfterRefresh('old draft', 'Locked response')).toBe('Locked response')
   })
 })

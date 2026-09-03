@@ -12,6 +12,10 @@ export type AudienceQuestionSettings = {
 
 export type AudienceResponseOrder = 'submitted' | 'votes'
 
+export function audienceResponseDraftAfterRefresh(currentDraft: string, submittedResponse: string | null) {
+  return submittedResponse === null ? currentDraft : submittedResponse
+}
+
 export function compareAudienceResponses(
   left: { submittedAt: string; voteCount: number },
   right: { submittedAt: string; voteCount: number },

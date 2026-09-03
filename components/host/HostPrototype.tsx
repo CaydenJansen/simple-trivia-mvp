@@ -71,7 +71,7 @@ import {
   type AutoBuildScopeMode,
   type AutoBuildVibe,
 } from "@/lib/trivia/auto-build";
-import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, nextBuilderItemPosition, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
+import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyBetweenGroups, moveKeyToIndex, nextBuilderItemPosition, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
 import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib/trivia/question-metadata";
 import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
@@ -4089,22 +4089,52 @@ function QuizBuilder({ go }: { go: Go }) {
                 setDirty(true)
               }}
               onReorderItems={orderedKeys => {
-                const positions = new Map(orderedKeys.map((key, index) => [key, index + 1]))
                 setRounds(current => current.map(item => item.id === round.id ? {
                   ...item,
-                  questions: item.questions.map(question => ({
-                    ...question,
-                    itemPosition: positions.get(`question:${question.id}`) ?? question.itemPosition,
-                  })),
-                  contentScreens: item.contentScreens.map(screen => ({
-                    ...screen,
-                    itemPosition: positions.get(`content:${screen.id}`) ?? screen.itemPosition,
-                  })),
-                  showGames: item.showGames.map(showGame => ({
-                    ...showGame,
-                    itemPosition: positions.get(`show-game:${showGame.id}`) ?? showGame.itemPosition,
-                  })),
+                  ...(() => {
+                    const availablePositions = [
+                      ...item.questions.map(question => question.itemPosition),
+                      ...item.contentScreens.map(screen => screen.itemPosition),
+                      ...item.showGames.map(showGame => showGame.itemPosition),
+                    ].sort((left, right) => left - right)
+                    const positions = new Map(orderedKeys.map((key, index) => [key, availablePositions[index] ?? index + 1]))
+                    return {
+                      questions: item.questions.map(question => ({ ...question, itemPosition: positions.get(`question:${question.id}`) ?? question.itemPosition })),
+                      contentScreens: item.contentScreens.map(screen => ({ ...screen, itemPosition: positions.get(`content:${screen.id}`) ?? screen.itemPosition })),
+                      showGames: item.showGames.map(showGame => ({ ...showGame, itemPosition: positions.get(`show-game:${showGame.id}`) ?? showGame.itemPosition })),
+                    }
+                  })(),
                 } : item))
+                setDirty(true)
+              }}
+              onMoveItemToRound={(itemKey, targetRoundId, targetIndex) => {
+                setRounds(current => {
+                  const groups = current.map(item => ({
+                    id: item.id,
+                    keys: [
+                      ...item.questions.map(question => ({ key: `question:${question.id}`, position: question.itemPosition })),
+                      ...item.contentScreens.map(screen => ({ key: `content:${screen.id}`, position: screen.itemPosition })),
+                      ...item.showGames.map(showGame => ({ key: `show-game:${showGame.id}`, position: showGame.itemPosition })),
+                    ].sort((left, right) => left.position - right.position).map(entry => entry.key),
+                  }))
+                  const nextGroups = moveKeyBetweenGroups(groups, itemKey, targetRoundId, targetIndex)
+                  const roundByKey = new Map(nextGroups.flatMap(group => group.keys.map(key => [key, group.id] as const)))
+                  const positionByKey = new Map<string, number>()
+                  let nextPosition = 0
+                  nextGroups.forEach(group => group.keys.forEach(key => {
+                    nextPosition += 1
+                    positionByKey.set(key, nextPosition)
+                  }))
+                  const questions = current.flatMap(item => item.questions)
+                  const contentScreens = current.flatMap(item => item.contentScreens)
+                  const showGames = current.flatMap(item => item.showGames)
+                  return current.map(item => ({
+                    ...item,
+                    questions: questions.filter(question => roundByKey.get(`question:${question.id}`) === item.id).map(question => ({ ...question, itemPosition: positionByKey.get(`question:${question.id}`) ?? question.itemPosition })),
+                    contentScreens: contentScreens.filter(screen => roundByKey.get(`content:${screen.id}`) === item.id).map(screen => ({ ...screen, itemPosition: positionByKey.get(`content:${screen.id}`) ?? screen.itemPosition })),
+                    showGames: showGames.filter(showGame => roundByKey.get(`show-game:${showGame.id}`) === item.id).map(showGame => ({ ...showGame, itemPosition: positionByKey.get(`show-game:${showGame.id}`) ?? showGame.itemPosition })),
+                  }))
+                })
                 setDirty(true)
               }}
             />
@@ -5101,7 +5131,7 @@ function QuizPreview({ title, rounds, onClose }: {
   )
 }
 
-function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacingLibraryTiebreakerId, replacementBackCounts, roundTopicBusy, onEdit, onReplace, onCycleLibrary, onCycleLibraryBack, onRoundPointerDown, onTitleChange, onTopicChange, onAddQuestion, onAddContentScreen, onAddShowGame, onAddTiebreaker, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onPickTiebreaker, onCycleTiebreaker, onDeleteShowGame, onMoveShowGameToBackup, onReorderItems }: {
+function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacingLibraryTiebreakerId, replacementBackCounts, roundTopicBusy, onEdit, onReplace, onCycleLibrary, onCycleLibraryBack, onRoundPointerDown, onTitleChange, onTopicChange, onAddQuestion, onAddContentScreen, onAddShowGame, onAddTiebreaker, onDeleteQuestion, onDuplicateQuestion, onUpdateContentScreen, onDeleteContentScreen, onUpdateShowGame, onPickTiebreaker, onCycleTiebreaker, onDeleteShowGame, onMoveShowGameToBackup, onReorderItems, onMoveItemToRound }: {
   round: BuilderRoundData
   roundNumber: number
   replacingLibraryQuestionId: string | null
@@ -5129,6 +5159,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
   onDeleteShowGame: (showGameId: string) => void
   onMoveShowGameToBackup: (showGameId: string) => void
   onReorderItems: (orderedKeys: string[]) => void
+  onMoveItemToRound: (itemKey: string, targetRoundId: number, targetIndex: number) => void
 }) {
   const [open, setOpen] = useState(true)
   const roundTitleInputRef = useRef<HTMLInputElement>(null)
@@ -5249,7 +5280,19 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
         suppressItemEditRef.current = true
         window.setTimeout(() => { suppressItemEditRef.current = false }, 100)
       }
-      if (finishEvent.type === 'pointerup' && latestInsertionIndex !== originalIndex) {
+      const targetRoundElement = finishEvent.type === 'pointerup'
+        ? document.elementFromPoint(finishEvent.clientX, finishEvent.clientY)?.closest<HTMLElement>('[data-builder-round-id]')
+        : null
+      const targetRoundId = Number(targetRoundElement?.dataset.builderRoundId)
+      const movingToAnotherRound = Number.isFinite(targetRoundId) && targetRoundId !== round.id
+      if (movingToAnotherRound && targetRoundElement) {
+        const targetItems = [...targetRoundElement.querySelectorAll<HTMLElement>('[data-builder-item-key]')]
+        const targetIndex = targetItems.filter(element => finishEvent.clientY > element.getBoundingClientRect().top + element.getBoundingClientRect().height / 2).length
+        flushSync(() => {
+          onMoveItemToRound(itemKey, targetRoundId, targetIndex)
+          setItemDragPreview(null)
+        })
+      } else if (finishEvent.type === 'pointerup' && latestInsertionIndex !== originalIndex) {
         const nextOrder = moveKeyToIndex(itemKeys, itemKey, latestInsertionIndex)
         const affectedStart = Math.min(originalIndex, latestInsertionIndex)
         const affectedEnd = Math.max(originalIndex, latestInsertionIndex)
@@ -5345,7 +5388,7 @@ function BuilderRound({ round, roundNumber, replacingLibraryQuestionId, replacin
             <div
               key={itemKey}
               data-builder-item-key={itemKey}
-              style={{ transform: itemDragTransform(itemKey) }}
+              style={{ transform: itemDragTransform(itemKey), pointerEvents: dragged ? 'none' : undefined }}
               className={`relative rounded-xl will-change-transform ${dragged ? 'z-20 cursor-grabbing opacity-90 shadow-xl ring-2 ring-violet/25 transition-[opacity,box-shadow] duration-150' : isSettlingAfterDrop ? 'transition-none' : 'transition-transform duration-150 ease-out'}`}
             >
               <div className="group absolute -top-4 left-3 right-3 z-30 flex h-8 items-center justify-center">
@@ -9683,6 +9726,17 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   ) : null
 
   if (gameScreen === 'show-game') {
+    if (!showGame) {
+      return (
+        <div style={{ background: C.liveBg, color: C.liveText }} className="flex min-h-[100dvh] items-center justify-center px-6 text-center">
+          <div>
+            <div className="mx-auto mb-5 h-14 w-14 animate-spin rounded-full border-4 border-white/15 border-t-violet-400" />
+            <h1 className="text-2xl font-black">Loading game…</h1>
+            <p style={{ color: C.liveDim }} className="mt-2 text-sm">Restoring the latest live state.</p>
+          </div>
+        </div>
+      )
+    }
     const winner = teams.find(team => team.id === showGame?.winner_team_id) ?? null
     const isWheel = showGame?.game_type === 'spin-the-wheel'
     const isElimination = isEliminationShowGame(showGame?.game_type)

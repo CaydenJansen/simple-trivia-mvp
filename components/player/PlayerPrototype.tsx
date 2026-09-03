@@ -13,6 +13,7 @@ import {
 } from "@/lib/trivia/answer-reveal";
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { PLAYER_SESSION_KEYS, restoredTeamFromAdmission, shouldResetPlayerSessionForJoinCode } from "@/lib/trivia/session-recovery";
+import { initialRankingOrder } from "@/lib/trivia/ranking-order";
 import { gameCodeFromSearch, normalizeGameCode, withGameCodeInUrl } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
 import type { Database, Json } from "@/lib/supabase/database.types";
@@ -49,7 +50,7 @@ import {
   type EliminationShowGameType,
   type ShowGameType,
 } from "@/lib/trivia/elimination-show-games";
-import { audienceQuestionFromSettings, audienceQuestionPlayerInstructions } from "@/lib/trivia/audience-question";
+import { audienceQuestionFromSettings, audienceQuestionPlayerInstructions, audienceResponseDraftAfterRefresh } from "@/lib/trivia/audience-question";
 import { formatNumericResponse, formatNumericResponseInput, parseNumericResponseInput } from "@/lib/trivia/numeric-response";
 import { TREASURE_WARMUP_MS, treasureAccruedMs } from "@/lib/trivia/treasure";
 
@@ -2296,6 +2297,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
   const [justDisplaced, setJustDisplaced] = useState<string | null>(null)
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'ranking')
   const optionItemsKey = JSON.stringify(Array.isArray(question?.options) ? question.options.map(String) : [])
+  const correctItemsKey = JSON.stringify(asStringArray(question?.correct_answer))
   const storedItemsKey = JSON.stringify(asStringArray(snapshot.rawAnswer))
 
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -2303,12 +2305,15 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
 
   useEffect(() => {
     const optionItems = JSON.parse(optionItemsKey) as string[]
+    const correctItems = JSON.parse(correctItemsKey) as string[]
     const storedItems = JSON.parse(storedItemsKey) as string[]
-    const next = storedItems.length ? storedItems : optionItems
+    const next = storedItems.length
+      ? storedItems
+      : initialRankingOrder(optionItems, correctItems, question?.question_key ?? 'ranking-question')
     // Reset the order for a new question, or restore it when answers reopen.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (next.length) setItems(next)
-  }, [question?.question_key, optionItemsKey, storedItemsKey])
+  }, [question?.question_key, optionItemsKey, correctItemsKey, storedItemsKey])
 
   function move(i: number, dir: -1 | 1) {
     const j = i + dir
@@ -2816,9 +2821,12 @@ function ShowGame() {
         })
         const row = response && typeof response === 'object' && !Array.isArray(response) ? response as DatabaseAudienceResponse : null
         setAudienceResponseRow(row?.id ? row : null)
-        setAudienceResponse(row?.response_text
-          ? activeShowGame.settings && audienceQuestionFromSettings(activeShowGame.settings).mode === 'closest-number' ? formatNumericResponse(row.response_text) : row.response_text
-          : '')
+        const submittedResponse = row?.id
+          ? activeShowGame.settings && audienceQuestionFromSettings(activeShowGame.settings).mode === 'closest-number'
+            ? formatNumericResponse(row.response_text)
+            : row.response_text
+          : null
+        setAudienceResponse(current => audienceResponseDraftAfterRefresh(current, submittedResponse))
         const audienceConfig = audienceQuestionFromSettings(activeShowGame.settings)
         if (row?.id && audienceConfig.mode === 'favourite' && audienceConfig.shareResponses) {
           const { data: roomResponses, error: roomError } = await supabase.rpc('get_audience_question_responses', {
@@ -3090,6 +3098,15 @@ function ShowGame() {
   const eliminationSecondsRemaining = Math.max(0, Math.ceil(((showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow) - showGameNow) / 1000))
   const teamIsAlive = teamId ? eliminationState.aliveTeamIds.includes(teamId) : false
   const isTieShowGame = Boolean(showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) && typeof (showGame.settings as Record<string, Json>).tie_resolution_id === 'string')
+
+  if (!showGame) {
+    return (
+      <div className="flex flex-col" style={{ minHeight: '100%' }}>
+        <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} question="Game" />
+        <div className="flex flex-1 items-center justify-center px-6"><WaitMsg msg="Loading game…" /></div>
+      </div>
+    )
+  }
 
   if (showGame && isTieShowGame && !teamIsEligible) {
     return (

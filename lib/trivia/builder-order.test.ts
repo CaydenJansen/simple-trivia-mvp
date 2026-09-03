@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyToIndex, nextBuilderItemPosition, reorderKeys } from './builder-order'
+import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyBetweenGroups, moveKeyToIndex, nextBuilderItemPosition, reorderKeys } from './builder-order'
 
 describe('quiz builder ordering', () => {
   it('adds footer items after the actual final global position in a round', () => {
@@ -57,5 +57,21 @@ describe('quiz builder live drag placement', () => {
 
   it('uses the dragged card centre even when its handle is near the top', () => {
     expect(draggedItemCentreY(200, 100, 220, 290)).toBe(320)
+  })
+
+  it('moves an item into an exact slot in another round', () => {
+    expect(moveKeyBetweenGroups([
+      { id: 1, keys: ['a', 'b'] },
+      { id: 2, keys: ['c', 'd'] },
+    ], 'b', 2, 1)).toEqual([
+      { id: 1, keys: ['a'] },
+      { id: 2, keys: ['c', 'b', 'd'] },
+    ])
+  })
+
+  it('supports empty target rounds and leaves unknown items alone', () => {
+    const groups = [{ id: 1, keys: ['a'] }, { id: 2, keys: [] }]
+    expect(moveKeyBetweenGroups(groups, 'a', 2, 99)).toEqual([{ id: 1, keys: [] }, { id: 2, keys: ['a'] }])
+    expect(moveKeyBetweenGroups(groups, 'missing', 2, 0)).toEqual(groups)
   })
 })

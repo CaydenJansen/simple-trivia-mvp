@@ -66,14 +66,15 @@ test('ranking controls visibly reorder answers', async ({ page }, testInfo) => {
   await page.goto('/play/prototype')
   await page.getByRole('button', { name: '10 · Ranking' }).click()
 
-  const rankingCards = page.locator('div').filter({ has: page.getByText('Jupiter', { exact: true }) })
-  const jupiterCard = rankingCards.last()
-  await jupiterCard.getByRole('button').last().click({
+  const itemLabels = page.locator('span').filter({ hasText: /^(Jupiter|Saturn|Uranus|Neptune)$/ })
+  const before = await itemLabels.allTextContents()
+  const firstCard = page.locator('.rank-badge-changed').first().locator('..')
+  await firstCard.getByRole('button').last().click({
     force: testInfo.project.name.startsWith('mobile'),
   })
 
-  const labels = await page.locator('span').filter({ hasText: /^(Jupiter|Saturn|Uranus|Neptune)$/ }).allTextContents()
-  expect(labels).toEqual(['Saturn', 'Jupiter', 'Uranus', 'Neptune'])
+  const after = await itemLabels.allTextContents()
+  expect(after).toEqual([before[1], before[0], ...before.slice(2)])
 })
 
 test('every player prototype state avoids horizontal overflow', async ({ page }) => {
