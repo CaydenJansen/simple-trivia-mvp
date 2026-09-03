@@ -14,6 +14,7 @@ import {
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { PLAYER_SESSION_KEYS, restoredTeamFromAdmission, shouldResetPlayerSessionForJoinCode } from "@/lib/trivia/session-recovery";
 import { initialRankingOrder } from "@/lib/trivia/ranking-order";
+import { savedAnswerForQuestion } from "@/lib/trivia/player-draft";
 import { gameCodeFromSearch, normalizeGameCode, withGameCodeInUrl } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
 import type { Database, Json } from "@/lib/supabase/database.types";
@@ -414,12 +415,14 @@ function useLiveQuestionDefinition() {
     if (!gameId) return
     const activeGameId = gameId
     let active = true
+    let loadVersion = 0
 
     async function loadQuestion() {
+      const version = ++loadVersion
       const { data: game } = await supabase.from('games').select('current_question_key').eq('id', activeGameId).maybeSingle()
-      if (!active || !game?.current_question_key) return
+      if (!active || version !== loadVersion || !game?.current_question_key) return
       const { data, error } = await loadPlayerQuestion(activeGameId, game.current_question_key)
-      if (!active) return
+      if (!active || version !== loadVersion) return
       if (error) return console.error('Could not load question:', error)
       setQuestion(data as LiveQuestionDefinition | null)
     }
@@ -483,16 +486,18 @@ function useLiveContentScreenDefinition() {
   return contentScreen
 }
 
-function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerScreen) {
+function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerScreen, expectedQuestionKey: string | undefined) {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const submitBusyRef = useRef(false)
 
   async function submit(value: string | string[]) {
-    if (submitting) return
+    if (submitBusyRef.current || !expectedQuestionKey) return
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
     if (!gameId || !teamId) return go('join')
 
+    submitBusyRef.current = true
     setSubmitting(true)
     setSubmitError(null)
 
@@ -504,11 +509,13 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
 
     if (gameError || !game) {
       setSubmitError('Could not submit your answer. Please try again.')
+      submitBusyRef.current = false
       setSubmitting(false)
       return
     }
 
-    if (game.current_screen !== expectedScreen || game.answer_phase !== 'open') {
+    if (game.current_screen !== expectedScreen || game.answer_phase !== 'open' || game.current_question_key !== expectedQuestionKey) {
+      submitBusyRef.current = false
       setSubmitting(false)
       go('no-answer')
       return
@@ -518,12 +525,18 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
     const { error } = await supabase.rpc('submit_player_answer', {
       p_game_id: gameId,
       p_team_id: teamId,
+      p_question_key: expectedQuestionKey,
       p_answer_text: answerText,
     })
 
     if (error) {
       console.error('Could not submit answer:', error)
-      setSubmitError(error.message.includes('already locked') ? 'Your answer is locked in.' : 'Could not submit your answer. Please try again.')
+      setSubmitError(error.message.includes('already locked')
+        ? 'Your answer is locked in.'
+        : error.message.includes('QUESTION_CHANGED')
+          ? 'That question has closed.'
+          : 'Could not submit your answer. Please try again.')
+      submitBusyRef.current = false
       setSubmitting(false)
       return
     }
@@ -535,27 +548,30 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
   return { submit, submitting, submitError }
 }
 
-function useSubmitBonusAnswer(go: (s: PlayerScreen) => void) {
+function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey: string | undefined) {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const submitBusyRef = useRef(false)
 
   async function submit(value: string) {
-    if (submitting) return
+    if (submitBusyRef.current || !expectedQuestionKey) return
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
     if (!gameId || !teamId) return go('join')
 
+    submitBusyRef.current = true
     setSubmitting(true)
     setSubmitError(null)
 
     const { data: game, error: gameError } = await supabase
       .from('games')
-      .select('answer_phase, question_stage')
+      .select('answer_phase, question_stage, current_question_key')
       .eq('id', gameId)
       .maybeSingle()
 
-    if (gameError || !game || game.answer_phase !== 'open' || game.question_stage !== 'bonus') {
+    if (gameError || !game || game.answer_phase !== 'open' || game.question_stage !== 'bonus' || game.current_question_key !== expectedQuestionKey) {
       setSubmitError('Bonus answers have closed.')
+      submitBusyRef.current = false
       setSubmitting(false)
       return
     }
@@ -564,12 +580,18 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void) {
     const { error } = await supabase.rpc('submit_player_bonus_answer', {
       p_game_id: gameId,
       p_team_id: teamId,
+      p_question_key: expectedQuestionKey,
       p_answer_text: answerText,
     })
 
     if (error) {
       console.error('Could not submit bonus answer:', error)
-      setSubmitError(error.message.includes('already locked') ? 'Your bonus answer is locked in.' : 'Could not submit your bonus answer. Please try again.')
+      setSubmitError(error.message.includes('already locked')
+        ? 'Your bonus answer is locked in.'
+        : error.message.includes('QUESTION_CHANGED')
+          ? 'That bonus question has closed.'
+          : 'Could not submit your bonus answer. Please try again.')
+      submitBusyRef.current = false
       setSubmitting(false)
       return
     }
@@ -595,6 +617,7 @@ type PlayerSnapshot = {
   score: number
   answer: string
   rawAnswer: unknown
+  questionKey: string
   hasSubmission: boolean
   isCorrect: boolean | null
   pointsAwarded: number
@@ -914,7 +937,7 @@ function PlayerQuestionResultSummary({ snapshot }: { snapshot: PlayerSnapshot })
 function usePlayerSnapshot(): PlayerSnapshot {
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>({
     loaded: false,
-    teamName: '', score: 0, answer: '', rawAnswer: null, hasSubmission: false,
+    teamName: '', score: 0, answer: '', rawAnswer: null, questionKey: '', hasSubmission: false,
     isCorrect: null, pointsAwarded: 0, pointsMax: 1,
     prompt: '', correctAnswer: '—', roundLabel: '', questionLabel: '', questionType: null,
     reviewItems: [], missingAnswers: [], prizeAwards: [], bonusAnswer: '', hasBonusSubmission: false, bonusCorrectAnswer: '',
@@ -929,13 +952,15 @@ function usePlayerSnapshot(): PlayerSnapshot {
     const activeGameId = gameId
     const activeTeamId = teamId
     let active = true
+    let loadVersion = 0
 
     async function loadSnapshot() {
+      const version = ++loadVersion
       const [{ data: team }, { data: game }] = await Promise.all([
         supabase.from('teams').select('name, score, prize_awards').eq('id', activeTeamId).maybeSingle(),
         supabase.from('games').select('current_question_key, current_screen, answer_phase, settings').eq('id', activeGameId).maybeSingle(),
       ])
-      if (!active) return
+      if (!active || version !== loadVersion) return
 
       let question: LiveQuestionDefinition | null = null
       let submission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
@@ -977,7 +1002,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
         }
       }
 
-      if (!active) return
+      if (!active || version !== loadVersion) return
 
       const reviewItems = playerReviewItemsFromJson(submission?.grading_json)
       const missingAnswers = playerMissingAnswersFromJson(submission?.grading_json)
@@ -989,6 +1014,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
         score: team?.score ?? 0,
         answer: submission ? submittedAnswerLabel(submission.answer_text, question) : '',
         rawAnswer: submission ? parseStoredAnswer(submission.answer_text) : null,
+        questionKey: game?.current_question_key ?? '',
         hasSubmission: Boolean(submission),
         isCorrect: submission?.is_correct ?? null,
         pointsAwarded: submission?.points_awarded ?? 0,
@@ -2105,8 +2131,9 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const [answer, setAnswer] = useState('')
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'single-answer')
-  const storedAnswer = typeof snapshot.rawAnswer === 'string' ? snapshot.rawAnswer : ''
+  const { submit, submitting, submitError } = useSubmitAnswer(go, 'single-answer', question?.question_key)
+  const savedAnswer = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)
+  const storedAnswer = typeof savedAnswer === 'string' ? savedAnswer : ''
 
   useEffect(() => {
     // Restore the team's previous response when the host reopens answers.
@@ -2122,10 +2149,10 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
       <div className="flex-1 overflow-y-auto px-5 py-6">
         <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
-        <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
-        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
+        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
     </div>
   )
@@ -2136,8 +2163,9 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
   const [answer, setAnswer] = useState('')
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'image-question')
-  const storedAnswer = typeof snapshot.rawAnswer === 'string' ? snapshot.rawAnswer : ''
+  const { submit, submitting, submitError } = useSubmitAnswer(go, 'image-question', question?.question_key)
+  const savedAnswer = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)
+  const storedAnswer = typeof savedAnswer === 'string' ? savedAnswer : ''
 
   useEffect(() => {
     // Restore the team's previous response when the host reopens answers.
@@ -2159,10 +2187,10 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
         </div>
         <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
-        <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
-        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
+        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
     </div>
   )
@@ -2173,9 +2201,10 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
   const [selected, setSelected] = useState<string | null>(null)
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'multiple-choice')
+  const { submit, submitting, submitError } = useSubmitAnswer(go, 'multiple-choice', question?.question_key)
   const choices = optionObjects(question?.options)
-  const storedSelection = typeof snapshot.rawAnswer === 'string' ? snapshot.rawAnswer : ''
+  const savedSelection = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)
+  const storedSelection = typeof savedSelection === 'string' ? savedSelection : ''
 
   useEffect(() => {
     // Restore the team's previous response when the host reopens answers.
@@ -2194,7 +2223,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
           {choices.map((choice, i) => {
             const key = choice.key ?? String.fromCharCode(65 + i)
             const selectedNow = selected === key
-            return <button key={key} onClick={() => setSelected(key)} onKeyDown={event => submitPlayerAnswerOnEnter(event, selectedNow && !submitting, () => { void submit(key) })}
+            return <button key={key} onClick={() => setSelected(key)} onKeyDown={event => submitPlayerAnswerOnEnter(event, selectedNow && Boolean(question?.question_key) && !submitting, () => { void submit(key) })}
               style={{ background: selectedNow ? C.violetPale : C.panel, border: `2px solid ${selectedNow ? C.violet : C.line}`, borderRadius: 16, textAlign: 'left', padding: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, fontFamily: 'inherit' }}>
               <span style={{ background: selectedNow ? C.violet : C.ground, color: selectedNow ? '#fff' : C.sub, borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{key}</span>
               <span style={{ color: C.ink, fontWeight: 600, fontSize: 16 }}>{choice.label ?? ''}</span>
@@ -2202,7 +2231,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
           })}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
-        <div className="mt-4"><Btn onClick={() => selected && void submit(selected)} disabled={!selected || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
+        <div className="mt-4"><Btn onClick={() => selected && void submit(selected)} disabled={!selected || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
     </div>
   )
@@ -2214,8 +2243,8 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const count = multiAnswerInputCount(question?.points_max, question?.correct_answer)
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-answer')
-  const storedAnswersKey = JSON.stringify(asStringArray(snapshot.rawAnswer))
+  const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-answer', question?.question_key)
+  const storedAnswersKey = JSON.stringify(asStringArray(savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)))
 
   useEffect(() => {
     const storedAnswers = JSON.parse(storedAnswersKey) as string[]
@@ -2235,13 +2264,13 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · 1 point per correct answer`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {answers.map((answer, i) => <div key={i}>
-            <input value={answer} onChange={e => setA(i, e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, anyFilled && !submitting, () => { void submit(answers) })} placeholder="Type an answer…"
+            <input value={answer} onChange={e => setA(i, e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, anyFilled && Boolean(question?.question_key) && !submitting, () => { void submit(answers) })} placeholder="Type an answer…"
               aria-label={`Answer ${i + 1}`}
               style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 17, outline: 'none', width: '100%', padding: '13px 16px', fontFamily: 'inherit' }} />
           </div>)}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
-        <div className="mt-4"><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></div>
+        <div className="mt-4"><Btn onClick={() => void submit(answers)} disabled={!anyFilled || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></div>
       </div>
     </div>
   )
@@ -2254,8 +2283,8 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
   const parts = optionObjects(question?.options)
   const count = Math.max(1, parts.length || 3)
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-part')
-  const storedAnswersKey = JSON.stringify(asStringArray(snapshot.rawAnswer))
+  const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-part', question?.question_key)
+  const storedAnswersKey = JSON.stringify(asStringArray(savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)))
 
   useEffect(() => {
     const storedAnswers = JSON.parse(storedAnswersKey) as string[]
@@ -2276,12 +2305,12 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
           {parts.map((part, i) => <div key={part.label ?? i}>
             <p style={{ color: C.violet, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', marginBottom: 8 }}>PART {part.label ?? String.fromCharCode(65 + i)}</p>
             <p style={{ color: C.ink, fontSize: 14, lineHeight: 1.45, marginBottom: 9 }}>{part.clue}</p>
-            <input value={answers[i] ?? ''} onChange={e => setAnswers(current => current.map((value, index) => index === i ? e.target.value : value))} onKeyDown={event => submitPlayerAnswerOnEnter(event, anyFilled && !submitting, () => { void submit(answers) })} placeholder="Answer…"
+            <input value={answers[i] ?? ''} onChange={e => setAnswers(current => current.map((value, index) => index === i ? e.target.value : value))} onKeyDown={event => submitPlayerAnswerOnEnter(event, anyFilled && Boolean(question?.question_key) && !submitting, () => { void submit(answers) })} placeholder="Answer…"
               style={{ border: `2px solid ${answers[i] ? C.violet : C.line}`, borderRadius: 12, background: C.panel, color: C.ink, fontSize: 16, outline: 'none', width: '100%', padding: '12px 14px', fontFamily: 'inherit' }} />
           </div>)}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
-        <div className="mt-4"><Btn onClick={() => void submit(answers)} disabled={!anyFilled || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></div>
+        <div className="mt-4"><Btn onClick={() => void submit(answers)} disabled={!anyFilled || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></div>
       </div>
     </div>
   )
@@ -2292,13 +2321,13 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
 function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
-  const [items, setItems] = useState<string[]>(['Jupiter', 'Saturn', 'Uranus', 'Neptune'])
+  const [items, setItems] = useState<string[]>([])
   const [justMoved, setJustMoved] = useState<string | null>(null)
   const [justDisplaced, setJustDisplaced] = useState<string | null>(null)
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'ranking')
+  const { submit, submitting, submitError } = useSubmitAnswer(go, 'ranking', question?.question_key)
   const optionItemsKey = JSON.stringify(Array.isArray(question?.options) ? question.options.map(String) : [])
   const correctItemsKey = JSON.stringify(asStringArray(question?.correct_answer))
-  const storedItemsKey = JSON.stringify(asStringArray(snapshot.rawAnswer))
+  const storedItemsKey = JSON.stringify(asStringArray(savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)))
 
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const snapshots = useRef<Map<string, number>>(new Map())
@@ -2366,7 +2395,10 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
   })
 
   return (
-    <div className="flex flex-col" style={{ minHeight: '100%' }} onKeyDown={event => submitPlayerAnswerOnEnter(event, items.length > 0 && !submitting, () => { void submit(items) })}>
+    <div className="flex flex-col" style={{ minHeight: '100%' }} onKeyDown={event => {
+      if ((event.target as HTMLElement).closest('button')) return
+      submitPlayerAnswerOnEnter(event, items.length > 0 && Boolean(question?.question_key) && !submitting, () => { void submit(items) })
+    }}>
       <TopBar
         team={snapshot.teamName || 'Your Team'}
         score={snapshot.score}
@@ -2472,7 +2504,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
 
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
         <div className="mt-4">
-          <Btn onClick={() => void submit(items)} disabled={submitting}>
+          <Btn onClick={() => void submit(items)} disabled={!question?.question_key || items.length === 0 || submitting}>
             {submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Order' : 'Lock In Order'}
           </Btn>
         </div>
@@ -2486,13 +2518,15 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
   const bonus = playerBonusFromJson(question?.bonus)
-  const { submit, submitting, submitError } = useSubmitBonusAnswer(go)
+  const { submit, submitting, submitError } = useSubmitBonusAnswer(go, question?.question_key)
+
+  const storedBonusAnswer = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.bonusAnswer) ?? ''
 
   useEffect(() => {
     // Restore the team's previous bonus response when the host reopens answers.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAnswer(snapshot.bonusAnswer)
-  }, [question?.question_key, snapshot.bonusAnswer])
+    setAnswer(storedBonusAnswer)
+  }, [question?.question_key, storedBonusAnswer])
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2511,10 +2545,10 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
           tone="bonus"
         />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your bonus answer</label>
-        <textarea rows={3} value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
-        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || submitting}>{submitting ? 'Submitting…' : snapshot.hasBonusSubmission ? 'Update Bonus Answer' : 'Submit Bonus Answer'}</Btn></div>
+        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasBonusSubmission ? 'Update Bonus Answer' : 'Submit Bonus Answer'}</Btn></div>
       </div>
     </div>
   )
@@ -2743,6 +2777,7 @@ function ShowGame() {
   const [showGame, setShowGame] = useState<PlayerShowGame | null>(null)
   const [wheelSettled, setWheelSettled] = useState(false)
   const wheelShowGameIdRef = useRef<string | null>(null)
+  const showGameLoadVersionRef = useRef(0)
   const handleWheelSettled = useCallback(() => setWheelSettled(true), [])
   const [hasPressed, setHasPressed] = useState(false)
   const [pressing, setPressing] = useState(false)
@@ -2755,6 +2790,7 @@ function ShowGame() {
   const [audienceResponseRow, setAudienceResponseRow] = useState<DatabaseAudienceResponse | null>(null)
   const [audienceResponses, setAudienceResponses] = useState<PlayerAudienceResponse[]>([])
   const [audienceSubmitting, setAudienceSubmitting] = useState(false)
+  const audienceSubmitBusyRef = useRef(false)
   const [audienceVoteBusyId, setAudienceVoteBusyId] = useState<string | null>(null)
   const audienceShowGameIdRef = useRef<string | null>(null)
   const [coinRevealFinishedRound, setCoinRevealFinishedRound] = useState<number | null>(null)
@@ -2775,14 +2811,17 @@ function ShowGame() {
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
     if (!gameId || !teamId) return
+    const loadVersion = ++showGameLoadVersionRef.current
+    const stale = () => loadVersion !== showGameLoadVersionRef.current
     const { data: game } = await supabase.from('games').select('current_show_game_key').eq('id', gameId).maybeSingle()
-    if (!game?.current_show_game_key) return
+    if (stale() || !game?.current_show_game_key) return
     const { data: activeShowGame, error: showGameError } = await supabase
       .from('game_show_games')
       .select('id, show_game_key, round_number, round_title, game_type, title, settings, status, started_at, explode_at, winner_team_id')
       .eq('game_id', gameId)
       .eq('show_game_key', game.current_show_game_key)
       .maybeSingle()
+    if (stale()) return
     if (showGameError) { setError('Could not load the game.'); return }
     if (activeShowGame?.id !== wheelShowGameIdRef.current) {
       wheelShowGameIdRef.current = activeShowGame?.id ?? null
@@ -2791,6 +2830,7 @@ function ShowGame() {
     setShowGame(activeShowGame as PlayerShowGame | null)
     if (activeShowGame?.game_type === 'beat-the-bomb') {
       const { data: pressRows } = await supabase.from('game_show_game_presses').select('team_id, pressed_at').eq('game_show_game_id', activeShowGame.id).order('pressed_at', { ascending: true })
+      if (stale()) return
       setBombPresses(pressRows ?? [])
       setHasPressed(Boolean((pressRows ?? []).some(press => press.team_id === teamId)))
     } else { setBombPresses([]); setHasPressed(false) }
@@ -2798,6 +2838,7 @@ function ShowGame() {
       const state = eliminationShowGameState(activeShowGame.settings)
       const { data: roundChoices } = await supabase.from('game_show_game_choices').select('team_id, choice')
         .eq('game_show_game_id', activeShowGame.id).eq('round_number', state.roundNumber)
+      if (stale()) return
       const choice = (roundChoices ?? []).find(item => item.team_id === teamId)
       setOwnChoice(choice?.choice ?? (activeShowGame.game_type === 'dodge-the-rock' ? String(state.positions[teamId] ?? 1) : null))
       setChoiceCounts((roundChoices ?? []).reduce<Record<string, number>>((counts, item) => {
@@ -2819,6 +2860,7 @@ function ShowGame() {
         const { data: response } = await supabase.rpc('get_own_audience_question_response', {
           p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken,
         })
+        if (stale()) return
         const row = response && typeof response === 'object' && !Array.isArray(response) ? response as DatabaseAudienceResponse : null
         setAudienceResponseRow(row?.id ? row : null)
         const submittedResponse = row?.id
@@ -2832,12 +2874,14 @@ function ShowGame() {
           const { data: roomResponses, error: roomError } = await supabase.rpc('get_audience_question_responses', {
             p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken,
           })
+          if (stale()) return
           if (!roomError) setAudienceResponses(roomResponses ?? [])
         } else setAudienceResponses([])
       }
     } else { audienceShowGameIdRef.current = null; setAudienceResponseRow(null); setAudienceResponses([]); setAudienceResponse('') }
     if (activeShowGame?.game_type === 'big-balloon') {
       const { data: balloonRows } = await supabase.from('game_show_game_balloons').select('team_id, size_units, status').eq('game_show_game_id', activeShowGame.id)
+      if (stale()) return
       setBalloons((balloonRows ?? []) as BigBalloonEntry[])
       const own = (balloonRows ?? []).find(row => row.team_id === teamId)
       if (own?.status === 'locked' || own?.status === 'popped' || activeShowGame.status !== 'open') {
@@ -2848,6 +2892,7 @@ function ShowGame() {
     } else setBalloons([])
     if (activeShowGame?.game_type === 'steal-the-treasure') {
       const { data: treasureRows } = await supabase.from('game_show_game_treasure').select('*').eq('game_show_game_id', activeShowGame.id)
+      if (stale()) return
       setTreasure(treasureRows ?? [])
       const own = (treasureRows ?? []).find(row => row.team_id === teamId)
       setTreasureHolding(Boolean(own?.is_stealing))
@@ -2948,21 +2993,24 @@ function ShowGame() {
   }
 
   async function submitAudienceResponse() {
-    if (!showGame || !['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.game_type) || audienceSubmitting || audienceResponseRow || !audienceResponse.trim()) return
+    if (!showGame || !['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.game_type) || audienceSubmitBusyRef.current || audienceResponseRow || !audienceResponse.trim()) return
     const requestId = localStorage.getItem('simple-trivia-join-request-id')
     const requestToken = localStorage.getItem('simple-trivia-join-request-token')
     if (!requestId || !requestToken) return
+    audienceSubmitBusyRef.current = true
     setAudienceSubmitting(true)
     setError(null)
     const config = audienceQuestionFromSettings(showGame.settings)
     const numericValue = config.mode === 'closest-number' ? parseNumericResponseInput(audienceResponse) : null
-    if (config.mode === 'closest-number' && numericValue === null) { setError('Enter a number for this Closest Guess.'); setAudienceSubmitting(false); return }
+    if (config.mode === 'closest-number' && numericValue === null) { setError('Enter a number for this Closest Guess.'); audienceSubmitBusyRef.current = false; setAudienceSubmitting(false); return }
     const { data, error: responseError } = await supabase.rpc('submit_audience_question_response', {
       p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken,
       p_response: config.mode === 'closest-number' ? String(numericValue) : audienceResponse.trim(),
     })
-    if (responseError) setError(responseError.message.includes('NUMBER_REQUIRED') ? 'Enter a number for this Closest Guess.' : 'That response did not go through. Try again.')
-    else setAudienceResponseRow(data as DatabaseAudienceResponse)
+    if (responseError) {
+      setError(responseError.message.includes('NUMBER_REQUIRED') ? 'Enter a number for this Closest Guess.' : 'That response did not go through. Try again.')
+      audienceSubmitBusyRef.current = false
+    } else setAudienceResponseRow(data as DatabaseAudienceResponse)
     setAudienceSubmitting(false)
     void load()
   }
@@ -3494,8 +3542,11 @@ function LiveTiebreaker() {
   const [answer, setAnswer] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const submitBusyRef = useRef(false)
+  const loadVersionRef = useRef(0)
 
   const load = useCallback(async () => {
+    const loadVersion = ++loadVersionRef.current
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
     if (!gameId || !teamId) return
@@ -3503,6 +3554,7 @@ function LiveTiebreaker() {
       p_game_id: gameId,
       p_team_id: teamId,
     }).maybeSingle()
+    if (loadVersion !== loadVersionRef.current) return
     if (loadError) {
       console.error('Could not load player tiebreaker:', loadError)
       setError('Could not load the tiebreaker. Please try again.')
@@ -3531,12 +3583,14 @@ function LiveTiebreaker() {
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
     const numericAnswer = Number(answer)
-    if (!gameId || !teamId || !answer.trim() || !Number.isFinite(numericAnswer) || submitting) return
+    if (!gameId || !teamId || !state?.attempt_id || !answer.trim() || !Number.isFinite(numericAnswer) || submitBusyRef.current) return
+    submitBusyRef.current = true
     setSubmitting(true)
     setError(null)
     const { error: submitError } = await supabase.rpc('submit_player_tiebreaker', {
       p_game_id: gameId,
       p_team_id: teamId,
+      p_attempt_id: state.attempt_id,
       p_numeric_answer: numericAnswer,
     })
     if (submitError) {
@@ -3545,6 +3599,7 @@ function LiveTiebreaker() {
     } else {
       await load()
     }
+    submitBusyRef.current = false
     setSubmitting(false)
   }
 

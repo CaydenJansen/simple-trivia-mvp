@@ -1113,6 +1113,7 @@ export type Database = {
         Args: {
           p_game_id: string
           p_team_id: string
+          p_question_key: string
           p_answer_text: string
         }
         Returns: string
@@ -1121,6 +1122,7 @@ export type Database = {
         Args: {
           p_game_id: string
           p_team_id: string
+          p_question_key: string
           p_answer_text: string
         }
         Returns: string
@@ -1258,7 +1260,7 @@ export type Database = {
         Returns: undefined
       }
       submit_player_tiebreaker: {
-        Args: { p_game_id: string; p_team_id: string; p_numeric_answer: number }
+        Args: { p_game_id: string; p_team_id: string; p_attempt_id: string; p_numeric_answer: number }
         Returns: string
       }
       get_player_tiebreaker_state: {
