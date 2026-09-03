@@ -48,6 +48,7 @@ test('the submit control follows the answer fields instead of being pinned to th
   await page.goto('/play/prototype')
   await page.getByRole('button', { name: '8 · Multi-Answer' }).click()
 
+  await expect(page.getByLabel(/^Answer \d+$/)).toHaveCount(5)
   const lastAnswer = page.getByLabel('Answer 5')
   const submit = page.getByRole('button', { name: 'Submit Answers' })
   await expect(submit).toBeVisible()

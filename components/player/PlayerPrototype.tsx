@@ -409,6 +409,7 @@ function usePlayerAutoRunClock() {
 
 function useLiveQuestionDefinition() {
   const [question, setQuestion] = useState<LiveQuestionDefinition | null>(null)
+  const questionKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     const gameId = localStorage.getItem('simple-trivia-game-id')
@@ -417,12 +418,21 @@ function useLiveQuestionDefinition() {
     let active = true
     let loadVersion = 0
 
-    async function loadQuestion() {
+    async function loadQuestion(requestedQuestionKey?: string | null) {
       const version = ++loadVersion
-      const { data: game } = await supabase.from('games').select('current_question_key').eq('id', activeGameId).maybeSingle()
-      if (!active || version !== loadVersion || !game?.current_question_key) return
-      const { data, error } = await loadPlayerQuestion(activeGameId, game.current_question_key)
-      if (!active || version !== loadVersion) return
+      let questionKey = requestedQuestionKey
+      if (questionKey === undefined) {
+        const { data: game } = await supabase.from('games').select('current_question_key').eq('id', activeGameId).maybeSingle()
+        if (!active || version !== loadVersion) return
+        questionKey = game?.current_question_key ?? null
+      }
+      if (questionKeyRef.current !== questionKey) {
+        questionKeyRef.current = questionKey
+        setQuestion(null)
+      }
+      if (!questionKey) return
+      const { data, error } = await loadPlayerQuestion(activeGameId, questionKey)
+      if (!active || version !== loadVersion || questionKeyRef.current !== questionKey) return
       if (error) return console.error('Could not load question:', error)
       setQuestion(data as LiveQuestionDefinition | null)
     }
@@ -430,7 +440,9 @@ function useLiveQuestionDefinition() {
     void loadQuestion()
     const channel = supabase
       .channel(`player-question-${gameId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadQuestion() })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => {
+        void loadQuestion((payload.new as { current_question_key?: string | null }).current_question_key ?? null)
+      })
       .subscribe()
 
     return () => { active = false; void supabase.removeChannel(channel) }
@@ -441,35 +453,42 @@ function useLiveQuestionDefinition() {
 
 function useLiveContentScreenDefinition() {
   const [contentScreen, setContentScreen] = useState<LiveContentScreenDefinition | null>(null)
+  const contentScreenKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     const gameId = localStorage.getItem('simple-trivia-game-id')
     if (!gameId) return
     const activeGameId = gameId
     let active = true
+    let loadVersion = 0
 
-    async function loadContentScreen() {
-      const { data: game, error: gameError } = await supabase
-        .from('games')
-        .select('current_content_screen_key')
-        .eq('id', activeGameId)
-        .maybeSingle()
-
-      if (!active) return
-      if (gameError) return console.error('Could not load content-screen state:', gameError)
-      if (!game?.current_content_screen_key) {
-        setContentScreen(null)
-        return
+    async function loadContentScreen(requestedScreenKey?: string | null) {
+      const version = ++loadVersion
+      let screenKey = requestedScreenKey
+      if (screenKey === undefined) {
+        const { data: game, error: gameError } = await supabase
+          .from('games')
+          .select('current_content_screen_key')
+          .eq('id', activeGameId)
+          .maybeSingle()
+        if (!active || version !== loadVersion) return
+        if (gameError) return console.error('Could not load content-screen state:', gameError)
+        screenKey = game?.current_content_screen_key ?? null
       }
+      if (contentScreenKeyRef.current !== screenKey) {
+        contentScreenKeyRef.current = screenKey
+        setContentScreen(null)
+      }
+      if (!screenKey) return
 
       const { data, error } = await supabase
         .from('game_content_screens')
         .select('screen_key, item_position, round_number, round_title, title, body, image_url')
         .eq('game_id', activeGameId)
-        .eq('screen_key', game.current_content_screen_key)
+        .eq('screen_key', screenKey)
         .maybeSingle()
 
-      if (!active) return
+      if (!active || version !== loadVersion || contentScreenKeyRef.current !== screenKey) return
       if (error) return console.error('Could not load live content screen:', error)
       setContentScreen(data as LiveContentScreenDefinition | null)
     }
@@ -477,7 +496,9 @@ function useLiveContentScreenDefinition() {
     void loadContentScreen()
     const channel = supabase
       .channel(`player-content-screen-${gameId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadContentScreen() })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => {
+        void loadContentScreen((payload.new as { current_content_screen_key?: string | null }).current_content_screen_key ?? null)
+      })
       .subscribe()
 
     return () => { active = false; void supabase.removeChannel(channel) }
@@ -2777,6 +2798,7 @@ function ShowGame() {
   const [showGame, setShowGame] = useState<PlayerShowGame | null>(null)
   const [wheelSettled, setWheelSettled] = useState(false)
   const wheelShowGameIdRef = useRef<string | null>(null)
+  const currentShowGameKeyRef = useRef<string | null>(null)
   const showGameLoadVersionRef = useRef(0)
   const handleWheelSettled = useCallback(() => setWheelSettled(true), [])
   const [hasPressed, setHasPressed] = useState(false)
@@ -2807,19 +2829,29 @@ function ShowGame() {
   const [showGameNow, setShowGameNow] = useState(() => Date.now())
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (requestedShowGameKey?: string | null) => {
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
     if (!gameId || !teamId) return
     const loadVersion = ++showGameLoadVersionRef.current
     const stale = () => loadVersion !== showGameLoadVersionRef.current
-    const { data: game } = await supabase.from('games').select('current_show_game_key').eq('id', gameId).maybeSingle()
-    if (stale() || !game?.current_show_game_key) return
+    let nextShowGameKey = requestedShowGameKey
+    if (nextShowGameKey === undefined) {
+      const { data: game } = await supabase.from('games').select('current_show_game_key').eq('id', gameId).maybeSingle()
+      if (stale()) return
+      nextShowGameKey = game?.current_show_game_key ?? null
+    }
+    if (currentShowGameKeyRef.current !== nextShowGameKey) {
+      currentShowGameKeyRef.current = nextShowGameKey
+      setShowGame(null)
+      setError(null)
+    }
+    if (!nextShowGameKey) return
     const { data: activeShowGame, error: showGameError } = await supabase
       .from('game_show_games')
       .select('id, show_game_key, round_number, round_title, game_type, title, settings, status, started_at, explode_at, winner_team_id')
       .eq('game_id', gameId)
-      .eq('show_game_key', game.current_show_game_key)
+      .eq('show_game_key', nextShowGameKey)
       .maybeSingle()
     if (stale()) return
     if (showGameError) { setError('Could not load the game.'); return }
@@ -2902,11 +2934,9 @@ function ShowGame() {
   useEffect(() => {
     const gameId = localStorage.getItem('simple-trivia-game-id')
     if (!gameId) return
-    // Initial network hydration intentionally updates component state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load()
     const channel = supabase.channel(`player-show-game-${gameId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void load() })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => { void load((payload.new as { current_show_game_key?: string | null }).current_show_game_key ?? null) })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_games', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_presses', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_choices', filter: `game_id=eq.${gameId}` }, () => { void load() })
@@ -3544,6 +3574,7 @@ function LiveTiebreaker() {
   const [error, setError] = useState<string | null>(null)
   const submitBusyRef = useRef(false)
   const loadVersionRef = useRef(0)
+  const attemptIdRef = useRef<string | null>(null)
 
   const load = useCallback(async () => {
     const loadVersion = ++loadVersionRef.current
@@ -3562,7 +3593,12 @@ function LiveTiebreaker() {
     }
     const next = data as PlayerTiebreakerState | null
     setState(next)
-    if (next?.numeric_answer !== null && next?.numeric_answer !== undefined) setAnswer(String(next.numeric_answer))
+    if (attemptIdRef.current !== (next?.attempt_id ?? null)) {
+      attemptIdRef.current = next?.attempt_id ?? null
+      setAnswer(next?.numeric_answer !== null && next?.numeric_answer !== undefined ? String(next.numeric_answer) : '')
+    } else if (next?.numeric_answer !== null && next?.numeric_answer !== undefined) {
+      setAnswer(String(next.numeric_answer))
+    }
   }, [])
 
   useEffect(() => {
