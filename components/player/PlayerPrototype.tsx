@@ -272,6 +272,16 @@ function useLivePlayerSync(
 
     let active = true
     let stateApplyVersion = 0
+    let loadingGameState = false
+    let retryTimer: number | null = null
+
+    function scheduleRetry() {
+      if (!active || retryTimer !== null) return
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null
+        void loadGameState()
+      }, 3000)
+    }
 
     async function applyGameState(gameState: RemoteGameState) {
       const version = ++stateApplyVersion
@@ -280,22 +290,31 @@ function useLivePlayerSync(
     }
 
     async function loadGameState() {
+      if (loadingGameState) return
       if (!navigator.onLine) {
         if (active) setScreen('reconnecting')
         return
       }
+      loadingGameState = true
       const { data, error } = await supabase
         .from('games')
         .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
         .eq('id', activeGameId)
         .maybeSingle()
+      loadingGameState = false
+      if (!active) return
       if (error) {
         console.error('Could not load live game state:', error)
-        if (active) setScreen('reconnecting')
+        setScreen('reconnecting')
+        scheduleRetry()
         return
       }
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer)
+        retryTimer = null
+      }
       if (data) await applyGameState(data as RemoteGameState)
-      else if (active) setScreen('game-ended')
+      else setScreen('game-ended')
     }
 
     void loadGameState()
@@ -314,7 +333,10 @@ function useLivePlayerSync(
       .subscribe(status => {
         if (!active) return
         if (status === 'SUBSCRIBED') void loadGameState()
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setScreen('reconnecting')
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setScreen('reconnecting')
+          scheduleRetry()
+        }
       })
 
     const handleOffline = () => { if (active) setScreen('reconnecting') }
@@ -324,6 +346,7 @@ function useLivePlayerSync(
 
     return () => {
       active = false
+      if (retryTimer !== null) window.clearTimeout(retryTimer)
       window.removeEventListener('offline', handleOffline)
       window.removeEventListener('online', handleOnline)
       void supabase.removeChannel(channel)
@@ -420,13 +443,27 @@ function useLiveQuestionDefinition() {
     const activeGameId = gameId
     let active = true
     let loadVersion = 0
+    let retryTimer: number | null = null
+
+    function scheduleRetry() {
+      if (!active || retryTimer !== null) return
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null
+        void loadQuestion()
+      }, 3000)
+    }
 
     async function loadQuestion(requestedQuestionKey?: string | null) {
       const version = ++loadVersion
       let questionKey = requestedQuestionKey
       if (questionKey === undefined) {
-        const { data: game } = await supabase.from('games').select('current_question_key').eq('id', activeGameId).maybeSingle()
+        const { data: game, error: gameError } = await supabase.from('games').select('current_question_key').eq('id', activeGameId).maybeSingle()
         if (!active || version !== loadVersion) return
+        if (gameError) {
+          console.error('Could not load current question state:', gameError)
+          scheduleRetry()
+          return
+        }
         questionKey = game?.current_question_key ?? null
       }
       if (questionKeyRef.current !== questionKey) {
@@ -436,7 +473,15 @@ function useLiveQuestionDefinition() {
       if (!questionKey) return
       const { data, error } = await loadPlayerQuestion(activeGameId, questionKey)
       if (!active || version !== loadVersion || questionKeyRef.current !== questionKey) return
-      if (error) return console.error('Could not load question:', error)
+      if (error) {
+        console.error('Could not load question:', error)
+        scheduleRetry()
+        return
+      }
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer)
+        retryTimer = null
+      }
       setQuestion(data as LiveQuestionDefinition | null)
     }
 
@@ -448,7 +493,11 @@ function useLiveQuestionDefinition() {
       })
       .subscribe(status => { if (status === 'SUBSCRIBED') void loadQuestion() })
 
-    return () => { active = false; void supabase.removeChannel(channel) }
+    return () => {
+      active = false
+      if (retryTimer !== null) window.clearTimeout(retryTimer)
+      void supabase.removeChannel(channel)
+    }
   }, [])
 
   return question
@@ -464,6 +513,15 @@ function useLiveContentScreenDefinition() {
     const activeGameId = gameId
     let active = true
     let loadVersion = 0
+    let retryTimer: number | null = null
+
+    function scheduleRetry() {
+      if (!active || retryTimer !== null) return
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null
+        void loadContentScreen()
+      }, 3000)
+    }
 
     async function loadContentScreen(requestedScreenKey?: string | null) {
       const version = ++loadVersion
@@ -475,7 +533,11 @@ function useLiveContentScreenDefinition() {
           .eq('id', activeGameId)
           .maybeSingle()
         if (!active || version !== loadVersion) return
-        if (gameError) return console.error('Could not load content-screen state:', gameError)
+        if (gameError) {
+          console.error('Could not load content-screen state:', gameError)
+          scheduleRetry()
+          return
+        }
         screenKey = game?.current_content_screen_key ?? null
       }
       if (contentScreenKeyRef.current !== screenKey) {
@@ -492,7 +554,15 @@ function useLiveContentScreenDefinition() {
         .maybeSingle()
 
       if (!active || version !== loadVersion || contentScreenKeyRef.current !== screenKey) return
-      if (error) return console.error('Could not load live content screen:', error)
+      if (error) {
+        console.error('Could not load live content screen:', error)
+        scheduleRetry()
+        return
+      }
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer)
+        retryTimer = null
+      }
       setContentScreen(data as LiveContentScreenDefinition | null)
     }
 
@@ -504,7 +574,11 @@ function useLiveContentScreenDefinition() {
       })
       .subscribe(status => { if (status === 'SUBSCRIBED') void loadContentScreen() })
 
-    return () => { active = false; void supabase.removeChannel(channel) }
+    return () => {
+      active = false
+      if (retryTimer !== null) window.clearTimeout(retryTimer)
+      void supabase.removeChannel(channel)
+    }
   }, [])
 
   return contentScreen
@@ -977,14 +1051,30 @@ function usePlayerSnapshot(): PlayerSnapshot {
     const activeTeamId = teamId
     let active = true
     let loadVersion = 0
+    let retryTimer: number | null = null
+
+    function scheduleRetry() {
+      if (!active || retryTimer !== null) return
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null
+        void loadSnapshot()
+      }, 3000)
+    }
 
     async function loadSnapshot() {
       const version = ++loadVersion
-      const [{ data: team }, { data: game }] = await Promise.all([
+      const [teamResult, gameResult] = await Promise.all([
         supabase.from('teams').select('name, score, prize_awards').eq('id', activeTeamId).maybeSingle(),
         supabase.from('games').select('current_question_key, current_screen, answer_phase, settings').eq('id', activeGameId).maybeSingle(),
       ])
       if (!active || version !== loadVersion) return
+      if (teamResult.error || gameResult.error) {
+        console.error('Could not load player result state:', teamResult.error ?? gameResult.error)
+        scheduleRetry()
+        return
+      }
+      const team = teamResult.data
+      const game = gameResult.data
 
       let question: LiveQuestionDefinition | null = null
       let submission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
@@ -992,7 +1082,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
       let correctness: CorrectnessSummary | null = null
 
       if (game?.current_question_key) {
-        const [{ data: questionRow }, { data: submissionRow }, { data: bonusSubmissionRow }] = await Promise.all([
+        const [questionResult, submissionResult, bonusSubmissionResult] = await Promise.all([
           loadPlayerQuestion(activeGameId, game.current_question_key),
           supabase
             .from('submissions')
@@ -1009,9 +1099,15 @@ function usePlayerSnapshot(): PlayerSnapshot {
             })
             .maybeSingle(),
         ])
-        question = questionRow as LiveQuestionDefinition | null
-        submission = submissionRow
-        bonusSubmission = bonusSubmissionRow
+        if (!active || version !== loadVersion) return
+        if (questionResult.error || submissionResult.error || bonusSubmissionResult.error) {
+          console.error('Could not load player result details:', questionResult.error ?? submissionResult.error ?? bonusSubmissionResult.error)
+          scheduleRetry()
+          return
+        }
+        question = questionResult.data as LiveQuestionDefinition | null
+        submission = submissionResult.data
+        bonusSubmission = bonusSubmissionResult.data
 
         if (game.answer_phase === 'revealed' && playersSeeCorrectnessPercentage(game.settings)) {
           const [{ count: teamCount }, { data: allSubmissions, error: correctnessError }] = await Promise.all([
@@ -1027,6 +1123,10 @@ function usePlayerSnapshot(): PlayerSnapshot {
       }
 
       if (!active || version !== loadVersion) return
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer)
+        retryTimer = null
+      }
 
       const reviewItems = playerReviewItemsFromJson(submission?.grading_json)
       const missingAnswers = playerMissingAnswersFromJson(submission?.grading_json)
@@ -1068,7 +1168,11 @@ function usePlayerSnapshot(): PlayerSnapshot {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadSnapshot() })
       .subscribe(status => { if (status === 'SUBSCRIBED') void loadSnapshot() })
 
-    return () => { active = false; void supabase.removeChannel(channel) }
+    return () => {
+      active = false
+      if (retryTimer !== null) window.clearTimeout(retryTimer)
+      void supabase.removeChannel(channel)
+    }
   }, [])
 
   return snapshot
@@ -3636,6 +3740,7 @@ function LiveTiebreaker() {
       setError('Could not load the tiebreaker. Please try again.')
       return
     }
+    setError(null)
     const next = data as PlayerTiebreakerState | null
     setState(next)
     if (attemptIdRef.current !== (next?.attempt_id ?? null)) {
@@ -3648,15 +3753,25 @@ function LiveTiebreaker() {
 
   useEffect(() => {
     // The first async read synchronizes this screen with the persisted attempt.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load()
     const gameId = localStorage.getItem('simple-trivia-game-id')
     if (!gameId) return
+    let active = true
+    let timer: number | null = null
+    const poll = async () => {
+      await load()
+      if (active) timer = window.setTimeout(() => { void poll() }, 3000)
+    }
+    void poll()
     const channel = supabase
       .channel(`player-tiebreaker-${gameId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void load() })
       .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
-    return () => { loadVersionRef.current += 1; void supabase.removeChannel(channel) }
+    return () => {
+      active = false
+      if (timer !== null) window.clearTimeout(timer)
+      loadVersionRef.current += 1
+      void supabase.removeChannel(channel)
+    }
   }, [load])
 
   async function submit(event: React.FormEvent) {
@@ -3684,6 +3799,16 @@ function LiveTiebreaker() {
     setSubmitting(false)
   }
 
+  if (!state && error) {
+    return (
+      <div className="flex flex-col items-center justify-center px-6 text-center" style={{ minHeight: '100%' }}>
+        <div style={{ fontSize: 42, marginBottom: 14 }}>↻</div>
+        <h1 style={{ color: C.ink, fontSize: 25 }} className="font-black mb-2">Still reconnecting…</h1>
+        <p style={{ color: C.sub, fontSize: 14, lineHeight: 1.6 }}>{error}</p>
+        <button type="button" onClick={() => { void load() }} style={{ background: C.violet, color: 'white' }} className="mt-5 rounded-xl px-5 py-3 text-sm font-black">Try again now</button>
+      </div>
+    )
+  }
   if (!state) return <TiebreakerPending />
   if (!state.is_participant) {
     return (

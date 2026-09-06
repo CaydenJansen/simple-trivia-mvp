@@ -135,6 +135,33 @@ test('rapid answer actions submit once and bind the response to the visible ques
   })
 })
 
+test('a transient question load failure recovers without refreshing', async ({ page }) => {
+  await page.unroute('**/rest/v1/rpc/get_player_game_question')
+  let attempts = 0
+  await page.route('**/rest/v1/rpc/get_player_game_question', route => {
+    attempts += 1
+    if (attempts === 1) {
+      return route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: 'Temporary connection failure' }),
+      })
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(fiveAnswerQuestion),
+    })
+  })
+
+  await page.goto('/play/prototype')
+  await page.getByRole('button', { name: '5 · Single Answer' }).click()
+
+  await expect(page.getByText('Loading question…')).toBeVisible()
+  await expect(page.getByText('Name five examples.')).toBeVisible({ timeout: 5_000 })
+  expect(attempts).toBeGreaterThanOrEqual(2)
+})
+
 test('every player prototype state avoids horizontal overflow', async ({ page }) => {
   await page.goto('/play/prototype')
   const stateButtons = await page.locator('button').filter({ hasText: /^\d/ }).allTextContents()
