@@ -6961,16 +6961,20 @@ function AutoBuild({ go }: { go: Go }) {
                       className="dual-range-thumb absolute p-0"
                       style={{ left: `calc(${(safeDiff[1] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: diff[0] === diff[1] ? 3 : 2 }} />
                   </div>
-                  <div className="mb-3 flex justify-between">
+                  <div className="relative mb-3 h-5">
                     {diffLabels.map((label, index) => {
                       const toneStyle = difficultyToneStyle(label)
                       const isInRange = index >= safeDiff[0] && index <= safeDiff[1]
                       return (
                         <span key={label} style={{
+                          position: 'absolute',
+                          left: `${(index / (diffLabels.length - 1)) * 100}%`,
+                          transform: 'translateX(-50%)',
+                          whiteSpace: 'nowrap',
                           color: toneStyle.text,
                           fontWeight: (index === safeDiff[0] || index === safeDiff[1]) ? 700 : 500,
                           opacity: isInRange ? 1 : 0.38,
-                        }} className="flex-1 text-center text-[11px]">{label}</span>
+                        }} className="text-center text-[11px]">{label}</span>
                       )
                     })}
                   </div>
