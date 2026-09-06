@@ -8273,6 +8273,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const [topPrizes, setTopPrizes] = useState<PrizePlace[]>(normalizedPrizePlaces(undefined))
   const [botPrizes, setBotPrizes] = useState<PrizePlace[]>(normalizedPrizePlaces(undefined))
   const [settingsBusy, setSettingsBusy] = useState(false)
+  const settingsBusyRef = useRef(false)
   const [answerRevealMode, setAnswerRevealMode] = useState<AnswerRevealMode>('each')
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
   const [autoRunSpeed, setAutoRunSpeed] = useState<AutoRunSpeed>('fast')
@@ -8285,6 +8286,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const autoRunPublishedKeyRef = useRef('')
   const liveGameSettingsRef = useRef<Record<string, Json>>({})
   const audienceResolveBusyRef = useRef(false)
+  const reviewBusyRef = useRef(new Set<string>())
   const [liveError, setLiveError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
   const actionBusyRef = useRef(false)
@@ -8727,24 +8729,30 @@ function LiveQuestion({ go }: { go: Go }) {
     actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
-    const { data, error } = await supabase.rpc('resolve_audience_question', {
-      p_game_show_game_id: showGame.id,
-      p_winner_team_ids: config.mode === 'favourite' ? selectedAudienceWinnerIds : null,
-    })
-    if (error) {
-      console.error('Could not resolve Audience Question:', error)
-      const { data: resolved } = await supabase.from('game_show_games').select('*').eq('id', showGame.id).maybeSingle()
-      if (resolved?.status === 'exploded') {
-        setShowGame(resolved as LiveShowGameDefinition)
+    try {
+      const { data, error } = await supabase.rpc('resolve_audience_question', {
+        p_game_show_game_id: showGame.id,
+        p_winner_team_ids: config.mode === 'favourite' ? selectedAudienceWinnerIds : null,
+      })
+      if (error) {
+        console.error('Could not resolve Audience Question:', error)
+        const { data: resolved } = await supabase.from('game_show_games').select('*').eq('id', showGame.id).maybeSingle()
+        if (resolved?.status === 'exploded') {
+          setShowGame(resolved as LiveShowGameDefinition)
+          setLiveError(null)
+        } else setLiveError('Could not confirm the result. Please try again.')
+      } else {
+        setShowGame(data as LiveShowGameDefinition)
         setLiveError(null)
-      } else setLiveError('Could not confirm the result. Please try again.')
-    } else {
-      setShowGame(data as LiveShowGameDefinition)
-      setLiveError(null)
+      }
+    } catch (unexpectedError) {
+      console.error('Could not resolve Audience Question:', unexpectedError)
+      setLiveError('Could not confirm the result. Please try again.')
+    } finally {
+      audienceResolveBusyRef.current = false
+      actionBusyRef.current = false
+      setActionBusy(false)
     }
-    audienceResolveBusyRef.current = false
-    actionBusyRef.current = false
-    setActionBusy(false)
   }
 
   async function handleOpenQuestion() {
@@ -8805,21 +8813,20 @@ function LiveQuestion({ go }: { go: Go }) {
     actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
-
-    const { error } = await supabase
-      .from('games')
-      .update({ answer_phase: 'closed' })
-      .eq('id', liveGameId)
-
-    if (error) {
+    try {
+      const { error } = await supabase
+        .from('games')
+        .update({ answer_phase: 'closed' })
+        .eq('id', liveGameId)
+      if (error) throw error
+      setPhase('closed')
+    } catch (error) {
       console.error('Could not close answers:', error)
       setLiveError('Could not close answers. Please try again.')
-    } else {
-      setPhase('closed')
+    } finally {
+      actionBusyRef.current = false
+      setActionBusy(false)
     }
-
-    actionBusyRef.current = false
-    setActionBusy(false)
   }
 
   async function handleShowBonus() {
@@ -8827,23 +8834,22 @@ function LiveQuestion({ go }: { go: Go }) {
     actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
-
-    const { error } = await supabase
-      .from('games')
-      .update({ question_stage: 'bonus', answer_phase: 'open', answer_editing_allowed: submittedAnswersEditableFromSettings(liveGameSettingsRef.current) })
-      .eq('id', liveGameId)
-
-    if (error) {
-      console.error('Could not show bonus question:', error)
-      setLiveError('Could not show the bonus question. Please try again.')
-    } else {
+    try {
+      const { error } = await supabase
+        .from('games')
+        .update({ question_stage: 'bonus', answer_phase: 'open', answer_editing_allowed: submittedAnswersEditableFromSettings(liveGameSettingsRef.current) })
+        .eq('id', liveGameId)
+      if (error) throw error
       setQuestionStage('bonus')
       setPhase('open')
       setAnswerEditingAllowed(submittedAnswersEditableFromSettings(liveGameSettingsRef.current))
+    } catch (error) {
+      console.error('Could not show bonus question:', error)
+      setLiveError('Could not show the bonus question. Please try again.')
+    } finally {
+      actionBusyRef.current = false
+      setActionBusy(false)
     }
-
-    actionBusyRef.current = false
-    setActionBusy(false)
   }
 
   async function handleReopenAnswers() {
@@ -8851,22 +8857,21 @@ function LiveQuestion({ go }: { go: Go }) {
     actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
-
-    const { error } = await supabase
-      .from('games')
-      .update({ answer_phase: 'open', answer_editing_allowed: true })
-      .eq('id', liveGameId)
-
-    if (error) {
-      console.error('Could not reopen answers:', error)
-      setLiveError('Could not reopen answers. Please try again.')
-    } else {
+    try {
+      const { error } = await supabase
+        .from('games')
+        .update({ answer_phase: 'open', answer_editing_allowed: true })
+        .eq('id', liveGameId)
+      if (error) throw error
       setPhase('open')
       setAnswerEditingAllowed(true)
+    } catch (error) {
+      console.error('Could not reopen answers:', error)
+      setLiveError('Could not reopen answers. Please try again.')
+    } finally {
+      actionBusyRef.current = false
+      setActionBusy(false)
     }
-
-    actionBusyRef.current = false
-    setActionBusy(false)
   }
 
   async function handleAnswerEditingChange(allowed: boolean) {
@@ -8874,26 +8879,27 @@ function LiveQuestion({ go }: { go: Go }) {
     actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
-
-    const { error } = await supabase
-      .from('games')
-      .update({ answer_editing_allowed: allowed })
-      .eq('id', liveGameId)
-
-    if (error) {
+    try {
+      const { error } = await supabase
+        .from('games')
+        .update({ answer_editing_allowed: allowed })
+        .eq('id', liveGameId)
+      if (error) throw error
+      setAnswerEditingAllowed(allowed)
+    } catch (error) {
       console.error('Could not update answer editing:', error)
       setLiveError('Could not update answer editing. Please try again.')
-    } else {
-      setAnswerEditingAllowed(allowed)
+    } finally {
+      actionBusyRef.current = false
+      setActionBusy(false)
     }
-
-    actionBusyRef.current = false
-    setActionBusy(false)
   }
 
 
 async function handleReviewItem(submissionId: string, itemIndex: number, status: 'correct' | 'incorrect') {
   if (!question || phase === 'revealed') return
+  const reviewKey = `${submissionId}:${itemIndex}`
+  if (reviewBusyRef.current.has(reviewKey)) return
 
   const submission = submissions.find(item => item.id === submissionId)
   if (!submission) return
@@ -8907,24 +8913,29 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     next.missing = multiAnswerMissing(question, next)
   }
 
-  setSubmissions(currentSubmissions => currentSubmissions.map(item =>
-    item.id === submissionId ? { ...item, grading_json: next } : item
-  ))
-
-  const { error } = await supabase
-    .from('submissions')
-    .update({ grading_json: next })
-    .eq('id', submissionId)
-
-  if (error) {
+  reviewBusyRef.current.add(reviewKey)
+  try {
+    const { error } = await supabase
+      .from('submissions')
+      .update({ grading_json: next })
+      .eq('id', submissionId)
+    if (error) throw error
+    setSubmissions(currentSubmissions => currentSubmissions.map(item =>
+      item.id === submissionId ? { ...item, grading_json: next } : item
+    ))
+  } catch (error) {
     console.error('Could not update answer review:', error)
     setLiveError('Could not save that answer review. Please try again.')
+  } finally {
+    reviewBusyRef.current.delete(reviewKey)
   }
 }
 
   async function handleBonusReview(submissionId: string, status: 'correct' | 'incorrect') {
     const bonus = runtimeBonusFromJson(question?.bonus)
     if (!bonus || phase === 'revealed') return
+    const reviewKey = `bonus:${submissionId}`
+    if (reviewBusyRef.current.has(reviewKey)) return
 
     const submission = bonusSubmissions.find(item => item.id === submissionId)
     if (!submission) return
@@ -8934,18 +8945,21 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       items: current.items.map((item, index) => index === 0 ? { ...item, status } : item),
     }
 
-    setBonusSubmissions(currentSubmissions => currentSubmissions.map(item =>
-      item.id === submissionId ? { ...item, grading_json: next } : item
-    ))
-
-    const { error } = await supabase
-      .from('bonus_submissions')
-      .update({ grading_json: next })
-      .eq('id', submissionId)
-
-    if (error) {
+    reviewBusyRef.current.add(reviewKey)
+    try {
+      const { error } = await supabase
+        .from('bonus_submissions')
+        .update({ grading_json: next })
+        .eq('id', submissionId)
+      if (error) throw error
+      setBonusSubmissions(currentSubmissions => currentSubmissions.map(item =>
+        item.id === submissionId ? { ...item, grading_json: next } : item
+      ))
+    } catch (error) {
       console.error('Could not update bonus review:', error)
       setLiveError('Could not save that bonus review. Please try again.')
+    } finally {
+      reviewBusyRef.current.delete(reviewKey)
     }
   }
 
@@ -9590,26 +9604,34 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }, [allActivePlayersLocked, autoRunMode, autoRunOperating])
 
   async function updateLiveSettings(patch: Record<string, Json>) {
-    if (!liveGameId || settingsBusy) return false
+    if (!liveGameId || settingsBusyRef.current) return false
+    settingsBusyRef.current = true
     setSettingsBusy(true)
     setLiveError(null)
-    const settings: Record<string, Json> = { ...liveGameSettingsRef.current, ...patch }
-    const { error } = await supabase.from('games').update({ settings }).eq('id', liveGameId)
-    if (error) {
-      console.error('Could not update live settings:', error)
-      setLiveError('Could not update the live settings. Please try again.')
-      setSettingsBusy(false)
-      return false
-    }
-    liveGameSettingsRef.current = settings
     try {
-      await saveHostDefaultGameSettings(settings)
-    } catch (preferenceError) {
-      console.error('Could not save live settings as defaults:', preferenceError)
-      setLiveError('That setting changed for this game, but the default could not be saved.')
+      const settings: Record<string, Json> = { ...liveGameSettingsRef.current, ...patch }
+      const { error } = await supabase.from('games').update({ settings }).eq('id', liveGameId)
+      if (error) {
+        console.error('Could not update live settings:', error)
+        setLiveError('Could not update the live settings. Please try again.')
+        return false
+      }
+      liveGameSettingsRef.current = settings
+      try {
+        await saveHostDefaultGameSettings(settings)
+      } catch (preferenceError) {
+        console.error('Could not save live settings as defaults:', preferenceError)
+        setLiveError('That setting changed for this game, but the default could not be saved.')
+      }
+      return true
+    } catch (unexpectedError) {
+      console.error('Could not update live settings:', unexpectedError)
+      setLiveError('Could not update the live settings. Please try again.')
+      return false
+    } finally {
+      settingsBusyRef.current = false
+      setSettingsBusy(false)
     }
-    setSettingsBusy(false)
-    return true
   }
 
   async function setLiveAutoJoin(enabled: boolean) {
@@ -9634,30 +9656,37 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }
 
   async function setLiveSubmittedAnswersEditable(enabled: boolean) {
-    if (!liveGameId || settingsBusy) return
+    if (!liveGameId || settingsBusyRef.current) return
+    settingsBusyRef.current = true
     setSettingsBusy(true)
     setLiveError(null)
-    const settings: Record<string, Json> = { ...liveGameSettingsRef.current, submitted_answers_editable: enabled }
-    const gameUpdate = phase === 'open'
-      ? { settings, answer_editing_allowed: enabled }
-      : { settings }
-    const { error } = await supabase.from('games').update(gameUpdate).eq('id', liveGameId)
-    if (error) {
-      console.error('Could not update submitted answer editing:', error)
-      setLiveError('Could not update answer editing. Please try again.')
-      setSettingsBusy(false)
-      return
-    }
-    liveGameSettingsRef.current = settings
-    setSubmittedAnswersEditableDefault(enabled)
-    if (phase === 'open') setAnswerEditingAllowed(enabled)
     try {
-      await saveHostDefaultGameSettings(settings)
-    } catch (preferenceError) {
-      console.error('Could not save answer editing as a default:', preferenceError)
-      setLiveError('Answer editing changed for this game, but the default could not be saved.')
+      const settings: Record<string, Json> = { ...liveGameSettingsRef.current, submitted_answers_editable: enabled }
+      const gameUpdate = phase === 'open'
+        ? { settings, answer_editing_allowed: enabled }
+        : { settings }
+      const { error } = await supabase.from('games').update(gameUpdate).eq('id', liveGameId)
+      if (error) {
+        console.error('Could not update submitted answer editing:', error)
+        setLiveError('Could not update answer editing. Please try again.')
+        return
+      }
+      liveGameSettingsRef.current = settings
+      setSubmittedAnswersEditableDefault(enabled)
+      if (phase === 'open') setAnswerEditingAllowed(enabled)
+      try {
+        await saveHostDefaultGameSettings(settings)
+      } catch (preferenceError) {
+        console.error('Could not save answer editing as a default:', preferenceError)
+        setLiveError('Answer editing changed for this game, but the default could not be saved.')
+      }
+    } catch (unexpectedError) {
+      console.error('Could not update submitted answer editing:', unexpectedError)
+      setLiveError('Could not update answer editing. Please try again.')
+    } finally {
+      settingsBusyRef.current = false
+      setSettingsBusy(false)
     }
-    setSettingsBusy(false)
   }
 
   async function saveLivePrizes() {
@@ -9679,8 +9708,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <label className="block text-xs font-bold" style={{ color: C.liveText }}>Answer reveal
             <select value={answerRevealMode} disabled={settingsBusy} onChange={event => {
               const value = event.target.value as AnswerRevealMode
-              setAnswerRevealMode(value)
-              void updateLiveSettings({ answer_reveal: value })
+              void updateLiveSettings({ answer_reveal: value }).then(saved => { if (saved) setAnswerRevealMode(value) })
             }} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-1.5 w-full cursor-pointer rounded-lg px-3 py-2 text-sm">
               <option value="each">After every question</option><option value="round">At the end of each round</option>
             </select>
@@ -9688,8 +9716,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <label className="block text-xs font-bold" style={{ color: C.liveText }}>Player scores
             <select value={playerScoreVisibility} disabled={settingsBusy} onChange={event => {
               const value = event.target.value as PlayerScoreVisibility
-              setPlayerScoreVisibility(value)
-              void updateLiveSettings({ player_score_visibility: value, scores_visible_to_players: value === 'live' })
+              void updateLiveSettings({ player_score_visibility: value, scores_visible_to_players: value === 'live' }).then(saved => { if (saved) setPlayerScoreVisibility(value) })
             }} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-1.5 w-full cursor-pointer rounded-lg px-3 py-2 text-sm">
               <option value="live">Show live</option><option value="round">After each round</option><option value="final">Final results only</option><option value="hidden">Hide scores</option>
             </select>
@@ -9697,14 +9724,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <label className="block text-xs font-bold" style={{ color: C.liveText }}>Leaderboards
             <select value={leaderboardVisibility} disabled={settingsBusy} onChange={event => {
               const value = event.target.value as LeaderboardVisibility
-              setLeaderboardVisibility(value)
-              void updateLiveSettings({ leaderboard_visibility: value })
+              void updateLiveSettings({ leaderboard_visibility: value }).then(saved => { if (saved) setLeaderboardVisibility(value) })
             }} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-1.5 w-full cursor-pointer rounded-lg px-3 py-2 text-sm">
               <option value="question">After every question</option><option value="round">After each round</option><option value="final">Final results only</option><option value="host">Host only</option>
             </select>
           </label>
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-sm font-bold" style={{ color: C.liveText }}>
-            <span>Show % correct to players</span><input type="checkbox" checked={showCorrectnessPercentage} disabled={settingsBusy} onChange={event => { const checked = event.target.checked; setShowCorrectnessPercentage(checked); void updateLiveSettings({ show_correctness_percentage_to_players: checked }) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
+            <span>Show % correct to players</span><input type="checkbox" checked={showCorrectnessPercentage} disabled={settingsBusy} onChange={event => { const checked = event.target.checked; void updateLiveSettings({ show_correctness_percentage_to_players: checked }).then(saved => { if (saved) setShowCorrectnessPercentage(checked) }) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
           </label>
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-sm font-bold" style={{ color: C.liveText }}>
             <span>Allow answer changes after submitting</span><input type="checkbox" checked={submittedAnswersEditableDefault} disabled={settingsBusy} onChange={event => { void setLiveSubmittedAnswersEditable(event.target.checked) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
@@ -9718,9 +9744,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           {autoRunMode === 'round' && <label className="block text-xs font-bold" style={{ color: C.liveText }}>Auto-Run speed
             <select value={autoRunSpeed} disabled={settingsBusy} onChange={event => {
               const value = event.target.value as AutoRunSpeed
-              setAutoRunSpeed(value)
-              autoRunPublishedKeyRef.current = ''
-              void updateLiveSettings({ auto_run_speed: value, auto_run_clock: null })
+              void updateLiveSettings({ auto_run_speed: value, auto_run_clock: null }).then(saved => {
+                if (!saved) return
+                setAutoRunSpeed(value)
+                autoRunPublishedKeyRef.current = ''
+              })
             }} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-1.5 w-full cursor-pointer rounded-lg px-3 py-2 text-sm">
               <option value="fast">Fast</option><option value="medium">Medium (+20%)</option><option value="slow">Slow (+40%)</option>
             </select>
@@ -10912,6 +10940,7 @@ function EndOfRound({ go }: { go: Go }) {
   const [reviewAllAnswers, setReviewAllAnswers] = useState(false)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
+  const roundReviewBusyRef = useRef(new Set<string>())
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -11112,6 +11141,8 @@ function EndOfRound({ go }: { go: Go }) {
   }
 
   async function reviewRoundSubmission(submission: LiveSubmission, itemIndex: number, status: 'correct' | 'incorrect', bonus = false) {
+    const reviewKey = `${bonus ? 'bonus' : 'core'}:${submission.id}:${itemIndex}`
+    if (roundReviewBusyRef.current.has(reviewKey)) return
     const roundQuestion = roundQuestions.find(item => item.question_key === submission.question_key)
     if (!roundQuestion) return
     const bonusDefinition = runtimeBonusFromJson(roundQuestion.bonus)
@@ -11123,14 +11154,19 @@ function EndOfRound({ go }: { go: Go }) {
     }
     if (!bonus && roundQuestion.question_type === 'multi-answer') next.missing = multiAnswerMissing(roundQuestion, next)
 
-    const table = bonus ? 'bonus_submissions' : 'submissions'
-    const { error: reviewError } = await supabase.from(table).update({ grading_json: next }).eq('id', submission.id)
-    if (reviewError) {
+    roundReviewBusyRef.current.add(reviewKey)
+    try {
+      const table = bonus ? 'bonus_submissions' : 'submissions'
+      const { error: reviewError } = await supabase.from(table).update({ grading_json: next }).eq('id', submission.id)
+      if (reviewError) throw reviewError
+      const setter = bonus ? setRoundBonusSubmissions : setRoundSubmissions
+      setter(rows => rows.map(row => row.id === submission.id ? { ...row, grading_json: next } : row))
+    } catch (reviewError) {
+      console.error('Could not save round review decision:', reviewError)
       setError('Could not save that review decision.')
-      return
+    } finally {
+      roundReviewBusyRef.current.delete(reviewKey)
     }
-    const setter = bonus ? setRoundBonusSubmissions : setRoundSubmissions
-    setter(rows => rows.map(row => row.id === submission.id ? { ...row, grading_json: next } : row))
   }
 
   async function finalizeRound(markPendingIncorrect = false) {
@@ -11672,18 +11708,30 @@ function FinalResults({ go }: { go: Go }) {
   }, [])
 
   useEffect(() => {
-    // The first async read synchronizes this screen with the persisted live game.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadFinal()
+    let disposed = false
+    let pollTimer: number | null = null
+    const poll = async () => {
+      await loadFinal()
+      if (!disposed) pollTimer = window.setTimeout(() => { void poll() }, 5000)
+    }
+    // Realtime keeps the screen immediate; sequential polling recovers missed events
+    // and transient read failures without allowing overlapping interval requests.
+    void poll()
     const gameId = localStorage.getItem('simple-trivia-host-game-id')
-    if (!gameId) return
-    const channel = supabase
-      .channel(`host-final-${gameId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadFinal() })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${gameId}` }, () => { void loadFinal() })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_tiebreaker_submissions', filter: `game_id=eq.${gameId}` }, () => { void loadFinal() })
-      .subscribe(status => { if (status === 'SUBSCRIBED') void loadFinal() })
-    return () => { finalLoadVersionRef.current += 1; void supabase.removeChannel(channel) }
+    const channel = gameId
+      ? supabase
+        .channel(`host-final-${gameId}`)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadFinal() })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${gameId}` }, () => { void loadFinal() })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'game_tiebreaker_submissions', filter: `game_id=eq.${gameId}` }, () => { void loadFinal() })
+        .subscribe(status => { if (status === 'SUBSCRIBED') void loadFinal() })
+      : null
+    return () => {
+      disposed = true
+      if (pollTimer !== null) window.clearTimeout(pollTimer)
+      finalLoadVersionRef.current += 1
+      if (channel) void supabase.removeChannel(channel)
+    }
   }, [loadFinal])
 
   const leaderboardVisibility = leaderboardVisibilityFromSettings(game?.settings)
@@ -11839,15 +11887,19 @@ function FinalResults({ go }: { go: Go }) {
       </header>
 
       <main className="flex-1 max-w-2xl mx-auto w-full px-6 py-12">
-        {resolvingTie && displayResolution ? (
+        {error && <div style={{ background: `${C.stop}18`, border: `1px solid ${C.stop}55`, color: '#FCA5A5' }} className="mb-5 flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold">
+          <span className="flex-1">{error}</span>
+          <button type="button" onClick={() => { void loadFinal() }} className="shrink-0 rounded-lg border border-red-300/40 px-3 py-1.5 text-xs font-extrabold hover:bg-white/5">Try again</button>
+        </div>}
+        {!game ? (
+          <div style={{ color: C.liveDim }} className="py-20 text-center text-sm font-semibold">Loading final results…</div>
+        ) : resolvingTie && displayResolution ? (
           <>
             <div className="text-center mb-8">
               <div style={{ background: `${C.caution}20`, color: '#FCD34D', border: `1px solid ${C.caution}55` }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-4">Final placement tie</div>
               <h1 style={{ color: C.liveText }} className="text-4xl font-extrabold">These teams are tied on {displayResolution.tied_score}</h1>
               <p style={{ color: C.liveDim }} className="mt-3 text-sm">Resolve their placement without changing either team’s trivia score.</p>
             </div>
-
-            {error && <div style={{ background: `${C.stop}18`, border: `1px solid ${C.stop}55`, color: '#FCA5A5' }} className="mb-5 rounded-xl px-4 py-3 text-sm font-semibold">{error}</div>}
 
             {activeAttempt && activePrepared && game?.current_screen !== 'tiebreaker-pending' && !manualMode ? (
               <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-3xl p-6 shadow-2xl">
