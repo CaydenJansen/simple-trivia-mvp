@@ -120,12 +120,14 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
         const finish = () => {
           if (finished || cancelled) return
           finished = true
+          cancelAnimationFrame(frame)
           updateWheel(target)
           setSelectedName(animatedNames[winnerIndex])
           settledLandingKeyRef.current = landingKey
           onSettled?.()
         }
         const settle = (now: number) => {
+          if (finished || cancelled) return
           if (started === null) started = now
           const progress = Math.min(1, (now - started) / duration)
           const eased = 1 - ((1 - progress) ** 3)

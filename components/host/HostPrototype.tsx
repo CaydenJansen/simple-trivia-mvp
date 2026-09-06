@@ -2945,6 +2945,7 @@ function QuizBuilder({ go }: { go: Go }) {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
   const [discarding, setDiscarding] = useState(false)
   const [deletingQuiz, setDeletingQuiz] = useState(false)
   const [savingTemplate, setSavingTemplate] = useState(false)
@@ -3564,7 +3565,7 @@ function QuizBuilder({ go }: { go: Go }) {
   }
 
   async function saveQuiz() {
-    if (saving || loading) return null
+    if (savingRef.current || loading) return null
     const statusToSave = expectedQuizStatus
     if (!title.trim()) {
       setSaveError('Add a quiz title before saving.')
@@ -3604,6 +3605,7 @@ function QuizBuilder({ go }: { go: Go }) {
       return null
     }
 
+    savingRef.current = true
     setSaving(true)
     setSaveError(null)
     setSaveNotice(null)
@@ -3717,6 +3719,7 @@ function QuizBuilder({ go }: { go: Go }) {
       p_show_games: showGameSnapshots,
     })
 
+    savingRef.current = false
     setSaving(false)
     if (error || !data) {
       console.error('Could not save quiz:', error)

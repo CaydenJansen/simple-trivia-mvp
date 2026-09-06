@@ -335,16 +335,19 @@ function usePlayerPresence(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return
     let active = true
+    let touching = false
 
     async function touchPresence() {
-      if (!active || !navigator.onLine || document.visibilityState === 'hidden') return
+      if (!active || touching || !navigator.onLine || document.visibilityState === 'hidden') return
       const requestId = localStorage.getItem('simple-trivia-join-request-id')
       const requestToken = localStorage.getItem('simple-trivia-join-request-token')
       if (!requestId || !requestToken) return
+      touching = true
       const { error } = await supabase.rpc('touch_team_presence', {
         p_request_id: requestId,
         p_request_token: requestToken,
       })
+      touching = false
       if (error && !error.message.includes('TEAM_SESSION_INVALID')) console.error('Could not update team presence:', error)
     }
 
@@ -2820,17 +2823,20 @@ function ShowGame() {
   const handleWheelSettled = useCallback(() => setWheelSettled(true), [])
   const [hasPressed, setHasPressed] = useState(false)
   const [pressing, setPressing] = useState(false)
+  const pressBusyRef = useRef(false)
   const [bombPresses, setBombPresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [ownChoice, setOwnChoice] = useState<string | null>(null)
   const [choiceCounts, setChoiceCounts] = useState<Record<string, number>>({})
   const [eliminationChoices, setEliminationChoices] = useState<Record<string, string>>({})
   const [choiceBusy, setChoiceBusy] = useState(false)
+  const choiceBusyRef = useRef(false)
   const [audienceResponse, setAudienceResponse] = useState('')
   const [audienceResponseRow, setAudienceResponseRow] = useState<DatabaseAudienceResponse | null>(null)
   const [audienceResponses, setAudienceResponses] = useState<PlayerAudienceResponse[]>([])
   const [audienceSubmitting, setAudienceSubmitting] = useState(false)
   const audienceSubmitBusyRef = useRef(false)
   const [audienceVoteBusyId, setAudienceVoteBusyId] = useState<string | null>(null)
+  const audienceVoteBusyIdRef = useRef<string | null>(null)
   const audienceShowGameIdRef = useRef<string | null>(null)
   const [coinRevealFinishedRound, setCoinRevealFinishedRound] = useState<number | null>(null)
   const handleCoinRevealAnimationComplete = useCallback((roundNumber: number) => setCoinRevealFinishedRound(roundNumber), [])
@@ -2967,13 +2973,29 @@ function ShowGame() {
     }
   }, [load])
 
+  const sharedAudiencePollingEnabled = Boolean(
+    showGame
+    && ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.game_type)
+    && showGame.status === 'open'
+    && audienceResponseRow?.id
+    && audienceQuestionFromSettings(showGame.settings).mode === 'favourite'
+    && audienceQuestionFromSettings(showGame.settings).shareResponses,
+  )
+
   useEffect(() => {
-    if (!showGame || !['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(showGame.game_type) || showGame.status !== 'open' || !audienceResponseRow) return
-    const config = audienceQuestionFromSettings(showGame.settings)
-    if (config.mode !== 'favourite' || !config.shareResponses) return
-    const timer = window.setInterval(() => { void load() }, 1500)
-    return () => window.clearInterval(timer)
-  }, [audienceResponseRow, load, showGame])
+    if (!sharedAudiencePollingEnabled) return
+    let active = true
+    let timer: number | null = null
+    const poll = async () => {
+      await load()
+      if (active) timer = window.setTimeout(() => { void poll() }, 1500)
+    }
+    void poll()
+    return () => {
+      active = false
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [load, sharedAudiencePollingEnabled, showGame?.id])
 
   useEffect(() => {
     if (showGame?.game_type !== 'steal-the-treasure' || showGame.status !== 'open') return
@@ -3008,23 +3030,26 @@ function ShowGame() {
   }, [showGame?.explode_at, showGame?.status])
 
   async function press() {
-    if (!showGame || hasPressed || pressing || showGame.status !== 'open') return
+    if (!showGame || hasPressed || pressBusyRef.current || showGame.status !== 'open') return
     const teamId = localStorage.getItem('simple-trivia-team-id')
     if (!teamId) return
+    pressBusyRef.current = true
     setPressing(true)
     setError(null)
     const { error: pressError } = await supabase.rpc('press_beat_the_bomb', { p_game_show_game_id: showGame.id, p_team_id: teamId })
     if (pressError) setError(pressError.message.includes('already pressed') ? 'Your press is already locked in.' : 'That press did not go through. Try again.')
     else setHasPressed(true)
+    pressBusyRef.current = false
     setPressing(false)
     void load()
   }
 
   async function chooseEliminationOption(choice: string) {
-    if (!showGame || !isEliminationShowGame(showGame.game_type) || choiceBusy || showGame.status !== 'open') return
+    if (!showGame || !isEliminationShowGame(showGame.game_type) || choiceBusyRef.current || showGame.status !== 'open') return
     const requestId = localStorage.getItem('simple-trivia-join-request-id')
     const requestToken = localStorage.getItem('simple-trivia-join-request-token')
     if (!requestId || !requestToken) return
+    choiceBusyRef.current = true
     setChoiceBusy(true)
     setError(null)
     const { error: choiceError } = await supabase.rpc('submit_elimination_show_game_choice', {
@@ -3035,6 +3060,7 @@ function ShowGame() {
     })
     if (choiceError) setError(choiceError.message.includes('CLOSED') ? 'Positions are already locked for this round.' : 'That choice did not go through. Try again.')
     else setOwnChoice(choice)
+    choiceBusyRef.current = false
     setChoiceBusy(false)
     void load()
   }
@@ -3063,10 +3089,11 @@ function ShowGame() {
   }
 
   async function toggleAudienceVote(response: PlayerAudienceResponse) {
-    if (!showGame || showGame.game_type !== 'audience-question' || audienceVoteBusyId || response.team_id === teamId) return
+    if (!showGame || showGame.game_type !== 'audience-question' || audienceVoteBusyIdRef.current || response.team_id === teamId) return
     const requestId = localStorage.getItem('simple-trivia-join-request-id')
     const requestToken = localStorage.getItem('simple-trivia-join-request-token')
     if (!requestId || !requestToken) return
+    audienceVoteBusyIdRef.current = response.response_id
     setAudienceVoteBusyId(response.response_id)
     setError(null)
     const { error: voteError } = await supabase.rpc('toggle_audience_question_response_vote', {
@@ -3076,6 +3103,7 @@ function ShowGame() {
       p_request_token: requestToken,
     })
     if (voteError) setError(voteError.message.includes('VOTING_CLOSED') ? 'Voting has closed.' : 'That like did not go through. Try again.')
+    audienceVoteBusyIdRef.current = null
     setAudienceVoteBusyId(null)
     void load()
   }
