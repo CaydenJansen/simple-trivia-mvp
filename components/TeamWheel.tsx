@@ -67,6 +67,7 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
     const animatedNames = namesKey.split('\u0000')
 
     let frame = 0
+    let settleTimeout: number | null = null
     let cancelled = false
     const updateWheel = (rotation: number) => {
       rotationRef.current = rotation
@@ -115,26 +116,38 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
         onSettled?.()
       } else {
         let started: number | null = null
+        let finished = false
+        const finish = () => {
+          if (finished || cancelled) return
+          finished = true
+          updateWheel(target)
+          setSelectedName(animatedNames[winnerIndex])
+          settledLandingKeyRef.current = landingKey
+          onSettled?.()
+        }
         const settle = (now: number) => {
           if (started === null) started = now
           const progress = Math.min(1, (now - started) / duration)
           const eased = 1 - ((1 - progress) ** 3)
           updateWheel(current + ((target - current) * eased))
           if (progress < 1) frame = requestAnimationFrame(settle)
-          else {
-            setSelectedName(animatedNames[winnerIndex])
-            settledLandingKeyRef.current = landingKey
-            if (!cancelled) onSettled?.()
-          }
+          else finish()
         }
         frame = requestAnimationFrame(settle)
+        // requestAnimationFrame can be dropped or heavily throttled around tab sleep.
+        // The final transform is deterministic, so this timer safely completes the reveal.
+        settleTimeout = window.setTimeout(finish, duration + 500)
       }
     } else {
       wheel.style.transition = 'none'
       updateWheel(rotationRef.current)
     }
 
-    return () => { cancelled = true; cancelAnimationFrame(frame) }
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(frame)
+      if (settleTimeout !== null) window.clearTimeout(settleTimeout)
+    }
   }, [landingKey, namesKey, onSettled, restingRotation, slice, spinning, winnerIndex])
 
   return (

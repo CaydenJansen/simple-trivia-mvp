@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_AUTO_BUILD_PREFERENCES,
   loadAutoBuildPreferences,
+  normalizeAutoBuildDifficultyRange,
   parseAutoBuildPreferences,
 } from './auto-build-preferences'
 
@@ -25,9 +26,16 @@ describe('Auto-Build preferences', () => {
     expect(parseAutoBuildPreferences({ questionCount: 500, roundCount: 2, difficulty: [3, 1] })).toMatchObject({
       questionCount: 100,
       roundCount: 2,
-      difficulty: [3, 3],
+      difficulty: [3, 4],
       topics: ['General Knowledge', 'Film & Television'],
     })
+  })
+
+  it('always restores at least two adjacent difficulty levels', () => {
+    expect(normalizeAutoBuildDifficultyRange(0, 0)).toEqual([0, 1])
+    expect(normalizeAutoBuildDifficultyRange(2, 2)).toEqual([2, 3])
+    expect(normalizeAutoBuildDifficultyRange(4, 4)).toEqual([3, 4])
+    expect(normalizeAutoBuildDifficultyRange(1, 3)).toEqual([1, 3])
   })
 
   it('falls back safely when stored JSON is invalid', () => {

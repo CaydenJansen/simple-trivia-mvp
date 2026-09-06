@@ -53,12 +53,18 @@ function boundedInteger(value: unknown, fallback: number, minimum: number, maxim
   return Number.isInteger(value) ? Math.max(minimum, Math.min(maximum, Number(value))) : fallback
 }
 
+export function normalizeAutoBuildDifficultyRange(minimum: unknown, maximum: unknown): [number, number] {
+  const safeMinimum = boundedInteger(minimum, 0, 0, 4)
+  const safeMaximum = boundedInteger(maximum, 4, 0, 4)
+  if (safeMaximum > safeMinimum) return [safeMinimum, safeMaximum]
+  return safeMinimum >= 4 ? [3, 4] : [safeMinimum, safeMinimum + 1]
+}
+
 export function parseAutoBuildPreferences(value: unknown): AutoBuildPreferences {
   const stored = record(value)
   const roundCount = boundedInteger(stored.roundCount, DEFAULT_AUTO_BUILD_PREFERENCES.roundCount, 1, 10)
   const rawDifficulty = Array.isArray(stored.difficulty) ? stored.difficulty : []
-  const difficultyMinimum = boundedInteger(rawDifficulty[0], 0, 0, 4)
-  const difficultyMaximum = boundedInteger(rawDifficulty[1], 4, difficultyMinimum, 4)
+  const [difficultyMinimum, difficultyMaximum] = normalizeAutoBuildDifficultyRange(rawDifficulty[0], rawDifficulty[1])
   const storedTopics = Array.isArray(stored.topics)
     ? stored.topics.filter((topic): topic is string => typeof topic === 'string' && topic.length > 0)
     : []

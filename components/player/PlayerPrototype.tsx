@@ -390,7 +390,7 @@ function usePlayerAutoRunClock() {
         setSettings((payload.new as { settings?: Json }).settings ?? null)
         setNow(Date.now())
       })
-      .subscribe()
+      .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
 
     return () => {
       active = false
@@ -443,7 +443,7 @@ function useLiveQuestionDefinition() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => {
         void loadQuestion((payload.new as { current_question_key?: string | null }).current_question_key ?? null)
       })
-      .subscribe()
+      .subscribe(status => { if (status === 'SUBSCRIBED') void loadQuestion() })
 
     return () => { active = false; void supabase.removeChannel(channel) }
   }, [])
@@ -499,7 +499,7 @@ function useLiveContentScreenDefinition() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => {
         void loadContentScreen((payload.new as { current_content_screen_key?: string | null }).current_content_screen_key ?? null)
       })
-      .subscribe()
+      .subscribe(status => { if (status === 'SUBSCRIBED') void loadContentScreen() })
 
     return () => { active = false; void supabase.removeChannel(channel) }
   }, [])
@@ -1063,7 +1063,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'teams', filter: `id=eq.${teamId}` }, () => { void loadSnapshot() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'submissions', filter: `team_id=eq.${teamId}` }, () => { void loadSnapshot() })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadSnapshot() })
-      .subscribe()
+      .subscribe(status => { if (status === 'SUBSCRIBED') void loadSnapshot() })
 
     return () => { active = false; void supabase.removeChannel(channel) }
   }, [])
@@ -1103,7 +1103,7 @@ function useLeaderboardVisibility() {
     const channel = supabase
       .channel(`player-leaderboard-visibility-${activeGameId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, () => { void load() })
-      .subscribe()
+      .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
     return () => { active = false; void supabase.removeChannel(channel) }
   }, [])
 
@@ -1128,7 +1128,7 @@ function useAnswerRevealMode() {
     const channel = supabase
       .channel(`player-answer-reveal-${activeGameId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, () => { void load() })
-      .subscribe()
+      .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
     return () => { active = false; void supabase.removeChannel(channel) }
   }, [])
 
@@ -1157,7 +1157,7 @@ function useLiveLeaderboard(enabled = true) {
     const channel = supabase
       .channel(`player-leaderboard-${gameId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${gameId}` }, () => { void load() })
-      .subscribe()
+      .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
     return () => { active = false; void supabase.removeChannel(channel) }
   }, [enabled])
 
@@ -1415,9 +1415,12 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
   const [code, setCode] = useState('')
   const [invalid, setInvalid] = useState(false)
   const [joining, setJoining] = useState(false)
+  const joiningRef = useRef(false)
   const handledQrCode = useRef(false)
 
   const handleJoin = useCallback(async (selectedCode = code) => {
+    if (joiningRef.current) return
+    joiningRef.current = true
     setInvalid(false)
     setJoining(true)
 
@@ -1431,12 +1434,14 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
     if (error) {
       console.error('Error finding game:', error)
       setInvalid(true)
+      joiningRef.current = false
       setJoining(false)
       return
     }
 
     if (!game) {
       setInvalid(true)
+      joiningRef.current = false
       setJoining(false)
       return
     }
@@ -1545,6 +1550,7 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   const [pinError, setPinError] = useState<string | null>(null)
   const [joinError, setJoinError] = useState<string | null>(null)
   const [joining, setJoining] = useState(false)
+  const joiningRef = useRef(false)
   const [gameTitle, setGameTitle] = useState('Trivia game')
   const [approvalRequired, setApprovalRequired] = useState(true)
   const [teamNamePlaceholder] = useState(() => {
@@ -1570,7 +1576,7 @@ function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
   }, [])
 
 async function handleJoin() {
-  if (!name.trim() || joining) return;
+  if (!name.trim() || joiningRef.current) return;
   setTaken(false);
   setPinError(null);
   setJoinError(null);
@@ -1580,11 +1586,13 @@ async function handleJoin() {
     return;
   }
 
+  joiningRef.current = true;
   setJoining(true);
 
   const gameId = localStorage.getItem("simple-trivia-game-id");
 
   if (!gameId) {
+    joiningRef.current = false;
     setJoining(false);
     go("join");
     return;
@@ -1612,6 +1620,7 @@ async function handleJoin() {
       setJoinError('We couldn’t join the game. Check your details and try again.')
     }
 
+    joiningRef.current = false;
     setJoining(false);
     return;
   }
@@ -1628,6 +1637,7 @@ async function handleJoin() {
       .eq('id', gameId)
       .maybeSingle()
     const nextScreen = game ? await resolveLivePlayerScreen(gameId, request.team_id, game as RemoteGameState) : null
+    joiningRef.current = false
     setJoining(false)
     go(nextScreen ?? 'waiting')
     return
@@ -1891,6 +1901,7 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
   const [denied, setDenied] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [withdrawing, setWithdrawing] = useState(false)
+  const withdrawingRef = useRef(false)
 
   useEffect(() => {
     const requestId = localStorage.getItem('simple-trivia-join-request-id')
@@ -1906,14 +1917,18 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
     }
 
     let active = true
+    let checkingApproval = false
 
     async function checkApproval() {
+      if (checkingApproval) return
+      checkingApproval = true
       const { data, error } = await supabase
         .rpc('get_team_join_request', {
           p_request_id: requestId!,
           p_request_token: requestToken!,
         })
         .maybeSingle()
+      checkingApproval = false
 
       if (!active) return
 
@@ -1966,7 +1981,8 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
   async function changeTeamName() {
     const requestId = localStorage.getItem('simple-trivia-join-request-id')
     const requestToken = localStorage.getItem('simple-trivia-join-request-token')
-    if (!requestId || !requestToken || withdrawing) return
+    if (!requestId || !requestToken || withdrawingRef.current) return
+    withdrawingRef.current = true
     setWithdrawing(true)
     const { error } = await supabase.rpc('withdraw_team_join_request', {
       p_request_id: requestId,
@@ -1974,6 +1990,7 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
     })
     if (error) {
       setStatusError('Could not go back right now. Please try again.')
+      withdrawingRef.current = false
       setWithdrawing(false)
       return
     }
@@ -2076,7 +2093,7 @@ function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
         },
         () => { void loadTeamCount() },
       )
-      .subscribe()
+      .subscribe(status => { if (status === 'SUBSCRIBED') void loadTeamCount() })
 
     return () => {
       active = false
@@ -2943,7 +2960,7 @@ function ShowGame() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_responses', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_balloons', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_treasure', filter: `game_id=eq.${gameId}` }, () => { void load() })
-      .subscribe()
+      .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
     return () => {
       if (balloonPulseTimerRef.current !== null) window.clearInterval(balloonPulseTimerRef.current)
       void supabase.removeChannel(channel)
@@ -3610,8 +3627,8 @@ function LiveTiebreaker() {
     const channel = supabase
       .channel(`player-tiebreaker-${gameId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void load() })
-      .subscribe()
-    return () => { void supabase.removeChannel(channel) }
+      .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
+    return () => { loadVersionRef.current += 1; void supabase.removeChannel(channel) }
   }, [load])
 
   async function submit(event: React.FormEvent) {
@@ -3910,6 +3927,7 @@ export function PlayerFlow() {
 
   useEffect(() => {
     let active = true
+    let restoreVersion = 0
     let retryTimer: ReturnType<typeof setTimeout> | null = null
 
     function clearStoredSession() {
@@ -3922,6 +3940,7 @@ export function PlayerFlow() {
     }
 
     async function restore() {
+      const version = ++restoreVersion
       if (retryTimer) {
         clearTimeout(retryTimer)
         retryTimer = null
@@ -3950,6 +3969,8 @@ export function PlayerFlow() {
         return
       }
 
+      setRestoringSession(true)
+
       if (!navigator.onLine) {
         if (active) setScreen('reconnecting')
         retry()
@@ -3966,7 +3987,7 @@ export function PlayerFlow() {
             p_request_token: joinRequestToken,
           })
           .maybeSingle()
-        if (!active) return
+        if (!active || version !== restoreVersion) return
         if (admissionError) {
           console.error('Could not restore player admission:', admissionError)
           setScreen('reconnecting')
@@ -3997,7 +4018,7 @@ export function PlayerFlow() {
           : Promise.resolve({ data: null, error: null }),
       ])
 
-      if (!active) return
+      if (!active || version !== restoreVersion) return
       if (gameError || teamError) {
         console.error('Could not restore player session:', gameError ?? teamError)
         setScreen('reconnecting')
@@ -4030,7 +4051,7 @@ export function PlayerFlow() {
       if (!trustedTeam) return
       localStorage.setItem('simple-trivia-team-name', trustedTeam.teamName)
       const nextScreen = await resolveLivePlayerScreen(gameId, trustedTeam.teamId, game as RemoteGameState)
-      if (!active) return
+      if (!active || version !== restoreVersion) return
       setScreen(nextScreen ?? 'game-ended')
       setRestoringSession(false)
     }
@@ -4054,6 +4075,7 @@ export function PlayerFlow() {
 
     return () => {
       active = false
+      restoreVersion += 1
       if (retryTimer) clearTimeout(retryTimer)
       window.removeEventListener('offline', handleOffline)
       window.removeEventListener('online', handleOnline)

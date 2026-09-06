@@ -481,6 +481,7 @@ function useTeamJoinRequests(gameCode: string) {
   const [requests, setRequests] = useState<TeamJoinRequest[]>([])
   const [error, setError] = useState<string | null>(null)
   const [decidingId, setDecidingId] = useState<string | null>(null)
+  const decidingRef = useRef(false)
 
   const loadRequests = useCallback(async (activeGameId: string) => {
     const { data, error: requestError } = await supabase
@@ -527,7 +528,7 @@ function useTeamJoinRequests(gameCode: string) {
           { event: '*', schema: 'public', table: 'team_join_requests', filter: `game_id=eq.${game.id}` },
           () => { void loadRequests(game.id) },
         )
-        .subscribe()
+        .subscribe(status => { if (status === 'SUBSCRIBED') void loadRequests(game.id) })
     }
 
     void setup()
@@ -538,7 +539,8 @@ function useTeamJoinRequests(gameCode: string) {
   }, [gameCode, loadRequests])
 
   async function decide(requestId: string, decision: 'approved' | 'denied') {
-    if (decidingId) return
+    if (decidingRef.current) return
+    decidingRef.current = true
     setDecidingId(requestId)
     setError(null)
 
@@ -554,6 +556,7 @@ function useTeamJoinRequests(gameCode: string) {
       setRequests(current => current.filter(request => request.id !== requestId))
     }
 
+    decidingRef.current = false
     setDecidingId(null)
   }
 
@@ -6440,8 +6443,8 @@ function AutoBuild({ go }: { go: Go }) {
       const ratio = Math.max(0, Math.min(1, (clientX - track.left) / track.width))
       const value = Math.round(ratio * (diffLabels.length - 1))
       setDiff(current => handle === 'minimum'
-        ? [Math.min(value, current[1]), current[1]]
-        : [current[0], Math.max(value, current[0])])
+        ? [Math.max(0, Math.min(value, current[1] - 1)), current[1]]
+        : [current[0], Math.min(diffLabels.length - 1, Math.max(value, current[0] + 1))])
     }
     const move = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId === pointerId) updateFromPointer(moveEvent.clientX)
@@ -6914,7 +6917,7 @@ function AutoBuild({ go }: { go: Go }) {
               <div style={{ borderTop: `1px solid ${C.line}` }} className="space-y-6 px-5 py-5">
                 <div>
                   <label style={{ color: C.ink }} className="block text-sm font-bold">Difficulty range</label>
-                  <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">Choose the easiest and hardest questions Auto-Build may use.</p>
+                  <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">Choose at least two difficulty levels for Auto-Build to use.</p>
                   <div className="relative mb-5 mt-5" style={{ paddingBottom: 4 }}>
                     <div style={{ background: C.line, height: 6 }} className="relative w-full rounded-full">
                       <div style={{
@@ -6928,25 +6931,25 @@ function AutoBuild({ go }: { go: Go }) {
                     </div>
                     <button type="button" role="slider"
                       aria-label="Minimum difficulty"
-                      aria-valuemin={0} aria-valuemax={diffLabels.length - 1} aria-valuenow={diff[0]} aria-valuetext={diffLabels[diff[0]]}
+                      aria-valuemin={0} aria-valuemax={diff[1] - 1} aria-valuenow={diff[0]} aria-valuetext={diffLabels[diff[0]]}
                       onPointerDown={e => startDifficultyDrag('minimum', e)}
                       onKeyDown={e => {
                         if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
                         e.preventDefault()
-                        const value = e.key === 'Home' ? 0 : e.key === 'End' ? diff[1] : diff[0] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
-                        setDiff(current => [Math.max(0, Math.min(value, current[1])), current[1]])
+                        const value = e.key === 'Home' ? 0 : e.key === 'End' ? diff[1] - 1 : diff[0] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
+                        setDiff(current => [Math.max(0, Math.min(value, current[1] - 1)), current[1]])
                       }}
                       className="dual-range-thumb absolute p-0"
                       style={{ left: `calc(${(diff[0] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: diff[0] === diff[1] ? 3 : 2 }} />
                     <button type="button" role="slider"
                       aria-label="Maximum difficulty"
-                      aria-valuemin={0} aria-valuemax={diffLabels.length - 1} aria-valuenow={diff[1]} aria-valuetext={diffLabels[diff[1]]}
+                      aria-valuemin={diff[0] + 1} aria-valuemax={diffLabels.length - 1} aria-valuenow={diff[1]} aria-valuetext={diffLabels[diff[1]]}
                       onPointerDown={e => startDifficultyDrag('maximum', e)}
                       onKeyDown={e => {
                         if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
                         e.preventDefault()
-                        const value = e.key === 'Home' ? diff[0] : e.key === 'End' ? diffLabels.length - 1 : diff[1] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
-                        setDiff(current => [current[0], Math.min(diffLabels.length - 1, Math.max(value, current[0]))])
+                        const value = e.key === 'Home' ? diff[0] + 1 : e.key === 'End' ? diffLabels.length - 1 : diff[1] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
+                        setDiff(current => [current[0], Math.min(diffLabels.length - 1, Math.max(value, current[0] + 1))])
                       }}
                       className="dual-range-thumb absolute p-0"
                       style={{ left: `calc(${(diff[1] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: 2 }} />
@@ -7306,6 +7309,7 @@ function HostSetup({ go }: { go: Go }) {
   const [quiz, setQuiz] = useState<QuizSummary | null>(null)
   const [loadingQuiz, setLoadingQuiz] = useState(true)
   const [openingLobby, setOpeningLobby] = useState(false)
+  const openingLobbyRef = useRef(false)
   const [setupError, setSetupError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -7371,7 +7375,8 @@ function HostSetup({ go }: { go: Go }) {
   }, [])
 
   async function handleOpenLobby() {
-    if (!quiz || openingLobby) return
+    if (!quiz || openingLobbyRef.current) return
+    openingLobbyRef.current = true
     setOpeningLobby(true)
     setSetupError(null)
 
@@ -7416,6 +7421,7 @@ function HostSetup({ go }: { go: Go }) {
             : 'Could not open the lobby.',
       )
     } finally {
+      openingLobbyRef.current = false
       setOpeningLobby(false)
     }
   }
@@ -7693,12 +7699,15 @@ function Lobby({ go }: { go: Go }) {
   const [teams, setTeams] = useState<LobbyTeam[]>([])
   const [lobbyError, setLobbyError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
+  const startingRef = useRef(false)
   const [startError, setStartError] = useState<string | null>(null)
   const [lobbyGameId, setLobbyGameId] = useState<string | null>(null)
   const [lobbySettings, setLobbySettings] = useState<Record<string, Json>>({})
   const [approvalRequired, setApprovalRequired] = useState(true)
   const [approvalBusy, setApprovalBusy] = useState(false)
+  const approvalBusyRef = useRef(false)
   const [removingTeamId, setRemovingTeamId] = useState<string | null>(null)
+  const removingTeamRef = useRef(false)
   const [presenceNow, setPresenceNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -7709,7 +7718,8 @@ function Lobby({ go }: { go: Go }) {
   const activeLobbyTeams = teams.filter(team => !isTeamDormant(team.last_seen_at, presenceNow))
 
   async function handleRemoveTeam(team: LobbyTeam) {
-    if (removingTeamId || !window.confirm(`Remove ${team.name} from this game?`)) return
+    if (removingTeamRef.current || !window.confirm(`Remove ${team.name} from this game?`)) return
+    removingTeamRef.current = true
     setRemovingTeamId(team.id)
     setLobbyError(null)
     const { error } = await supabase.rpc('remove_team_from_game', { p_team_id: team.id })
@@ -7719,11 +7729,13 @@ function Lobby({ go }: { go: Go }) {
     } else {
       setTeams(current => current.filter(item => item.id !== team.id))
     }
+    removingTeamRef.current = false
     setRemovingTeamId(null)
   }
 
   async function handleApprovalRequiredChange(required: boolean) {
-    if (!lobbyGameId || approvalBusy) return
+    if (!lobbyGameId || approvalBusyRef.current) return
+    approvalBusyRef.current = true
     setApprovalBusy(true)
     setLobbyError(null)
     const settings: Record<string, Json> = { ...lobbySettings, team_approval_required: required }
@@ -7732,6 +7744,7 @@ function Lobby({ go }: { go: Go }) {
     if (updateError) {
       console.error('Could not update team approval setting:', updateError)
       setLobbyError('Could not update team approval. Please try again.')
+      approvalBusyRef.current = false
       setApprovalBusy(false)
       return
     }
@@ -7770,12 +7783,14 @@ function Lobby({ go }: { go: Go }) {
       }
     }
 
+    approvalBusyRef.current = false
     setApprovalBusy(false)
   }
 
   async function handleStartQuiz() {
-    if (starting) return
+    if (startingRef.current) return
 
+    startingRef.current = true
     setStarting(true)
     setStartError(null)
 
@@ -7800,6 +7815,7 @@ function Lobby({ go }: { go: Go }) {
     } catch (error) {
       console.error('Could not start quiz:', error)
       setStartError('Could not start the quiz. Please try again.')
+      startingRef.current = false
       setStarting(false)
     }
   }
@@ -7832,20 +7848,25 @@ function Lobby({ go }: { go: Go }) {
       setLobbySettings(settings)
       setApprovalRequired(teamApprovalRequiredFromSettings(settings))
 
-      const { data, error } = await supabase
-        .from("teams")
-        .select("id, name, last_seen_at")
-        .eq("game_id", game.id)
-        .order("created_at", { ascending: true })
+      async function loadLobbyTeams(activeGameId: string) {
+        const { data, error } = await supabase
+          .from("teams")
+          .select("id, name, last_seen_at")
+          .eq("game_id", activeGameId)
+          .order("created_at", { ascending: true })
 
-      if (!active) return
+        if (!active) return
 
-      if (error) {
-        console.error("Could not load teams:", error)
-        setLobbyError("Could not load teams.")
-      } else {
-        setTeams(data ?? [])
+        if (error) {
+          console.error("Could not load teams:", error)
+          setLobbyError("Could not load teams.")
+        } else {
+          setTeams(data ?? [])
+        }
       }
+
+      await loadLobbyTeams(game.id)
+      if (!active) return
 
       channel = supabase
         .channel(`lobby-teams-${game.id}`)
@@ -7869,7 +7890,7 @@ function Lobby({ go }: { go: Go }) {
               : [...current, changedTeam])
           }
         )
-        .subscribe()
+        .subscribe(status => { if (status === 'SUBSCRIBED') void loadLobbyTeams(game.id) })
     }
 
     void setupLobby()
@@ -8263,6 +8284,8 @@ function LiveQuestion({ go }: { go: Go }) {
   const audienceResolveBusyRef = useRef(false)
   const [liveError, setLiveError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
+  const actionBusyRef = useRef(false)
+  const liveLoadVersionRef = useRef(0)
   const [removingLiveTeamId, setRemovingLiveTeamId] = useState<string | null>(null)
   const [presenceNow, setPresenceNow] = useState(() => Date.now())
 
@@ -8303,13 +8326,14 @@ function LiveQuestion({ go }: { go: Go }) {
     let channel: ReturnType<typeof supabase.channel> | null = null
 
     async function loadLiveData() {
+      const loadVersion = ++liveLoadVersionRef.current
       const { data: game, error: gameError } = await supabase
         .from('games')
         .select('id, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key, current_screen, settings')
         .eq('code', getHostGameCode())
         .maybeSingle()
 
-      if (!active) return
+      if (!active || loadVersion !== liveLoadVersionRef.current) return
 
       if (gameError || !game) {
         console.error('Could not load live game:', gameError)
@@ -8370,7 +8394,7 @@ function LiveQuestion({ go }: { go: Go }) {
           .order('created_at', { ascending: true }),
       ])
 
-      if (!active) return
+      if (!active || loadVersion !== liveLoadVersionRef.current) return
 
       if (questionResult.error || contentScreenResult.error || showGameResult.error || teamResult.error) {
         console.error('Could not load live question data:', questionResult.error ?? contentScreenResult.error ?? showGameResult.error ?? teamResult.error)
@@ -8412,6 +8436,7 @@ function LiveQuestion({ go }: { go: Go }) {
             supabase.from('game_show_game_responses').select('*').eq('game_show_game_id', currentShowGame.id).order('submitted_at', { ascending: true }),
             supabase.from('game_show_game_response_votes').select('response_id').eq('game_show_game_id', currentShowGame.id),
           ])
+          if (!active || loadVersion !== liveLoadVersionRef.current) return
           if (responseError) console.error('Could not load audience responses:', responseError)
           else {
             setAudienceResponses(responseRows ?? [])
@@ -8427,6 +8452,7 @@ function LiveQuestion({ go }: { go: Go }) {
         } else if (currentShowGame.game_type === 'big-balloon') {
           const { data: balloonRows, error: balloonError } = await supabase
             .from('game_show_game_balloons').select('team_id, size_units, status').eq('game_show_game_id', currentShowGame.id)
+          if (!active || loadVersion !== liveLoadVersionRef.current) return
           if (balloonError) console.error('Could not load balloon progress:', balloonError)
           else setShowGameBalloons((balloonRows ?? []) as BigBalloonEntry[])
           setShowGamePresses([])
@@ -8435,6 +8461,7 @@ function LiveQuestion({ go }: { go: Go }) {
           setShowGameTreasure([])
         } else if (currentShowGame.game_type === 'steal-the-treasure') {
           const { data: treasureRows, error: treasureError } = await supabase.from('game_show_game_treasure').select('*').eq('game_show_game_id', currentShowGame.id)
+          if (!active || loadVersion !== liveLoadVersionRef.current) return
           if (treasureError) console.error('Could not load treasure progress:', treasureError)
           else setShowGameTreasure(treasureRows ?? [])
           setShowGamePresses([])
@@ -8447,6 +8474,7 @@ function LiveQuestion({ go }: { go: Go }) {
             .select('team_id, choice')
             .eq('game_show_game_id', currentShowGame.id)
             .eq('round_number', eliminationShowGameState(currentShowGame.settings).roundNumber)
+          if (!active || loadVersion !== liveLoadVersionRef.current) return
           if (choiceError) console.error('Could not load show-game choices:', choiceError)
           else setShowGameChoices(Object.fromEntries((choiceRows ?? []).map(row => [row.team_id, row.choice])))
           setShowGamePresses([])
@@ -8460,6 +8488,7 @@ function LiveQuestion({ go }: { go: Go }) {
             .select('team_id, pressed_at')
             .eq('game_show_game_id', currentShowGame.id)
             .order('pressed_at', { ascending: true })
+          if (!active || loadVersion !== liveLoadVersionRef.current) return
           if (pressError) console.error('Could not load show-game presses:', pressError)
           else setShowGamePresses(pressRows ?? [])
           setAudienceResponses([])
@@ -8485,7 +8514,7 @@ function LiveQuestion({ go }: { go: Go }) {
             .order('created_at', { ascending: true }),
         ])
 
-        if (!active) return
+        if (!active || loadVersion !== liveLoadVersionRef.current) return
 
         if (submissionResult.error || bonusSubmissionResult.error) {
           console.error('Could not load team answers:', submissionResult.error ?? bonusSubmissionResult.error)
@@ -8560,7 +8589,7 @@ function LiveQuestion({ go }: { go: Go }) {
             { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${game.id}` },
             () => { void loadLiveData() },
           )
-          .subscribe()
+          .subscribe(status => { if (status === 'SUBSCRIBED') void loadLiveData() })
       }
     }
 
@@ -8581,21 +8610,39 @@ function LiveQuestion({ go }: { go: Go }) {
     if (!activeShowGameId || activeShowGameStatus !== 'open' || !activeShowGameExplodeAt) return
     const interval = window.setInterval(() => setShowGameNow(Date.now()), 100)
     const delay = Math.max(0, new Date(activeShowGameExplodeAt).getTime() - Date.now())
-    let balloonRetry: number | null = null
-    const resolveCurrentShowGame = () => {
+    let cancelled = false
+    let resolveInFlight = false
+    let resolveErrorLogged = false
+    let resolveRetry: number | null = null
+    const resolveCurrentShowGame = async () => {
+      if (resolveInFlight) return
+      resolveInFlight = true
       const rpc = isEliminationShowGame(showGame?.game_type)
         ? activeEliminationRoundPhase === 'reveal' ? 'advance_elimination_show_game' : 'resolve_elimination_show_game'
         : showGame?.game_type === 'spin-the-wheel' ? 'resolve_spin_the_wheel'
           : showGame?.game_type === 'big-balloon' ? 'resolve_big_balloon'
             : showGame?.game_type === 'steal-the-treasure' ? 'resolve_steal_the_treasure' : 'resolve_beat_the_bomb'
-      void supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId })
-        .then(({ error }) => { if (error) console.error('Could not resolve show game:', error) })
+      const { data, error } = await supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId })
+      resolveInFlight = false
+      if (cancelled) return
+      if (error) {
+        if (!resolveErrorLogged) console.error('Could not resolve show game; retrying:', error)
+        resolveErrorLogged = true
+        return
+      }
+      resolveErrorLogged = false
+      if (data) setShowGame(data as LiveShowGameDefinition)
     }
     const timeout = window.setTimeout(() => {
-      resolveCurrentShowGame()
-      if (showGame?.game_type === 'big-balloon') balloonRetry = window.setInterval(resolveCurrentShowGame, 1000)
+      void resolveCurrentShowGame()
+      resolveRetry = window.setInterval(() => { void resolveCurrentShowGame() }, 1000)
     }, delay + 50)
-    return () => { window.clearInterval(interval); window.clearTimeout(timeout); if (balloonRetry !== null) window.clearInterval(balloonRetry) }
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+      window.clearTimeout(timeout)
+      if (resolveRetry !== null) window.clearInterval(resolveRetry)
+    }
   }, [activeEliminationRoundPhase, activeShowGameExplodeAt, activeShowGameId, activeShowGameStatus, showGame?.game_type])
 
   useEffect(() => {
@@ -8629,7 +8676,8 @@ function LiveQuestion({ go }: { go: Go }) {
   }
 
   async function startPreparedShowGame() {
-    if (!showGame || showGame.status !== 'ready' || actionBusy) return
+    if (!showGame || showGame.status !== 'ready' || actionBusyRef.current) return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
     try {
@@ -8656,12 +8704,13 @@ function LiveQuestion({ go }: { go: Go }) {
       console.error('Could not start show game:', error)
       setLiveError('Could not start the game. Please try again.')
     } finally {
+      actionBusyRef.current = false
       setActionBusy(false)
     }
   }
 
   async function resolveAudienceQuestion() {
-    if (!showGame || (showGame.game_type !== 'audience-question' && !isTiebreakerLibraryShowGame(showGame.game_type)) || showGame.status !== 'open' || actionBusy || audienceResolveBusyRef.current) return
+    if (!showGame || (showGame.game_type !== 'audience-question' && !isTiebreakerLibraryShowGame(showGame.game_type)) || showGame.status !== 'open' || actionBusyRef.current || audienceResolveBusyRef.current) return
     const config = audienceQuestionFromSettings(showGame.settings)
     if (audienceResponses.length === 0) {
       setLiveError('Wait for at least one response before choosing a winner.')
@@ -8672,6 +8721,7 @@ function LiveQuestion({ go }: { go: Go }) {
       return
     }
     audienceResolveBusyRef.current = true
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
     const { data, error } = await supabase.rpc('resolve_audience_question', {
@@ -8690,11 +8740,13 @@ function LiveQuestion({ go }: { go: Go }) {
       setLiveError(null)
     }
     audienceResolveBusyRef.current = false
+    actionBusyRef.current = false
     setActionBusy(false)
   }
 
   async function handleOpenQuestion() {
-    if (!question || actionBusy) return
+    if (!question || actionBusyRef.current) return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
 
@@ -8740,12 +8792,14 @@ function LiveQuestion({ go }: { go: Go }) {
       console.error('Could not open question:', error)
       setLiveError('Could not open the question. Please try again.')
     } finally {
+      actionBusyRef.current = false
       setActionBusy(false)
     }
   }
 
   async function handleCloseAnswers() {
-    if (!liveGameId || actionBusy) return
+    if (!liveGameId || actionBusyRef.current) return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
 
@@ -8761,11 +8815,13 @@ function LiveQuestion({ go }: { go: Go }) {
       setPhase('closed')
     }
 
+    actionBusyRef.current = false
     setActionBusy(false)
   }
 
   async function handleShowBonus() {
-    if (!liveGameId || !question || !runtimeBonusFromJson(question.bonus) || actionBusy || phase !== 'closed' || questionStage !== 'core') return
+    if (!liveGameId || !question || !runtimeBonusFromJson(question.bonus) || actionBusyRef.current || phase !== 'closed' || questionStage !== 'core') return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
 
@@ -8783,11 +8839,13 @@ function LiveQuestion({ go }: { go: Go }) {
       setAnswerEditingAllowed(submittedAnswersEditableFromSettings(liveGameSettingsRef.current))
     }
 
+    actionBusyRef.current = false
     setActionBusy(false)
   }
 
   async function handleReopenAnswers() {
-    if (!liveGameId || actionBusy || phase !== 'closed') return
+    if (!liveGameId || actionBusyRef.current || phase !== 'closed') return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
 
@@ -8804,11 +8862,13 @@ function LiveQuestion({ go }: { go: Go }) {
       setAnswerEditingAllowed(true)
     }
 
+    actionBusyRef.current = false
     setActionBusy(false)
   }
 
   async function handleAnswerEditingChange(allowed: boolean) {
-    if (!liveGameId || actionBusy || phase !== 'open') return
+    if (!liveGameId || actionBusyRef.current || phase !== 'open') return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
 
@@ -8824,6 +8884,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setAnswerEditingAllowed(allowed)
     }
 
+    actionBusyRef.current = false
     setActionBusy(false)
   }
 
@@ -8954,7 +9015,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }
 
   async function handleRevealAnswer() {
-    if (!liveGameId || !question || actionBusy || reviewCount > 0) return
+    if (!liveGameId || !question || actionBusyRef.current || reviewCount > 0) return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
 
@@ -8965,12 +9027,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       console.error('Could not reveal answer:', error)
       setLiveError('Could not reveal and score the answer. Please try again.')
     } finally {
+      actionBusyRef.current = false
       setActionBusy(false)
     }
   }
 
   async function handleAutoRunReveal() {
-    if (!liveGameId || !question || actionBusy) return
+    if (!liveGameId || !question || actionBusyRef.current) return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
     try {
@@ -8981,12 +9045,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       setLiveError('Auto-Run paused because this answer could not be scored safely.')
       setAutoRunPaused(true)
     } finally {
+      actionBusyRef.current = false
       setActionBusy(false)
     }
   }
 
   async function handleScoreAndContinue() {
-    if (!liveGameId || !question || actionBusy || reviewCount > 0) return
+    if (!liveGameId || !question || actionBusyRef.current || reviewCount > 0) return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
 
@@ -9059,12 +9125,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       console.error('Could not score and advance:', error)
       setLiveError('Could not score and continue. Please try again.')
     } finally {
+      actionBusyRef.current = false
       setActionBusy(false)
     }
   }
 
   async function handleAdvance() {
-    if (!question || actionBusy) return
+    if (!question || actionBusyRef.current) return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
 
@@ -9146,12 +9214,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       console.error('Could not advance the game:', error)
       setLiveError('Could not advance the game. Please try again.')
     } finally {
+      actionBusyRef.current = false
       setActionBusy(false)
     }
   }
 
   async function handleAdvanceContentScreen() {
-    if (!contentScreen || actionBusy) return
+    if (!contentScreen || actionBusyRef.current) return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
 
@@ -9250,12 +9320,14 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       console.error('Could not advance the content screen:', error)
       setLiveError('Could not advance the game. Please try again.')
     } finally {
+      actionBusyRef.current = false
       setActionBusy(false)
     }
   }
 
   async function handleAdvanceShowGame() {
-    if (!showGame || actionBusy || showGame.status !== 'exploded') return
+    if (!showGame || actionBusyRef.current || showGame.status !== 'exploded') return
+    actionBusyRef.current = true
     setActionBusy(true)
     setLiveError(null)
     try {
@@ -9335,6 +9407,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       console.error('Could not advance the show game:', error)
       setLiveError('Could not advance the game. Please try again.')
     } finally {
+      actionBusyRef.current = false
       setActionBusy(false)
     }
   }
@@ -10835,20 +10908,23 @@ function EndOfRound({ go }: { go: Go }) {
   const [roundBonusSubmissions, setRoundBonusSubmissions] = useState<LiveBonusSubmission[]>([])
   const [reviewAllAnswers, setReviewAllAnswers] = useState(false)
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
+    let loadVersion = 0
     let channel: ReturnType<typeof supabase.channel> | null = null
 
     async function loadRoundSummary() {
+      const version = ++loadVersion
       const { data: game, error: gameError } = await supabase
         .from('games')
         .select('id, title, current_question_key, current_screen, settings, round_scores_finalized')
         .eq('code', getHostGameCode())
         .maybeSingle()
 
-      if (!active) return
+      if (!active || version !== loadVersion) return
       if (gameError || !game) {
         setError('Could not load the round summary.')
         return
@@ -10883,7 +10959,7 @@ function EndOfRound({ go }: { go: Go }) {
           .order('score', { ascending: false }),
       ])
 
-      if (!active) return
+      if (!active || version !== loadVersion) return
 
       const questions = (questionRows ?? []) as LiveQuestionDefinition[]
       const current = questions.find(item => item.question_key === game.current_question_key) ?? null
@@ -10900,7 +10976,7 @@ function EndOfRound({ go }: { go: Go }) {
           supabase.from('submissions').select('id, team_id, question_key, answer_text, is_correct, points_awarded, grading_json').eq('game_id', game.id).in('question_key', roundKeys),
           supabase.from('bonus_submissions').select('id, team_id, question_key, answer_text, is_correct, points_awarded, grading_json').eq('game_id', game.id).in('question_key', roundKeys),
         ])
-        if (active) {
+        if (active && version === loadVersion) {
           setRoundSubmissions((submissionResult.data ?? []) as LiveSubmission[])
           setRoundBonusSubmissions((bonusSubmissionResult.data ?? []) as LiveBonusSubmission[])
         }
@@ -10915,7 +10991,7 @@ function EndOfRound({ go }: { go: Go }) {
             { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${game.id}` },
             () => { void loadRoundSummary() },
           )
-          .subscribe()
+          .subscribe(status => { if (status === 'SUBSCRIBED') void loadRoundSummary() })
       }
     }
 
@@ -10944,7 +11020,8 @@ function EndOfRound({ go }: { go: Go }) {
   }, [currentQuestion, gameId])
 
   async function toggleIntermission() {
-    if (busy) return
+    if (busyRef.current) return
+    busyRef.current = true
     setBusy(true)
     setError(null)
     try {
@@ -10955,12 +11032,14 @@ function EndOfRound({ go }: { go: Go }) {
       console.error('Could not change intermission:', err)
       setError('Could not change the player intermission screen.')
     } finally {
+      busyRef.current = false
       setBusy(false)
     }
   }
 
   async function startNextRound() {
-    if (!nextQuestion || busy) return
+    if (!nextQuestion || busyRef.current) return
+    busyRef.current = true
     setBusy(true)
     setError(null)
     try {
@@ -10978,12 +11057,14 @@ function EndOfRound({ go }: { go: Go }) {
     } catch (err) {
       console.error('Could not start next round:', err)
       setError('Could not start the next round.')
+      busyRef.current = false
       setBusy(false)
     }
   }
 
   async function advanceDelayedReveal() {
-    if (!currentQuestion || busy) return
+    if (!currentQuestion || busyRef.current) return
+    busyRef.current = true
     setBusy(true)
     setError(null)
 
@@ -11022,6 +11103,7 @@ function EndOfRound({ go }: { go: Go }) {
       console.error('Could not advance round answers:', err)
       setError('Could not show the next answer.')
     } finally {
+      busyRef.current = false
       setBusy(false)
     }
   }
@@ -11049,7 +11131,8 @@ function EndOfRound({ go }: { go: Go }) {
   }
 
   async function finalizeRound(markPendingIncorrect = false) {
-    if (!gameId || !currentQuestion || busy) return
+    if (!gameId || !currentQuestion || busyRef.current) return
+    busyRef.current = true
     setBusy(true)
     setError(null)
     try {
@@ -11085,12 +11168,14 @@ function EndOfRound({ go }: { go: Go }) {
       console.error('Could not finalize Auto-Run round:', finalizeError)
       setError(finalizeError instanceof Error ? finalizeError.message : 'Could not finalize this round.')
     } finally {
+      busyRef.current = false
       setBusy(false)
     }
   }
 
   async function viewFinalResults() {
-    if (!gameId || busy || (autoRunMode === 'round' && !roundFinalized)) return
+    if (!gameId || busyRef.current || (autoRunMode === 'round' && !roundFinalized)) return
+    busyRef.current = true
     setBusy(true)
     setError(null)
     try {
@@ -11099,6 +11184,7 @@ function EndOfRound({ go }: { go: Go }) {
     } catch (finalizeError) {
       console.error('Could not finish game:', finalizeError)
       setError('Could not finish the game.')
+      busyRef.current = false
       setBusy(false)
     }
   }
@@ -11541,14 +11627,18 @@ function FinalResults({ go }: { go: Go }) {
   const [tieAudiencePrompt, setTieAudiencePrompt] = useState('')
   const [tieAudienceCorrectNumber, setTieAudienceCorrectNumber] = useState('')
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const finalLoadVersionRef = useRef(0)
   const [error, setError] = useState<string | null>(null)
 
   const loadFinal = useCallback(async () => {
+    const version = ++finalLoadVersionRef.current
     const { data: gameRow, error: gameError } = await supabase
       .from('games')
       .select('id, title, status, current_screen, current_tiebreaker_attempt_id, settings')
       .eq('code', getHostGameCode())
       .maybeSingle()
+    if (version !== finalLoadVersionRef.current) return
     if (gameError || !gameRow) {
       setError('Could not load the final game state.')
       return
@@ -11561,6 +11651,7 @@ function FinalResults({ go }: { go: Go }) {
       supabase.from('game_tiebreakers').select('*').eq('game_id', gameRow.id).order('position'),
       supabase.from('game_tiebreaker_submissions').select('*').eq('game_id', gameRow.id).order('created_at'),
     ])
+    if (version !== finalLoadVersionRef.current) return
     const loadError = teamResult.error || resolutionResult.error || attemptResult.error || preparedResult.error || submissionResult.error
     if (loadError) {
       console.error('Could not load tiebreaker state:', loadError)
@@ -11588,8 +11679,8 @@ function FinalResults({ go }: { go: Go }) {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadFinal() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${gameId}` }, () => { void loadFinal() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_tiebreaker_submissions', filter: `game_id=eq.${gameId}` }, () => { void loadFinal() })
-      .subscribe()
-    return () => { void supabase.removeChannel(channel) }
+      .subscribe(status => { if (status === 'SUBSCRIBED') void loadFinal() })
+    return () => { finalLoadVersionRef.current += 1; void supabase.removeChannel(channel) }
   }, [loadFinal])
 
   const leaderboardVisibility = leaderboardVisibilityFromSettings(game?.settings)
@@ -11623,7 +11714,8 @@ function FinalResults({ go }: { go: Go }) {
   )
 
   async function runAction(action: () => PromiseLike<unknown>, message: string) {
-    if (busy) return
+    if (busyRef.current) return
+    busyRef.current = true
     setBusy(true)
     setError(null)
     try {
@@ -11635,6 +11727,7 @@ function FinalResults({ go }: { go: Go }) {
       console.error(message, actionError)
       setError(message)
     } finally {
+      busyRef.current = false
       setBusy(false)
     }
   }
