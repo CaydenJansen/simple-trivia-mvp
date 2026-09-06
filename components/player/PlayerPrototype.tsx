@@ -55,6 +55,12 @@ import { audienceQuestionFromSettings, audienceQuestionPlayerInstructions, audie
 import { formatNumericResponse, formatNumericResponseInput, parseNumericResponseInput } from "@/lib/trivia/numeric-response";
 import { TREASURE_WARMUP_MS, treasureAccruedMs } from "@/lib/trivia/treasure";
 
+function readableErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (error && typeof error === 'object' && 'message' in error) return String(error.message)
+  return ''
+}
+
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type PlayerScreen =
   | 'join' | 'team-setup' | 'approval-pending' | 'waiting' | 'round-start'
@@ -598,49 +604,40 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
     submitBusyRef.current = true
     setSubmitting(true)
     setSubmitError(null)
+    try {
+      const { data: game, error: gameError } = await supabase
+        .from('games')
+        .select('current_screen, answer_phase, current_question_key')
+        .eq('id', gameId)
+        .maybeSingle()
+      if (gameError || !game) throw gameError ?? new Error('Game not found')
+      if (game.current_screen !== expectedScreen || game.answer_phase !== 'open' || game.current_question_key !== expectedQuestionKey) {
+        go('no-answer')
+        return
+      }
 
-    const { data: game, error: gameError } = await supabase
-      .from('games')
-      .select('current_screen, answer_phase, current_question_key')
-      .eq('id', gameId)
-      .maybeSingle()
-
-    if (gameError || !game) {
-      setSubmitError('Could not submit your answer. Please try again.')
-      submitBusyRef.current = false
-      setSubmitting(false)
-      return
-    }
-
-    if (game.current_screen !== expectedScreen || game.answer_phase !== 'open' || game.current_question_key !== expectedQuestionKey) {
-      submitBusyRef.current = false
-      setSubmitting(false)
-      go('no-answer')
-      return
-    }
-
-    const answerText = Array.isArray(value) ? JSON.stringify(value.map(item => item.trim())) : value.trim()
-    const { error } = await supabase.rpc('submit_player_answer', {
-      p_game_id: gameId,
-      p_team_id: teamId,
-      p_question_key: expectedQuestionKey,
-      p_answer_text: answerText,
-    })
-
-    if (error) {
+      const answerText = Array.isArray(value) ? JSON.stringify(value.map(item => item.trim())) : value.trim()
+      const { error } = await supabase.rpc('submit_player_answer', {
+        p_game_id: gameId,
+        p_team_id: teamId,
+        p_question_key: expectedQuestionKey,
+        p_answer_text: answerText,
+      })
+      if (error) throw error
+      localStorage.setItem('simple-trivia-last-answer', answerText)
+      go('submitted')
+    } catch (error) {
       console.error('Could not submit answer:', error)
-      setSubmitError(error.message.includes('already locked')
+      const message = readableErrorMessage(error)
+      setSubmitError(message.includes('already locked')
         ? 'Your answer is locked in.'
-        : error.message.includes('QUESTION_CHANGED')
+        : message.includes('QUESTION_CHANGED')
           ? 'That question has closed.'
           : 'Could not submit your answer. Please try again.')
+    } finally {
       submitBusyRef.current = false
       setSubmitting(false)
-      return
     }
-
-    localStorage.setItem('simple-trivia-last-answer', answerText)
-    go('submitted')
   }
 
   return { submit, submitting, submitError }
@@ -660,41 +657,39 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey
     submitBusyRef.current = true
     setSubmitting(true)
     setSubmitError(null)
+    try {
+      const { data: game, error: gameError } = await supabase
+        .from('games')
+        .select('answer_phase, question_stage, current_question_key')
+        .eq('id', gameId)
+        .maybeSingle()
+      if (gameError) throw gameError
+      if (!game || game.answer_phase !== 'open' || game.question_stage !== 'bonus' || game.current_question_key !== expectedQuestionKey) {
+        setSubmitError('Bonus answers have closed.')
+        return
+      }
 
-    const { data: game, error: gameError } = await supabase
-      .from('games')
-      .select('answer_phase, question_stage, current_question_key')
-      .eq('id', gameId)
-      .maybeSingle()
-
-    if (gameError || !game || game.answer_phase !== 'open' || game.question_stage !== 'bonus' || game.current_question_key !== expectedQuestionKey) {
-      setSubmitError('Bonus answers have closed.')
-      submitBusyRef.current = false
-      setSubmitting(false)
-      return
-    }
-
-    const answerText = value.trim()
-    const { error } = await supabase.rpc('submit_player_bonus_answer', {
-      p_game_id: gameId,
-      p_team_id: teamId,
-      p_question_key: expectedQuestionKey,
-      p_answer_text: answerText,
-    })
-
-    if (error) {
+      const answerText = value.trim()
+      const { error } = await supabase.rpc('submit_player_bonus_answer', {
+        p_game_id: gameId,
+        p_team_id: teamId,
+        p_question_key: expectedQuestionKey,
+        p_answer_text: answerText,
+      })
+      if (error) throw error
+      go('bonus-submitted')
+    } catch (error) {
       console.error('Could not submit bonus answer:', error)
-      setSubmitError(error.message.includes('already locked')
+      const message = readableErrorMessage(error)
+      setSubmitError(message.includes('already locked')
         ? 'Your bonus answer is locked in.'
-        : error.message.includes('QUESTION_CHANGED')
+        : message.includes('QUESTION_CHANGED')
           ? 'That bonus question has closed.'
           : 'Could not submit your bonus answer. Please try again.')
+    } finally {
       submitBusyRef.current = false
       setSubmitting(false)
-      return
     }
-
-    go('bonus-submitted')
   }
 
   return { submit, submitting, submitError }
@@ -1521,6 +1516,7 @@ function HostAdvance({ label, to, go }: { label: string; to: PlayerScreen; go: (
 export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
   const [code, setCode] = useState('')
   const [invalid, setInvalid] = useState(false)
+  const [connectionError, setConnectionError] = useState(false)
   const [joining, setJoining] = useState(false)
   const joiningRef = useRef(false)
   const handledQrCode = useRef(false)
@@ -1529,40 +1525,33 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
     if (joiningRef.current) return
     joiningRef.current = true
     setInvalid(false)
+    setConnectionError(false)
     setJoining(true)
+    try {
+      const { data: game, error } = await supabase
+        .from('games')
+        .select('id, code, title, status')
+        .eq('code', selectedCode)
+        .in('status', [...JOINABLE_GAME_STATUSES])
+        .maybeSingle()
+      if (error) throw error
+      if (!game) {
+        setInvalid(true)
+        return
+      }
 
-    const { data: game, error } = await supabase
-      .from('games')
-      .select('id, code, title, status')
-      .eq('code', selectedCode)
-      .in('status', [...JOINABLE_GAME_STATUSES])
-      .maybeSingle()
-
-    if (error) {
+      localStorage.setItem('simple-trivia-game-id', game.id)
+      localStorage.setItem('simple-trivia-game-code', game.code)
+      localStorage.setItem('simple-trivia-game-title', game.title)
+      window.history.replaceState({}, '', withGameCodeInUrl(window.location.href, game.code))
+      go('team-setup')
+    } catch (error) {
       console.error('Error finding game:', error)
-      setInvalid(true)
+      setConnectionError(true)
+    } finally {
       joiningRef.current = false
       setJoining(false)
-      return
     }
-
-    if (!game) {
-      setInvalid(true)
-      joiningRef.current = false
-      setJoining(false)
-      return
-    }
-
-    localStorage.setItem('simple-trivia-game-id', game.id)
-    localStorage.setItem('simple-trivia-game-code', game.code)
-    localStorage.setItem('simple-trivia-game-title', game.title)
-
-    // Keep the address bar aligned with the game the player actually joined.
-    // A player can manually replace a stale QR code; without this, refreshing
-    // later would re-run the old URL code and discard the active team session.
-    window.history.replaceState({}, '', withGameCodeInUrl(window.location.href, game.code))
-
-    go('team-setup')
   }, [code, go])
 
   useEffect(() => {
@@ -1599,11 +1588,11 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
             inputMode="numeric"
             pattern="[0-9]*"
             value={code}
-            onChange={e => { setCode(normalizeGameCode(e.target.value)); setInvalid(false) }}
+            onChange={e => { setCode(normalizeGameCode(e.target.value)); setInvalid(false); setConnectionError(false) }}
             placeholder="000000"
             className="placeholder:text-zinc-300"
             style={{
-              border: `2px solid ${invalid ? C.stop : code.length === 6 ? C.violet : C.line}`,
+              border: `2px solid ${invalid || connectionError ? C.stop : code.length === 6 ? C.violet : C.line}`,
               borderRadius: 18,
               background: C.panel,
               color: C.ink,
@@ -1632,6 +1621,13 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
               <p style={{ color: C.stop, fontSize: 13, opacity: 0.8 }} className="text-center">
                 Check the code and try again.
               </p>
+            </div>
+          )}
+
+          {connectionError && (
+            <div style={{ background: C.stopMist, borderRadius: 14, border: `1px solid ${C.stopBorder}`, marginTop: 12 }} className="px-4 py-3">
+              <p style={{ color: C.stop, fontSize: 14, fontWeight: 600 }} className="text-center">We couldn’t check that game right now.</p>
+              <p style={{ color: C.stop, fontSize: 13, opacity: 0.8 }} className="text-center">Check your connection and try again.</p>
             </div>
           )}
 
@@ -1699,58 +1695,56 @@ async function handleJoin() {
   const gameId = localStorage.getItem("simple-trivia-game-id");
 
   if (!gameId) {
+    go("join");
     joiningRef.current = false;
     setJoining(false);
-    go("join");
     return;
   }
+  try {
+    const { data: request, error } = await supabase
+      .rpc("join_live_game", {
+        p_game_id: gameId,
+        p_team_name: name.trim(),
+        p_pin_mode: pinMode,
+        p_team_pin: pinMode === 'none' ? null : pin,
+      })
+      .single();
+    if (error || !request) throw error ?? new Error('Join request was not returned')
 
-  const { data: request, error } = await supabase
-    .rpc("join_live_game", {
-      p_game_id: gameId,
-      p_team_name: name.trim(),
-      p_pin_mode: pinMode,
-      p_team_pin: pinMode === 'none' ? null : pin,
-    })
-    .single();
+    localStorage.setItem("simple-trivia-join-request-id", request.request_id);
+    localStorage.setItem("simple-trivia-join-request-token", request.request_token);
+    localStorage.setItem("simple-trivia-team-name", request.name);
 
-  if (error) {
-    console.error("Error creating team:", error);
-
-    const friendlyPinError = teamPinErrorMessage(error.message)
-
-    if (friendlyPinError) {
-      setPinError(friendlyPinError)
-    } else if (error.code === "23505" || error.message.includes('TEAM_NAME_TAKEN')) {
-      setTaken(true);
-    } else {
-      setJoinError('We couldn’t join the game. Check your details and try again.')
+    if (request.admission_status === 'approved' && request.team_id) {
+      localStorage.setItem('simple-trivia-team-id', request.team_id)
+      try {
+        const { data: game } = await supabase
+          .from('games')
+          .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
+          .eq('id', gameId)
+          .maybeSingle()
+        const nextScreen = game ? await resolveLivePlayerScreen(gameId, request.team_id, game as RemoteGameState) : null
+        go(nextScreen ?? 'waiting')
+      } catch (recoveryError) {
+        console.error('Could not resolve the current player screen after joining:', recoveryError)
+        go('waiting')
+      }
+      return
     }
 
+    go("approval-pending");
+  } catch (error) {
+    console.error("Error creating team:", error);
+    const message = readableErrorMessage(error)
+    const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : ''
+    const friendlyPinError = teamPinErrorMessage(message)
+    if (friendlyPinError) setPinError(friendlyPinError)
+    else if (code === "23505" || message.includes('TEAM_NAME_TAKEN')) setTaken(true)
+    else setJoinError('We couldn’t join the game. Check your details and try again.')
+  } finally {
     joiningRef.current = false;
     setJoining(false);
-    return;
   }
-
-  localStorage.setItem("simple-trivia-join-request-id", request.request_id);
-  localStorage.setItem("simple-trivia-join-request-token", request.request_token);
-  localStorage.setItem("simple-trivia-team-name", request.name);
-
-  if (request.admission_status === 'approved' && request.team_id) {
-    localStorage.setItem('simple-trivia-team-id', request.team_id)
-    const { data: game } = await supabase
-      .from('games')
-      .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
-      .eq('id', gameId)
-      .maybeSingle()
-    const nextScreen = game ? await resolveLivePlayerScreen(gameId, request.team_id, game as RemoteGameState) : null
-    joiningRef.current = false
-    setJoining(false)
-    go(nextScreen ?? 'waiting')
-    return
-  }
-
-  go("approval-pending");
 }
 
   return (
@@ -2091,19 +2085,22 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
     if (!requestId || !requestToken || withdrawingRef.current) return
     withdrawingRef.current = true
     setWithdrawing(true)
-    const { error } = await supabase.rpc('withdraw_team_join_request', {
-      p_request_id: requestId,
-      p_request_token: requestToken,
-    })
-    if (error) {
+    try {
+      const { error } = await supabase.rpc('withdraw_team_join_request', {
+        p_request_id: requestId,
+        p_request_token: requestToken,
+      })
+      if (error) throw error
+      localStorage.removeItem('simple-trivia-join-request-id')
+      localStorage.removeItem('simple-trivia-join-request-token')
+      go('team-setup')
+    } catch (error) {
+      console.error('Could not withdraw team join request:', error)
       setStatusError('Could not go back right now. Please try again.')
+    } finally {
       withdrawingRef.current = false
       setWithdrawing(false)
-      return
     }
-    localStorage.removeItem('simple-trivia-join-request-id')
-    localStorage.removeItem('simple-trivia-join-request-token')
-    go('team-setup')
   }
 
   return (
@@ -3156,17 +3153,23 @@ function ShowGame() {
     choiceBusyRef.current = true
     setChoiceBusy(true)
     setError(null)
-    const { error: choiceError } = await supabase.rpc('submit_elimination_show_game_choice', {
-      p_game_show_game_id: showGame.id,
-      p_request_id: requestId,
-      p_request_token: requestToken,
-      p_choice: choice as 'heads' | 'tails' | '0' | '1' | '2' | 'scissors' | 'paper' | 'rock',
-    })
-    if (choiceError) setError(choiceError.message.includes('CLOSED') ? 'Positions are already locked for this round.' : 'That choice did not go through. Try again.')
-    else setOwnChoice(choice)
-    choiceBusyRef.current = false
-    setChoiceBusy(false)
-    void load()
+    try {
+      const { error: choiceError } = await supabase.rpc('submit_elimination_show_game_choice', {
+        p_game_show_game_id: showGame.id,
+        p_request_id: requestId,
+        p_request_token: requestToken,
+        p_choice: choice as 'heads' | 'tails' | '0' | '1' | '2' | 'scissors' | 'paper' | 'rock',
+      })
+      if (choiceError) throw choiceError
+      setOwnChoice(choice)
+    } catch (choiceError) {
+      const message = readableErrorMessage(choiceError)
+      setError(message.includes('CLOSED') ? 'Positions are already locked for this round.' : 'That choice did not go through. Try again.')
+    } finally {
+      choiceBusyRef.current = false
+      setChoiceBusy(false)
+      void load()
+    }
   }
 
   async function submitAudienceResponse() {
@@ -3180,16 +3183,21 @@ function ShowGame() {
     const config = audienceQuestionFromSettings(showGame.settings)
     const numericValue = config.mode === 'closest-number' ? parseNumericResponseInput(audienceResponse) : null
     if (config.mode === 'closest-number' && numericValue === null) { setError('Enter a number for this Closest Guess.'); audienceSubmitBusyRef.current = false; setAudienceSubmitting(false); return }
-    const { data, error: responseError } = await supabase.rpc('submit_audience_question_response', {
-      p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken,
-      p_response: config.mode === 'closest-number' ? String(numericValue) : audienceResponse.trim(),
-    })
-    if (responseError) {
-      setError(responseError.message.includes('NUMBER_REQUIRED') ? 'Enter a number for this Closest Guess.' : 'That response did not go through. Try again.')
+    try {
+      const { data, error: responseError } = await supabase.rpc('submit_audience_question_response', {
+        p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken,
+        p_response: config.mode === 'closest-number' ? String(numericValue) : audienceResponse.trim(),
+      })
+      if (responseError) throw responseError
+      setAudienceResponseRow(data as DatabaseAudienceResponse)
+    } catch (responseError) {
+      const message = readableErrorMessage(responseError)
+      setError(message.includes('NUMBER_REQUIRED') ? 'Enter a number for this Closest Guess.' : 'That response did not go through. Try again.')
+    } finally {
       audienceSubmitBusyRef.current = false
-    } else setAudienceResponseRow(data as DatabaseAudienceResponse)
-    setAudienceSubmitting(false)
-    void load()
+      setAudienceSubmitting(false)
+      void load()
+    }
   }
 
   async function toggleAudienceVote(response: PlayerAudienceResponse) {
@@ -3200,16 +3208,22 @@ function ShowGame() {
     audienceVoteBusyIdRef.current = response.response_id
     setAudienceVoteBusyId(response.response_id)
     setError(null)
-    const { error: voteError } = await supabase.rpc('toggle_audience_question_response_vote', {
-      p_game_show_game_id: showGame.id,
-      p_response_id: response.response_id,
-      p_request_id: requestId,
-      p_request_token: requestToken,
-    })
-    if (voteError) setError(voteError.message.includes('VOTING_CLOSED') ? 'Voting has closed.' : 'That like did not go through. Try again.')
-    audienceVoteBusyIdRef.current = null
-    setAudienceVoteBusyId(null)
-    void load()
+    try {
+      const { error: voteError } = await supabase.rpc('toggle_audience_question_response_vote', {
+        p_game_show_game_id: showGame.id,
+        p_response_id: response.response_id,
+        p_request_id: requestId,
+        p_request_token: requestToken,
+      })
+      if (voteError) throw voteError
+    } catch (voteError) {
+      const message = readableErrorMessage(voteError)
+      setError(message.includes('VOTING_CLOSED') ? 'Voting has closed.' : 'That like did not go through. Try again.')
+    } finally {
+      audienceVoteBusyIdRef.current = null
+      setAudienceVoteBusyId(null)
+      void load()
+    }
   }
 
   async function pulseBalloon() {
@@ -3783,20 +3797,22 @@ function LiveTiebreaker() {
     submitBusyRef.current = true
     setSubmitting(true)
     setError(null)
-    const { error: submitError } = await supabase.rpc('submit_player_tiebreaker', {
-      p_game_id: gameId,
-      p_team_id: teamId,
-      p_attempt_id: state.attempt_id,
-      p_numeric_answer: numericAnswer,
-    })
-    if (submitError) {
+    try {
+      const { error: submitError } = await supabase.rpc('submit_player_tiebreaker', {
+        p_game_id: gameId,
+        p_team_id: teamId,
+        p_attempt_id: state.attempt_id,
+        p_numeric_answer: numericAnswer,
+      })
+      if (submitError) throw submitError
+      await load()
+    } catch (submitError) {
       console.error('Could not submit tiebreaker:', submitError)
       setError('Could not submit that answer. Please try again.')
-    } else {
-      await load()
+    } finally {
+      submitBusyRef.current = false
+      setSubmitting(false)
     }
-    submitBusyRef.current = false
-    setSubmitting(false)
   }
 
   if (!state && error) {

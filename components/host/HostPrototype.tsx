@@ -145,6 +145,7 @@ import { formatNumericResponse } from "@/lib/trivia/numeric-response";
 import {
   AUTO_BUILD_PREFERENCES_KEY,
   loadAutoBuildPreferences,
+  normalizeAutoBuildDifficultyRange,
 } from "@/lib/trivia/auto-build-preferences";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -544,20 +545,20 @@ function useTeamJoinRequests(gameCode: string) {
     setDecidingId(requestId)
     setError(null)
 
-    const { error: decisionError } = await supabase.rpc('decide_team_join_request', {
-      p_request_id: requestId,
-      p_decision: decision,
-    })
-
-    if (decisionError) {
+    try {
+      const { error: decisionError } = await supabase.rpc('decide_team_join_request', {
+        p_request_id: requestId,
+        p_decision: decision,
+      })
+      if (decisionError) throw decisionError
+      setRequests(current => current.filter(request => request.id !== requestId))
+    } catch (decisionError) {
       console.error('Could not decide team join request:', decisionError)
       setError('Could not update that request. Please try again.')
-    } else {
-      setRequests(current => current.filter(request => request.id !== requestId))
+    } finally {
+      decidingRef.current = false
+      setDecidingId(null)
     }
-
-    decidingRef.current = false
-    setDecidingId(null)
   }
 
   return { requests, error, decidingId, decide }
@@ -3708,37 +3709,39 @@ function QuizBuilder({ go }: { go: Go }) {
       })
     })
 
-    const { data, error } = await supabase.rpc('save_quiz_with_show_games', {
-      p_quiz_id: quizId,
-      p_title: title.trim(),
-      p_status: statusToSave,
-      p_estimated_minutes: estimatedMinutes,
-      p_questions: snapshots,
-      p_content_screens: contentScreenSnapshots,
-      p_tiebreakers: tiebreakerSnapshots,
-      p_show_games: showGameSnapshots,
-    })
+    try {
+      const { data, error } = await supabase.rpc('save_quiz_with_show_games', {
+        p_quiz_id: quizId,
+        p_title: title.trim(),
+        p_status: statusToSave,
+        p_estimated_minutes: estimatedMinutes,
+        p_questions: snapshots,
+        p_content_screens: contentScreenSnapshots,
+        p_tiebreakers: tiebreakerSnapshots,
+        p_show_games: showGameSnapshots,
+      })
+      if (error || !data) throw error ?? new Error('The save did not return a quiz ID.')
 
-    savingRef.current = false
-    setSaving(false)
-    if (error || !data) {
+      setQuizId(data)
+      setPersisted(true)
+      setNewQuiz(false)
+      setQuizStatus(statusToSave)
+      setDirty(false)
+      setSaveNotice(statusToSave === 'ready'
+        ? 'Saved — this quiz is ready to host.'
+        : `Saved as a draft. ${readiness.blockers[0] ?? 'Finish the required quiz content before hosting.'}`)
+      localStorage.setItem('simple-trivia-selected-quiz-id', data)
+      localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
+      localStorage.removeItem('simple-trivia-new-quiz-id')
+      return data
+    } catch (error) {
       console.error('Could not save quiz:', error)
       setSaveError('Could not save this quiz. Nothing was partially saved; try again.')
       return null
+    } finally {
+      savingRef.current = false
+      setSaving(false)
     }
-
-    setQuizId(data)
-    setPersisted(true)
-    setNewQuiz(false)
-    setQuizStatus(statusToSave)
-    setDirty(false)
-    setSaveNotice(statusToSave === 'ready'
-      ? 'Saved — this quiz is ready to host.'
-      : `Saved as a draft. ${readiness.blockers[0] ?? 'Finish the required quiz content before hosting.'}`)
-    localStorage.setItem('simple-trivia-selected-quiz-id', data)
-    localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
-    localStorage.removeItem('simple-trivia-new-quiz-id')
-    return data
   }
 
   function hostQuiz() {
@@ -6419,6 +6422,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
 function AutoBuild({ go }: { go: Go }) {
   const [mode, setMode] = useState<'mixed' | 'custom'>('mixed')
   const [diff, setDiff] = useState<[number, number]>([0, 4])
+  const safeDiff = useMemo(() => normalizeAutoBuildDifficultyRange(diff[0], diff[1]), [diff])
   const [questionCount, setQuestionCount] = useState(30)
   const [questionCountInput, setQuestionCountInput] = useState('30')
   const [roundCount, setRoundCount] = useState(4)
@@ -6509,7 +6513,7 @@ function AutoBuild({ go }: { go: Go }) {
     try {
       localStorage.setItem(AUTO_BUILD_PREFERENCES_KEY, JSON.stringify({
         mode,
-        difficulty: diff,
+        difficulty: safeDiff,
         questionCount,
         roundCount,
         includeGames,
@@ -6528,9 +6532,9 @@ function AutoBuild({ go }: { go: Go }) {
     } catch (error) {
       console.error('Could not remember Auto-Build settings:', error)
     }
-  }, [allowAdultContent, audienceFit, audienceLocale, autoBuildGamePrize, autoBuildGameRewardPoints, autoBuildGameRewardType, autoBuildPreferencesLoaded, autoBuildTiebreakerMode, diff, includeGames, includeTiebreaker, mode, questionCount, roundCount, scopeMode, topics, vibe])
+  }, [allowAdultContent, audienceFit, audienceLocale, autoBuildGamePrize, autoBuildGameRewardPoints, autoBuildGameRewardType, autoBuildPreferencesLoaded, autoBuildTiebreakerMode, includeGames, includeTiebreaker, mode, questionCount, roundCount, safeDiff, scopeMode, topics, vibe])
 
-  const selectedDifficulties = useMemo(() => TRIVIA_DIFFICULTIES.slice(diff[0], diff[1] + 1), [diff])
+  const selectedDifficulties = useMemo(() => TRIVIA_DIFFICULTIES.slice(safeDiff[0], safeDiff[1] + 1), [safeDiff])
   const selectedRoundTopics = useMemo(
     () => mode === 'mixed' ? Array.from({ length: roundCount }, () => null) : topics,
     [mode, roundCount, topics],
@@ -6605,8 +6609,8 @@ function AutoBuild({ go }: { go: Go }) {
   }, [])
 
   const diffText = () => {
-    const [lo, hi] = diff
-    return lo === hi ? `${diffLabels[lo]} only` : `${diffLabels[lo]} through ${diffLabels[hi]}`
+    const [lo, hi] = safeDiff
+    return `${diffLabels[lo]} through ${diffLabels[hi]}`
   }
   const availabilityHasError = !countsAreValid
     || !localeIsValid
@@ -6925,8 +6929,8 @@ function AutoBuild({ go }: { go: Go }) {
                     <div style={{ background: C.line, height: 6 }} className="relative w-full rounded-full">
                       <div style={{
                         position: 'absolute',
-                        left: `${(diff[0] / (diffLabels.length - 1)) * 100}%`,
-                        right: `${(((diffLabels.length - 1) - diff[1]) / (diffLabels.length - 1)) * 100}%`,
+                        left: `${(safeDiff[0] / (diffLabels.length - 1)) * 100}%`,
+                        right: `${(((diffLabels.length - 1) - safeDiff[1]) / (diffLabels.length - 1)) * 100}%`,
                         height: '100%',
                         background: C.violet,
                         borderRadius: 4,
@@ -6934,37 +6938,37 @@ function AutoBuild({ go }: { go: Go }) {
                     </div>
                     <button type="button" role="slider"
                       aria-label="Minimum difficulty"
-                      aria-valuemin={0} aria-valuemax={diff[1] - 1} aria-valuenow={diff[0]} aria-valuetext={diffLabels[diff[0]]}
+                      aria-valuemin={0} aria-valuemax={safeDiff[1] - 1} aria-valuenow={safeDiff[0]} aria-valuetext={diffLabels[safeDiff[0]]}
                       onPointerDown={e => startDifficultyDrag('minimum', e)}
                       onKeyDown={e => {
                         if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
                         e.preventDefault()
-                        const value = e.key === 'Home' ? 0 : e.key === 'End' ? diff[1] - 1 : diff[0] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
+                        const value = e.key === 'Home' ? 0 : e.key === 'End' ? safeDiff[1] - 1 : safeDiff[0] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
                         setDiff(current => [Math.max(0, Math.min(value, current[1] - 1)), current[1]])
                       }}
                       className="dual-range-thumb absolute p-0"
-                      style={{ left: `calc(${(diff[0] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: diff[0] === diff[1] ? 3 : 2 }} />
+                      style={{ left: `calc(${(safeDiff[0] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: 2 }} />
                     <button type="button" role="slider"
                       aria-label="Maximum difficulty"
-                      aria-valuemin={diff[0] + 1} aria-valuemax={diffLabels.length - 1} aria-valuenow={diff[1]} aria-valuetext={diffLabels[diff[1]]}
+                      aria-valuemin={safeDiff[0] + 1} aria-valuemax={diffLabels.length - 1} aria-valuenow={safeDiff[1]} aria-valuetext={diffLabels[safeDiff[1]]}
                       onPointerDown={e => startDifficultyDrag('maximum', e)}
                       onKeyDown={e => {
                         if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
                         e.preventDefault()
-                        const value = e.key === 'Home' ? diff[0] + 1 : e.key === 'End' ? diffLabels.length - 1 : diff[1] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
+                        const value = e.key === 'Home' ? safeDiff[0] + 1 : e.key === 'End' ? diffLabels.length - 1 : safeDiff[1] + (['ArrowRight', 'ArrowUp'].includes(e.key) ? 1 : -1)
                         setDiff(current => [current[0], Math.min(diffLabels.length - 1, Math.max(value, current[0] + 1))])
                       }}
                       className="dual-range-thumb absolute p-0"
-                      style={{ left: `calc(${(diff[1] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: 2 }} />
+                      style={{ left: `calc(${(safeDiff[1] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: diff[0] === diff[1] ? 3 : 2 }} />
                   </div>
                   <div className="mb-3 flex justify-between">
                     {diffLabels.map((label, index) => {
                       const toneStyle = difficultyToneStyle(label)
-                      const isInRange = index >= diff[0] && index <= diff[1]
+                      const isInRange = index >= safeDiff[0] && index <= safeDiff[1]
                       return (
                         <span key={label} style={{
                           color: toneStyle.text,
-                          fontWeight: (index === diff[0] || index === diff[1]) ? 700 : 500,
+                          fontWeight: (index === safeDiff[0] || index === safeDiff[1]) ? 700 : 500,
                           opacity: isInRange ? 1 : 0.38,
                         }} className="flex-1 text-center text-[11px]">{label}</span>
                       )
@@ -7725,15 +7729,17 @@ function Lobby({ go }: { go: Go }) {
     removingTeamRef.current = true
     setRemovingTeamId(team.id)
     setLobbyError(null)
-    const { error } = await supabase.rpc('remove_team_from_game', { p_team_id: team.id })
-    if (error) {
+    try {
+      const { error } = await supabase.rpc('remove_team_from_game', { p_team_id: team.id })
+      if (error) throw error
+      setTeams(current => current.filter(item => item.id !== team.id))
+    } catch (error) {
       console.error('Could not remove team:', error)
       setLobbyError('Could not remove that team. Please try again.')
-    } else {
-      setTeams(current => current.filter(item => item.id !== team.id))
+    } finally {
+      removingTeamRef.current = false
+      setRemovingTeamId(null)
     }
-    removingTeamRef.current = false
-    setRemovingTeamId(null)
   }
 
   async function handleApprovalRequiredChange(required: boolean) {
@@ -7742,52 +7748,46 @@ function Lobby({ go }: { go: Go }) {
     setApprovalBusy(true)
     setLobbyError(null)
     const settings: Record<string, Json> = { ...lobbySettings, team_approval_required: required }
-
-    const { error: updateError } = await supabase.from('games').update({ settings }).eq('id', lobbyGameId)
-    if (updateError) {
-      console.error('Could not update team approval setting:', updateError)
-      setLobbyError('Could not update team approval. Please try again.')
-      approvalBusyRef.current = false
-      setApprovalBusy(false)
-      return
-    }
-
-    setLobbySettings(settings)
-    setApprovalRequired(required)
+    let settingUpdated = false
     try {
-      await saveHostDefaultGameSettings(settings)
-    } catch (preferenceError) {
-      console.error('Could not save team-entry default:', preferenceError)
-      setLobbyError('Team entry changed for this game, but the default could not be saved.')
-    }
+      const { error: updateError } = await supabase.from('games').update({ settings }).eq('id', lobbyGameId)
+      if (updateError) throw updateError
+      settingUpdated = true
+      setLobbySettings(settings)
+      setApprovalRequired(required)
+      try {
+        await saveHostDefaultGameSettings(settings)
+      } catch (preferenceError) {
+        console.error('Could not save team-entry default:', preferenceError)
+        setLobbyError('Team entry changed for this game, but the default could not be saved.')
+      }
 
-    if (!required) {
-      const { data: pending, error: pendingError } = await supabase
-        .from('team_join_requests')
-        .select('id')
-        .eq('game_id', lobbyGameId)
-        .eq('status', 'pending')
-
-      if (pendingError) {
-        console.error('Could not load waiting teams for automatic approval:', pendingError)
-        setLobbyError('Automatic entry is on, but waiting teams could not be admitted. Please try again.')
-      } else {
+      if (!required) {
+        const { data: pending, error: pendingError } = await supabase
+          .from('team_join_requests')
+          .select('id')
+          .eq('game_id', lobbyGameId)
+          .eq('status', 'pending')
+        if (pendingError) throw pendingError
         for (const request of pending ?? []) {
           const { error: decisionError } = await supabase.rpc('decide_team_join_request', {
             p_request_id: request.id,
             p_decision: 'approved',
           })
-          if (decisionError) {
-            console.error('Could not automatically approve a waiting team:', decisionError)
-            setLobbyError('Automatic entry is on, but one waiting team could not be admitted.')
-            break
-          }
+          if (decisionError) throw decisionError
         }
       }
+    } catch (updateError) {
+      console.error('Could not update team approval setting:', updateError)
+      if (!required && settingUpdated) {
+        setLobbyError('Automatic entry is on, but waiting teams could not be admitted. Please try again.')
+      } else {
+        setLobbyError('Could not update team approval. Please try again.')
+      }
+    } finally {
+      approvalBusyRef.current = false
+      setApprovalBusy(false)
     }
-
-    approvalBusyRef.current = false
-    setApprovalBusy(false)
   }
 
   async function handleStartQuiz() {
@@ -7826,6 +7826,7 @@ function Lobby({ go }: { go: Go }) {
   useEffect(() => {
     let active = true
     let channel: ReturnType<typeof supabase.channel> | null = null
+    let teamPollTimer: number | null = null
 
     async function setupLobby() {
       setLobbyError(null)
@@ -7894,12 +7895,19 @@ function Lobby({ go }: { go: Go }) {
           }
         )
         .subscribe(status => { if (status === 'SUBSCRIBED') void loadLobbyTeams(game.id) })
+
+      const pollTeams = async () => {
+        await loadLobbyTeams(game.id)
+        if (active) teamPollTimer = window.setTimeout(() => { void pollTeams() }, 10_000)
+      }
+      teamPollTimer = window.setTimeout(() => { void pollTeams() }, 10_000)
     }
 
     void setupLobby()
 
     return () => {
       active = false
+      if (teamPollTimer !== null) window.clearTimeout(teamPollTimer)
 
       if (channel) {
         void supabase.removeChannel(channel)
@@ -8292,6 +8300,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const actionBusyRef = useRef(false)
   const liveLoadVersionRef = useRef(0)
   const [removingLiveTeamId, setRemovingLiveTeamId] = useState<string | null>(null)
+  const removingLiveTeamRef = useRef(false)
   const [presenceNow, setPresenceNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -8313,17 +8322,21 @@ function LiveQuestion({ go }: { go: Go }) {
   }
 
   async function removeLiveTeam(team: LiveTeam) {
-    if (removingLiveTeamId || !window.confirm(`Remove ${team.name} from this game?`)) return
+    if (removingLiveTeamRef.current || !window.confirm(`Remove ${team.name} from this game?`)) return
+    removingLiveTeamRef.current = true
     setRemovingLiveTeamId(team.id)
     setLiveError(null)
-    const { error } = await supabase.rpc('remove_team_from_game', { p_team_id: team.id })
-    if (error) {
+    try {
+      const { error } = await supabase.rpc('remove_team_from_game', { p_team_id: team.id })
+      if (error) throw error
+      setTeams(current => current.filter(item => item.id !== team.id))
+    } catch (error) {
       console.error('Could not remove live team:', error)
       setLiveError('Could not remove that team. Please try again.')
-    } else {
-      setTeams(current => current.filter(item => item.id !== team.id))
+    } finally {
+      removingLiveTeamRef.current = false
+      setRemovingLiveTeamId(null)
     }
-    setRemovingLiveTeamId(null)
   }
 
   useEffect(() => {

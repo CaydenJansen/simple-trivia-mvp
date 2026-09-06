@@ -135,6 +135,52 @@ test('rapid answer actions submit once and bind the response to the visible ques
   })
 })
 
+test('a failed answer request releases the submit control for a retry', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('simple-trivia-team-id', 'browser-test-team'))
+  await page.unroute('**/rest/v1/games**')
+  await page.route('**/rest/v1/games**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      current_screen: 'single-answer',
+      answer_phase: 'open',
+      question_stage: 'core',
+      current_question_key: 'five-answer-question',
+      answer_editing_allowed: false,
+      settings: {},
+    }),
+  }))
+
+  let attempts = 0
+  await page.route('**/rest/v1/rpc/submit_player_answer', route => {
+    attempts += 1
+    if (attempts === 1) return route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ message: 'Temporary connection failure' }),
+    })
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify('submission-id') })
+  })
+
+  await page.goto('/play/prototype')
+  await page.getByRole('button', { name: '5 · Single Answer' }).click()
+  await expect(page.getByText('Name five examples.')).toBeVisible()
+  await page.getByPlaceholder('Type your answer…').fill('Retry me')
+  const submit = page.getByRole('button', { name: 'Submit Answer' })
+  await submit.evaluate(button => {
+    if (!(button instanceof HTMLButtonElement)) throw new Error('Submit control is not a button')
+    button.click()
+  })
+
+  await expect(page.getByText('Could not submit your answer. Please try again.')).toBeVisible()
+  await expect(submit).toBeEnabled()
+  await submit.evaluate(button => {
+    if (!(button instanceof HTMLButtonElement)) throw new Error('Submit control is not a button')
+    button.click()
+  })
+  await expect.poll(() => attempts).toBe(2)
+})
+
 test('a transient question load failure recovers without refreshing', async ({ page }) => {
   await page.unroute('**/rest/v1/rpc/get_player_game_question')
   let attempts = 0
