@@ -6925,7 +6925,7 @@ function AutoBuild({ go }: { go: Go }) {
                 <div>
                   <label style={{ color: C.ink }} className="block text-sm font-bold">Difficulty range</label>
                   <p style={{ color: C.sub }} className="mt-1 text-xs leading-5">Choose at least two difficulty levels for Auto-Build to use.</p>
-                  <div className="relative mb-5 mt-5" style={{ paddingBottom: 4 }}>
+                  <div className="relative mx-10 mb-5 mt-5" style={{ paddingBottom: 4 }}>
                     <div style={{ background: C.line, height: 6 }} className="relative w-full rounded-full">
                       <div style={{
                         position: 'absolute',
@@ -6961,13 +6961,14 @@ function AutoBuild({ go }: { go: Go }) {
                       className="dual-range-thumb absolute p-0"
                       style={{ left: `calc(${(safeDiff[1] / (diffLabels.length - 1)) * 100}% - 10px)`, top: -7, zIndex: diff[0] === diff[1] ? 3 : 2 }} />
                   </div>
-                  <div className="relative mb-3 h-5">
+                  <div className="relative mx-10 mb-3 h-5">
                     {diffLabels.map((label, index) => {
                       const toneStyle = difficultyToneStyle(label)
                       const isInRange = index >= safeDiff[0] && index <= safeDiff[1]
                       return (
                         <span key={label} style={{
                           position: 'absolute',
+                          top: 0,
                           left: `${(index / (diffLabels.length - 1)) * 100}%`,
                           transform: 'translateX(-50%)',
                           whiteSpace: 'nowrap',
