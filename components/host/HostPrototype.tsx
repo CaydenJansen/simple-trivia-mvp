@@ -1693,8 +1693,6 @@ function QuizCard({ q, go, duplicating, onRename, onDuplicate, onDelete }: {
         <span>{q.round_count} rounds</span>
         <span style={{ color: C.line }}>·</span>
         <span>{q.question_count} questions</span>
-        <span style={{ color: C.line }}>·</span>
-        <span>~{q.estimated_minutes} mins</span>
       </div>
       <p style={{ color: C.sub }} className="text-xs mb-auto pb-4">Edited {formatEditedAt(q.updated_at)}</p>
       <div style={{ borderTop: `1px solid ${C.line}` }} className="relative flex items-center gap-2 pt-3.5 mt-2">
