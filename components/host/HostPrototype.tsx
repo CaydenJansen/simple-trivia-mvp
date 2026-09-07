@@ -1371,6 +1371,9 @@ type SharedQuizPreview = {
   quiz_title: string
   round_count: number
   question_count: number
+  content_screen_count: number
+  show_game_count: number
+  tiebreaker_count: number
   expires_at: string | null
 }
 
@@ -1848,7 +1851,7 @@ function Dashboard({ go }: { go: Go }) {
           <section role="dialog" aria-modal="true" aria-labelledby="share-quiz-title" className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
             <p className="text-xs font-black uppercase tracking-widest text-violet-600">Share a copy</p>
             <h2 id="share-quiz-title" className="mt-1 text-xl font-bold text-zinc-900">{sharingQuiz.title}</h2>
-            <p className="mt-3 text-sm leading-6 text-zinc-600">Anyone with this link can sign in and add an independent copy to My Quizzes. Their changes will not affect your quiz.</p>
+            <p className="mt-3 text-sm leading-6 text-zinc-600">Anyone with this link can sign in and add an independent, editable copy to My Quizzes. The complete show is included: every round, question, game, content screen, tiebreaker, and setting. Their changes will not affect your quiz.</p>
 
             {shareBusy && !shareDetails && <p className="mt-6 rounded-xl bg-violet-50 px-4 py-4 text-sm font-semibold text-violet-700">Creating a secure link…</p>}
 
@@ -1884,8 +1887,9 @@ function Dashboard({ go }: { go: Go }) {
             {incomingSharePreview && (
               <div className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/60 p-5">
                 <h3 className="text-lg font-bold text-zinc-900">{incomingSharePreview.quiz_title}</h3>
-                <p className="mt-1 text-sm text-zinc-600">{incomingSharePreview.round_count} rounds · {incomingSharePreview.question_count} questions</p>
-                <p className="mt-4 text-sm leading-6 text-zinc-600">This creates your own editable copy. Changes made by either host will remain independent.</p>
+                <p className="mt-1 text-sm text-zinc-600">{incomingSharePreview.round_count} rounds · {incomingSharePreview.question_count} questions · {incomingSharePreview.show_game_count} games</p>
+                <p className="mt-1 text-sm text-zinc-600">{incomingSharePreview.content_screen_count} content screens · {incomingSharePreview.tiebreaker_count} tiebreakers</p>
+                <p className="mt-4 text-sm leading-6 text-zinc-600">This creates your own editable copy of the complete show, including all settings. Changes made by either host will remain independent.</p>
                 <p className="mt-2 text-xs text-zinc-500">{formatShareExpiry(incomingSharePreview.expires_at)}</p>
               </div>
             )}

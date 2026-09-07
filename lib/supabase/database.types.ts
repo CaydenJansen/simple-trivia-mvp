@@ -1003,7 +1003,15 @@ export type Database = {
       }
       get_shared_quiz_preview: {
         Args: { p_share_token: string }
-        Returns: { quiz_title: string; round_count: number; question_count: number; expires_at: string | null }[]
+        Returns: {
+          quiz_title: string
+          round_count: number
+          question_count: number
+          content_screen_count: number
+          show_game_count: number
+          tiebreaker_count: number
+          expires_at: string | null
+        }[]
       }
       claim_shared_quiz: {
         Args: { p_share_token: string }
