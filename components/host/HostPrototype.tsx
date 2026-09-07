@@ -78,6 +78,12 @@ import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl, type Ho
 import { competitionPlacements, ordinalPlacement } from "@/lib/trivia/leaderboard-ranking";
 import { loadAllSourceRows } from "@/lib/trivia/paginated-source-load";
 import { nextQuizCopyTitle } from "@/lib/trivia/quiz-copy";
+import {
+  buildQuizShareUrl,
+  quizShareClaimError,
+  quizShareTokenFromUrl,
+  removeQuizShareToken,
+} from "@/lib/trivia/quiz-sharing";
 import { quizPreviewIndexForKey } from "@/lib/trivia/quiz-preview-navigation";
 import {
   DEFAULT_SHOW_GAME_REWARD,
@@ -1354,6 +1360,31 @@ type QuizSummary = {
   updated_at: string
 }
 
+type QuizShareDetails = {
+  token: string
+  url: string
+  expiresAt: string | null
+  claimCount: number
+}
+
+type SharedQuizPreview = {
+  quiz_title: string
+  round_count: number
+  question_count: number
+  expires_at: string | null
+}
+
+function readableHostError(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (error && typeof error === 'object' && 'message' in error) return String(error.message)
+  return ''
+}
+
+function formatShareExpiry(value: string | null) {
+  if (!value) return 'This link does not expire.'
+  return `Expires ${new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value))}.`
+}
+
 function formatEditedAt(value: string) {
   const date = new Date(value)
   const diffMs = Date.now() - date.getTime()
@@ -1379,6 +1410,22 @@ function Dashboard({ go }: { go: Go }) {
   const [renameTitle, setRenameTitle] = useState('')
   const [renamingQuiz, setRenamingQuiz] = useState(false)
   const [duplicatingQuizId, setDuplicatingQuizId] = useState<string | null>(null)
+  const [sharingQuiz, setSharingQuiz] = useState<QuizSummary | null>(null)
+  const [shareDetails, setShareDetails] = useState<QuizShareDetails | null>(null)
+  const [shareBusy, setShareBusy] = useState(false)
+  const [shareError, setShareError] = useState<string | null>(null)
+  const [shareCopied, setShareCopied] = useState(false)
+  const shareBusyRef = useRef(false)
+  const [incomingShareToken, setIncomingShareToken] = useState<string | null>(() => (
+    typeof window === 'undefined' ? null : quizShareTokenFromUrl(window.location.href)
+  ))
+  const [incomingSharePreview, setIncomingSharePreview] = useState<SharedQuizPreview | null>(null)
+  const [incomingShareLoading, setIncomingShareLoading] = useState(() => (
+    typeof window !== 'undefined' && Boolean(quizShareTokenFromUrl(window.location.href))
+  ))
+  const [incomingShareError, setIncomingShareError] = useState<string | null>(null)
+  const [claimingShare, setClaimingShare] = useState(false)
+  const claimingShareRef = useRef(false)
 
   useEffect(() => {
     let active = true
@@ -1414,6 +1461,41 @@ function Dashboard({ go }: { go: Go }) {
     void loadDashboard()
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    const token = incomingShareToken
+    if (!token) return
+
+    let active = true
+
+    async function loadSharedQuizPreview(shareToken: string) {
+      try {
+        const { data, error } = await supabase.rpc('get_shared_quiz_preview', { p_share_token: shareToken })
+        if (!active) return
+        if (error) {
+          console.error('Could not load shared quiz preview:', error)
+          setIncomingShareError('Could not check this share link. Check your connection and try again.')
+          return
+        }
+        const preview = data?.[0]
+        if (!preview) {
+          setIncomingShareError('This share link has expired or been revoked.')
+          return
+        }
+        setIncomingSharePreview(preview)
+      } catch (error) {
+        if (!active) return
+        console.error('Could not load shared quiz preview:', error)
+        setIncomingShareError('Could not check this share link. Check your connection and try again.')
+      } finally {
+        if (active) setIncomingShareLoading(false)
+      }
+    }
+
+    void loadSharedQuizPreview(token)
+
+    return () => { active = false }
+  }, [incomingShareToken])
 
   async function deleteQuiz(quiz: QuizSummary) {
     setDeletingQuiz(true)
@@ -1542,6 +1624,114 @@ function Dashboard({ go }: { go: Go }) {
     setActionNotice(`Created “${copyTitle}”.`)
   }
 
+  async function openQuizShare(quiz: QuizSummary) {
+    if (shareBusyRef.current) return
+    shareBusyRef.current = true
+    setSharingQuiz(quiz)
+    setShareDetails(null)
+    setShareError(null)
+    setShareCopied(false)
+    setShareBusy(true)
+    try {
+      const { data, error } = await supabase.rpc('create_quiz_share_link', {
+        p_quiz_id: quiz.id,
+        p_expires_in_days: 30,
+      })
+      if (error) throw error
+      const link = data?.[0]
+      if (!link) throw new Error('Share link was not returned')
+      setShareDetails({
+        token: link.share_token,
+        url: buildQuizShareUrl(window.location.origin, link.share_token),
+        expiresAt: link.expires_at,
+        claimCount: link.claim_count,
+      })
+    } catch (error) {
+      console.error('Could not create quiz share link:', error)
+      setShareError('Could not create a share link. Check your connection and try again.')
+    } finally {
+      shareBusyRef.current = false
+      setShareBusy(false)
+    }
+  }
+
+  async function copyQuizShareLink() {
+    if (!shareDetails) return
+    setShareCopied(false)
+    setShareError(null)
+    try {
+      await navigator.clipboard.writeText(shareDetails.url)
+      setShareCopied(true)
+    } catch (error) {
+      console.error('Could not copy quiz share link:', error)
+      setShareError('Could not copy automatically. Select the link and copy it manually.')
+    }
+  }
+
+  async function revokeQuizShareLink() {
+    if (!shareDetails || shareBusyRef.current) return
+    shareBusyRef.current = true
+    setShareBusy(true)
+    setShareError(null)
+    try {
+      const { data, error } = await supabase.rpc('revoke_quiz_share_link', {
+        p_share_token: shareDetails.token,
+      })
+      if (error) throw error
+      if (!data) throw new Error('Share link was not revoked')
+      setSharingQuiz(null)
+      setShareDetails(null)
+      setActionNotice('Quiz share link revoked.')
+    } catch (error) {
+      console.error('Could not revoke quiz share link:', error)
+      setShareError('Could not revoke this link. Please try again.')
+    } finally {
+      shareBusyRef.current = false
+      setShareBusy(false)
+    }
+  }
+
+  function dismissIncomingShare() {
+    window.history.replaceState({}, '', removeQuizShareToken(window.location.href))
+    setIncomingShareToken(null)
+    setIncomingSharePreview(null)
+    setIncomingShareError(null)
+    setIncomingShareLoading(false)
+  }
+
+  async function claimIncomingShare() {
+    if (!incomingShareToken || claimingShareRef.current) return
+    claimingShareRef.current = true
+    setClaimingShare(true)
+    setIncomingShareError(null)
+    try {
+      const { data: copiedQuizId, error } = await supabase.rpc('claim_shared_quiz', {
+        p_share_token: incomingShareToken,
+      })
+      if (error || !copiedQuizId) throw error ?? new Error('Shared quiz copy was not returned')
+
+      const { data: copiedQuiz, error: copiedQuizError } = await supabase
+        .from('quizzes')
+        .select('id, title, status, round_count, question_count, estimated_minutes, updated_at')
+        .eq('id', copiedQuizId)
+        .maybeSingle()
+
+      if (copiedQuizError) console.error('Could not immediately load claimed quiz:', copiedQuizError)
+      if (copiedQuiz) {
+        setQuizzes(current => [copiedQuiz as QuizSummary, ...current.filter(quiz => quiz.id !== copiedQuiz.id)])
+      }
+      const sharedTitle = copiedQuiz?.title ?? `${incomingSharePreview?.quiz_title ?? 'Shared quiz'} (Shared copy)`
+      dismissIncomingShare()
+      setActionNotice(`Added “${sharedTitle}” to My Quizzes.`)
+    } catch (error) {
+      console.error('Could not claim shared quiz:', error)
+      setIncomingShareError(quizShareClaimError(readableHostError(error)))
+    } finally {
+      claimingShareRef.current = false
+      setClaimingShare(false)
+    }
+  }
+
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
       <Nav go={go} active="My Quizzes" />
@@ -1602,6 +1792,7 @@ function Dashboard({ go }: { go: Go }) {
                 go={go}
                 duplicating={duplicatingQuizId === q.id}
                 onRename={() => openRename(q)}
+                onShare={() => { void openQuizShare(q) }}
                 onDuplicate={() => { void duplicateQuiz(q) }}
                 onDelete={() => setPendingDelete(q)}
               />
@@ -1652,15 +1843,73 @@ function Dashboard({ go }: { go: Go }) {
           </section>
         </div>
       )}
+      {sharingQuiz && (
+        <div className="fixed inset-0 z-[125] flex items-center justify-center bg-zinc-950/50 px-4 backdrop-blur-sm">
+          <section role="dialog" aria-modal="true" aria-labelledby="share-quiz-title" className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+            <p className="text-xs font-black uppercase tracking-widest text-violet-600">Share a copy</p>
+            <h2 id="share-quiz-title" className="mt-1 text-xl font-bold text-zinc-900">{sharingQuiz.title}</h2>
+            <p className="mt-3 text-sm leading-6 text-zinc-600">Anyone with this link can sign in and add an independent copy to My Quizzes. Their changes will not affect your quiz.</p>
+
+            {shareBusy && !shareDetails && <p className="mt-6 rounded-xl bg-violet-50 px-4 py-4 text-sm font-semibold text-violet-700">Creating a secure link…</p>}
+
+            {shareDetails && (
+              <div className="mt-5">
+                <label htmlFor="quiz-share-link" className="block text-xs font-bold uppercase tracking-wider text-zinc-500">Private share link</label>
+                <div className="mt-2 flex gap-2">
+                  <input id="quiz-share-link" readOnly value={shareDetails.url} onFocus={event => event.currentTarget.select()} className="min-w-0 flex-1 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-3 text-sm text-zinc-700 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100" />
+                  <button type="button" onClick={() => void copyQuizShareLink()} className="shrink-0 rounded-xl bg-violet-600 px-4 py-3 text-sm font-bold text-white hover:bg-violet-700">{shareCopied ? 'Copied!' : 'Copy link'}</button>
+                </div>
+                <p className="mt-2 text-xs text-zinc-500">{formatShareExpiry(shareDetails.expiresAt)}{shareDetails.claimCount > 0 ? ` Used by ${shareDetails.claimCount} ${shareDetails.claimCount === 1 ? 'host' : 'hosts'}.` : ''}</p>
+              </div>
+            )}
+
+            {shareError && <p role="alert" className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{shareError}</p>}
+
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              {shareDetails && <button type="button" disabled={shareBusy} onClick={() => void revokeQuizShareLink()} className="mr-auto rounded-xl px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">Revoke link</button>}
+              {shareError && !shareDetails && <button type="button" disabled={shareBusy} onClick={() => void openQuizShare(sharingQuiz)} className="rounded-xl border border-violet-200 px-4 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50">Try again</button>}
+              <button type="button" disabled={shareBusy} onClick={() => { setSharingQuiz(null); setShareDetails(null); setShareError(null); setShareCopied(false) }} className="rounded-xl border border-zinc-200 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50">Done</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {incomingShareToken && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-zinc-950/55 px-4 backdrop-blur-sm">
+          <section role="dialog" aria-modal="true" aria-labelledby="incoming-share-title" className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+            <p className="text-xs font-black uppercase tracking-widest text-violet-600">Shared with you</p>
+            <h2 id="incoming-share-title" className="mt-1 text-2xl font-bold text-zinc-900">Add this quiz?</h2>
+
+            {incomingShareLoading && <p className="mt-5 rounded-xl bg-violet-50 px-4 py-4 text-sm font-semibold text-violet-700">Checking the share link…</p>}
+
+            {incomingSharePreview && (
+              <div className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/60 p-5">
+                <h3 className="text-lg font-bold text-zinc-900">{incomingSharePreview.quiz_title}</h3>
+                <p className="mt-1 text-sm text-zinc-600">{incomingSharePreview.round_count} rounds · {incomingSharePreview.question_count} questions</p>
+                <p className="mt-4 text-sm leading-6 text-zinc-600">This creates your own editable copy. Changes made by either host will remain independent.</p>
+                <p className="mt-2 text-xs text-zinc-500">{formatShareExpiry(incomingSharePreview.expires_at)}</p>
+              </div>
+            )}
+
+            {incomingShareError && <p role="alert" className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{incomingShareError}</p>}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" disabled={claimingShare} onClick={dismissIncomingShare} className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50">Not now</button>
+              {incomingShareError?.startsWith('Could not check') && <button type="button" disabled={claimingShare} onClick={() => window.location.reload()} className="rounded-xl border border-violet-200 px-4 py-2.5 text-sm font-semibold text-violet-700 hover:bg-violet-50">Try again</button>}
+              {incomingSharePreview && <button type="button" disabled={claimingShare || incomingShareLoading} onClick={() => void claimIncomingShare()} className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50">{claimingShare ? 'Adding…' : 'Add to My Quizzes'}</button>}
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
 
-function QuizCard({ q, go, duplicating, onRename, onDuplicate, onDelete }: {
+function QuizCard({ q, go, duplicating, onRename, onShare, onDuplicate, onDelete }: {
   q: QuizSummary
   go: Go
   duplicating: boolean
   onRename: () => void
+  onShare: () => void
   onDuplicate: () => void
   onDelete: () => void
 }) {
@@ -1702,6 +1951,7 @@ function QuizCard({ q, go, duplicating, onRename, onDuplicate, onDelete }: {
         {menuOpen && (
           <div className="absolute bottom-10 right-0 z-20 w-44 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl">
             <button onClick={() => { setMenuOpen(false); onRename() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Rename Quiz</button>
+            <button onClick={() => { setMenuOpen(false); onShare() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Share Quiz</button>
             <button onClick={() => { setMenuOpen(false); onDuplicate() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">{duplicating ? 'Duplicating…' : 'Duplicate Quiz'}</button>
             <button onClick={() => { setMenuOpen(false); onDelete() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50">Delete Quiz</button>
           </div>

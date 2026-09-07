@@ -87,6 +87,52 @@ export type Database = {
           referencedColumns: ['id']
         }]
       }
+      quiz_share_links: {
+        Row: {
+          id: string
+          quiz_id: string
+          owner_id: string
+          share_token: string
+          expires_at: string | null
+          revoked_at: string | null
+          claim_count: number
+          last_claimed_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          quiz_id: string
+          owner_id?: string
+          share_token?: string
+          expires_at?: string | null
+          revoked_at?: string | null
+          claim_count?: number
+          last_claimed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['quiz_share_links']['Insert']>
+        Relationships: []
+      }
+      quiz_share_claims: {
+        Row: {
+          id: string
+          share_link_id: string
+          recipient_id: string
+          copied_quiz_id: string | null
+          claimed_at: string
+        }
+        Insert: {
+          id?: string
+          share_link_id: string
+          recipient_id: string
+          copied_quiz_id?: string | null
+          claimed_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['quiz_share_claims']['Insert']>
+        Relationships: []
+      }
       source_questions: {
         Row: {
           id: string
@@ -947,6 +993,22 @@ export type Database = {
       }
     }
     Functions: {
+      create_quiz_share_link: {
+        Args: { p_quiz_id: string; p_expires_in_days?: number | null }
+        Returns: { share_token: string; expires_at: string | null; claim_count: number }[]
+      }
+      revoke_quiz_share_link: {
+        Args: { p_share_token: string }
+        Returns: boolean
+      }
+      get_shared_quiz_preview: {
+        Args: { p_share_token: string }
+        Returns: { quiz_title: string; round_count: number; question_count: number; expires_at: string | null }[]
+      }
+      claim_shared_quiz: {
+        Args: { p_share_token: string }
+        Returns: string
+      }
       start_live_game: {
         Args: { p_game_id: string; p_answer_editing_allowed?: boolean }
         Returns: Database['public']['Tables']['games']['Row']

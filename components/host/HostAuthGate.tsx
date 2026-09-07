@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 
 import { validateHostCredentials } from "@/lib/auth/credentials";
 import { supabase } from "@/lib/supabase/client";
+import { buildQuizShareUrl, quizShareTokenFromUrl } from "@/lib/trivia/quiz-sharing";
 import BrandWordmark from "@/components/BrandWordmark";
 
 import HostPrototype from "./HostPrototype";
@@ -64,12 +65,17 @@ export default function HostAuthGate({ showDevNavigator = false }: { showDevNavi
 
     setSubmitting(true);
 
+    const shareToken = quizShareTokenFromUrl(window.location.href);
+    const emailRedirectTo = shareToken
+      ? buildQuizShareUrl(window.location.origin, shareToken)
+      : `${window.location.origin}/host`;
+
     const result =
       mode === "sign-in"
         ? await supabase.auth.signInWithPassword(credentials)
         : await supabase.auth.signUp({
             ...credentials,
-            options: { emailRedirectTo: `${window.location.origin}/host` },
+            options: { emailRedirectTo },
           });
 
     setSubmitting(false);
