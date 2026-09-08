@@ -239,4 +239,14 @@ describe('ranking grading', () => {
       { label: '4', submitted: 'Mars', expected: 'Mars', status: 'correct' },
     ])
   })
+
+  it('awards the ranking point only when every item is in the correct position', () => {
+    const ranking = question({
+      question_type: 'ranking',
+      correct_answer: ['Mercury', 'Venus', 'Earth'],
+      points_max: 1,
+    })
+    expect(gradingPoints(buildSubmissionGrading(ranking, JSON.stringify(['Mercury', 'Venus', 'Earth'])), 1, true)).toBe(1)
+    expect(gradingPoints(buildSubmissionGrading(ranking, JSON.stringify(['Mercury', 'Earth', 'Venus'])), 1, true)).toBe(0)
+  })
 })

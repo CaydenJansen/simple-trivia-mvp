@@ -50,7 +50,7 @@ import {
   showsLeaderboardAfterQuestion,
   type LeaderboardVisibility,
 } from "@/lib/trivia/leaderboard-visibility";
-import { prizeAwardsFromJson, prizeSettings, type PrizeAward } from "@/lib/trivia/prizes";
+import { customPrizeSettings, prizeAwardsFromJson, prizeSettings, type PrizeAward } from "@/lib/trivia/prizes";
 import { correctnessSummary } from "@/lib/trivia/correctness-rate";
 import { hostRecoveryScreen } from "@/lib/trivia/session-recovery";
 import { buildGameJoinUrl } from "@/lib/trivia/join-code";
@@ -163,10 +163,15 @@ type Go = (s: Screen) => void
 type AutoBuildSourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"]
 type AutoBuildSourceTiebreaker = Database["public"]["Tables"]["source_tiebreakers"]["Row"]
 type PrizePlace = { enabled: boolean; msg: string }
+type CustomPrizePlace = { position: number; enabled: boolean; msg: string; missing_behavior: 'closest' | 'ignore' }
 
 function normalizedPrizePlaces(value: Json | undefined): PrizePlace[] {
   const parsed = prizeSettings(value)
   return Array.from({ length: 3 }, (_, index) => parsed[index] ?? { enabled: false, msg: '' })
+}
+
+function normalizedCustomPrizePlaces(value: Json | undefined): CustomPrizePlace[] {
+  return customPrizeSettings(value).map(setting => ({ ...setting, missing_behavior: setting.missingBehavior }))
 }
 
 async function loadHostDefaultGameSettings() {
@@ -2503,12 +2508,11 @@ function TemplatesScreen({ go }: { go: Go }) {
         const savedStructure = templateStructureFromJson(template.structure)
         const roundCount = savedStructure?.rounds.length ?? quiz?.round_count
         const questionCount = savedStructure?.questions.length ?? quiz?.question_count
-        const estimatedMinutes = savedStructure?.estimatedMinutes ?? quiz?.estimated_minutes
         return <article key={template.id} style={{ background: C.panel, border: `1px solid ${C.line}` }} className="flex min-h-52 flex-col rounded-2xl p-5 shadow-sm">
           <p style={{ color: C.violet }} className="text-[10px] font-extrabold uppercase tracking-wider">Show Template</p>
           <h2 style={{ color: C.ink }} className="mt-2 text-lg font-extrabold">{template.name}</h2>
           <p style={{ color: C.sub }} className="mt-1 text-xs">Based on {quiz?.title ?? 'saved quiz'}</p>
-          {roundCount !== undefined && questionCount !== undefined && estimatedMinutes !== undefined && <p style={{ color: C.sub }} className="mt-4 text-sm">{roundCount} rounds · {questionCount} question slots · ~{estimatedMinutes} min</p>}
+          {roundCount !== undefined && questionCount !== undefined && <p style={{ color: C.sub }} className="mt-4 text-sm">{roundCount} rounds · {questionCount} question slots</p>}
           <div className="mt-auto flex items-center gap-2 pt-5">
             <Btn sz="sm" cls="flex-1 justify-center" disabled={Boolean(busyId)} onClick={() => void requestUseTemplate(template)}>{busyId === template.id ? 'Building…' : 'Use Template'}</Btn>
             <Btn sz="sm" v="secondary" onClick={() => void editTemplate(template)}>Edit</Btn>
@@ -2564,7 +2568,7 @@ function TemplatesScreen({ go }: { go: Go }) {
         </header>
         <div className="max-h-[calc(82dvh-92px)] overflow-y-auto p-4">
           {quizPickerLoading ? <p style={{ color: C.sub }} className="py-14 text-center text-sm">Loading your quizzes…</p> : availableQuizzes.length === 0 ? <p style={{ color: C.sub }} className="py-14 text-center text-sm">You do not have a saved quiz to turn into a template yet.</p> : <div className="space-y-2">{availableQuizzes.map(quiz => <div key={quiz.id} style={{ border: `1px solid ${C.line}` }} className="flex items-center gap-4 rounded-2xl px-4 py-3">
-            <div className="min-w-0 flex-1"><p style={{ color: C.ink }} className="truncate font-extrabold">{quiz.title}</p><p style={{ color: C.sub }} className="mt-1 text-xs">{quiz.round_count} rounds · {quiz.question_count} questions · ~{quiz.estimated_minutes} min</p></div>
+            <div className="min-w-0 flex-1"><p style={{ color: C.ink }} className="truncate font-extrabold">{quiz.title}</p><p style={{ color: C.sub }} className="mt-1 text-xs">{quiz.round_count} rounds · {quiz.question_count} questions</p></div>
             <Btn sz="sm" disabled={Boolean(busyId)} onClick={() => void saveQuizAsTemplate(quiz)}>{busyId === quiz.id ? 'Saving…' : 'Save as Template'}</Btn>
           </div>)}</div>}
         </div>
@@ -3140,7 +3144,7 @@ function sourceToBuilderQuestion(source: PickerSourceQuestion): BuilderQuestionD
     options: source.options,
     tags: [...source.tag_names],
     imageUrl: source.image_url,
-    pointsMax: Array.isArray(source.correct_answer) ? Math.max(1, source.correct_answer.length) : 1,
+    pointsMax: source.question_type === 'ranking' ? 1 : Array.isArray(source.correct_answer) ? Math.max(1, source.correct_answer.length) : 1,
     bonus: source.bonus,
     metadataSnapshot: {
       audience_suitability: source.audience_suitability,
@@ -4118,10 +4122,10 @@ function QuizBuilder({ go }: { go: Go }) {
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
             {loading ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : needsStatusSync ? 'Save to enable hosting' : persisted ? 'Saved' : 'New quiz'}
           </span>
+          <Btn v="secondary" sz="sm" onClick={() => setPreviewOpen(true)}>Preview Quiz</Btn>
           <div className="relative">
             <button type="button" aria-label="More quiz actions" aria-expanded={builderActionsOpen} onClick={() => setBuilderActionsOpen(open => !open)} style={{ border: `1px solid ${C.line}`, color: C.sub }} className="rounded-lg px-3 py-2 text-xs font-black hover:bg-zinc-50">•••</button>
             {builderActionsOpen && <div className="absolute right-0 top-10 z-50 w-48 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl">
-              <button type="button" onClick={() => { setBuilderActionsOpen(false); setPreviewOpen(true) }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Preview Quiz</button>
               {quizId && <button type="button" onClick={() => { setBuilderActionsOpen(false); void saveCurrentQuizAsTemplate() }} disabled={savingTemplate || saving} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50">{savingTemplate ? 'Saving template…' : 'Save as Template'}</button>}
               {quizId && <button type="button" onClick={() => { setBuilderActionsOpen(false); void deleteCurrentQuiz() }} disabled={deletingQuiz || saving} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">{deletingQuiz ? 'Deleting…' : 'Delete Show'}</button>}
             </div>}
@@ -4186,7 +4190,7 @@ function QuizBuilder({ go }: { go: Go }) {
             </div>
           )}
           {saveError && (
-            <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="rounded-xl px-4 py-3 text-sm font-semibold">
+            <div role="alert" style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: C.stop }} className="fixed left-1/2 top-20 z-[70] w-[min(92vw,42rem)] -translate-x-1/2 rounded-xl px-4 py-3 text-sm font-semibold shadow-xl">
               {saveError}
             </div>
           )}
@@ -6256,7 +6260,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
       correctAnswer = rankingItems.map(item => item.trim()).filter(Boolean)
       options = correctAnswer
       acceptedAnswers = []
-      pointsMax = Math.max(1, asStringArray(correctAnswer).length)
+      pointsMax = 1
     }
 
     if ((qtype === 'single' && !String(correctAnswer).trim()) || (qtype !== 'single' && asStringArray(correctAnswer).length === 0 && qtype !== 'multiple-choice')) {
@@ -6949,7 +6953,7 @@ function AutoBuild({ go }: { go: Go }) {
             options: question.options,
             tags: question.tags,
             image_url: question.image_url,
-            points_max: Array.isArray(question.correct_answer) ? Math.max(1, question.correct_answer.length) : 1,
+            points_max: question.question_type === 'ranking' ? 1 : Array.isArray(question.correct_answer) ? Math.max(1, question.correct_answer.length) : 1,
             bonus: question.bonus,
             notes: question.notes,
             source_question_id: question.id,
@@ -7562,7 +7566,7 @@ function HostSetup({ go }: { go: Go }) {
   const [submittedAnswersEditable, setSubmittedAnswersEditable] = useState(false)
   const [approvalRequired, setApprovalRequired] = useState(true)
   const topPlaces = ['1st', '2nd', '3rd']
-  const bottomPlaces = ['Last', '2nd Last', '3rd Last']
+  const bottomPlaces = ['Last', '2nd Last']
   const initPrize = (msg = ''): PrizePlace => ({ enabled: false, msg })
   const [topPrizes, setTopPrizes] = useState<PrizePlace[]>([
     initPrize(), initPrize(), initPrize(),
@@ -7570,6 +7574,8 @@ function HostSetup({ go }: { go: Go }) {
   const [botPrizes, setBotPrizes] = useState<PrizePlace[]>([
     initPrize(), initPrize(), initPrize(),
   ])
+  const [customPrizes, setCustomPrizes] = useState<CustomPrizePlace[]>([])
+  const [skipUnneededTiebreakers, setSkipUnneededTiebreakers] = useState(false)
   const [quiz, setQuiz] = useState<QuizSummary | null>(null)
   const [loadingQuiz, setLoadingQuiz] = useState(true)
   const [openingLobby, setOpeningLobby] = useState(false)
@@ -7592,6 +7598,8 @@ function HostSetup({ go }: { go: Go }) {
         setApprovalRequired(teamApprovalRequiredFromSettings(settings))
         setTopPrizes(normalizedPrizePlaces(settings.top_prizes))
         setBotPrizes(normalizedPrizePlaces(settings.bottom_prizes))
+        setCustomPrizes(normalizedCustomPrizePlaces(settings.other_prizes))
+        setSkipUnneededTiebreakers(settings.skip_unneeded_tiebreakers === true)
       } catch (error) {
         console.error('Could not load host defaults:', error)
         if (active) setSetupError('Your saved hosting defaults could not be loaded. The standard settings are shown instead.')
@@ -7657,6 +7665,8 @@ function HostSetup({ go }: { go: Go }) {
         submitted_answers_editable: submittedAnswersEditable,
         top_prizes: topPrizes,
         bottom_prizes: botPrizes,
+        other_prizes: customPrizes,
+        skip_unneeded_tiebreakers: skipUnneededTiebreakers,
       }
       const { data: game, error: gameError } = await supabase
         .rpc('create_game_from_quiz_with_show_games', {
@@ -7924,6 +7934,33 @@ function HostSetup({ go }: { go: Go }) {
                   ))}
                 </div>
               </div>
+              <div style={{ borderTop: `1px solid ${C.line}` }} className="pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p style={{ color: C.sub }} className="text-[10px] font-bold uppercase tracking-widest">Other Places</p>
+                  <button type="button" onClick={() => setCustomPrizes(current => [...current, { position: 4, enabled: true, msg: '', missing_behavior: 'ignore' }])} style={{ color: C.violet }} className="text-xs font-black">+ Add place</button>
+                </div>
+                <div className="mt-2 space-y-3">
+                  {customPrizes.map((prize, index) => <div key={index} style={{ border: `1px solid ${C.line}` }} className="rounded-xl p-3">
+                    <div className="flex items-center gap-2">
+                      <input type="number" min={1} value={prize.position} aria-label="Prize position" onChange={event => setCustomPrizes(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, position: Math.max(1, Math.trunc(Number(event.target.value) || 1)) } : item))} style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-20 rounded-lg px-2 py-1.5 text-sm" />
+                      <span style={{ color: C.sub }} className="text-xs font-bold">place</span>
+                      <select value={prize.missing_behavior} onChange={event => setCustomPrizes(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, missing_behavior: event.target.value as 'closest' | 'ignore' } : item))} style={{ border: `1px solid ${C.line}`, color: C.ink }} className="ml-auto rounded-lg px-2 py-1.5 text-xs">
+                        <option value="ignore">Ignore if unavailable</option>
+                        <option value="closest">Give to closest place</option>
+                      </select>
+                      <button type="button" aria-label="Remove prize place" onClick={() => setCustomPrizes(current => current.filter((_, itemIndex) => itemIndex !== index))} style={{ color: C.stop }} className="px-1 text-lg">×</button>
+                    </div>
+                    <input value={prize.msg} onChange={event => setCustomPrizes(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, msg: event.target.value } : item))} placeholder="Prize message shown on final results…" style={{ border: `1px solid ${C.line}`, color: C.ink }} className="mt-2 w-full rounded-lg px-3 py-2 text-sm" />
+                  </div>)}
+                </div>
+              </div>
+              <label style={{ borderTop: `1px solid ${C.line}` }} className="flex cursor-pointer items-start gap-3 pt-4">
+                <input type="checkbox" checked={skipUnneededTiebreakers} onChange={event => setSkipUnneededTiebreakers(event.target.checked)} style={{ accentColor: C.violet }} className="mt-0.5" />
+                <span>
+                  <strong style={{ color: C.ink }} className="block text-sm">Skip unneeded final tiebreakers</strong>
+                  <span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">If none of the prize positions are tied, finish the show without a backup tiebreaker.</span>
+                </span>
+              </label>
             </div>
           </SCard>
 
@@ -9167,7 +9204,7 @@ function LiveQuestion({ go }: { go: Go }) {
 
 
 async function handleReviewItem(submissionId: string, itemIndex: number, status: 'correct' | 'incorrect') {
-  if (!question || phase === 'revealed') return
+  if (!question) return
   const reviewKey = `${submissionId}:${itemIndex}`
   if (reviewBusyRef.current.has(reviewKey)) return
 
@@ -9185,13 +9222,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
   reviewBusyRef.current.add(reviewKey)
   try {
-    const { error } = await supabase
-      .from('submissions')
-      .update({ grading_json: next })
-      .eq('id', submissionId)
+    const nextPoints = gradingPoints(next, question.points_max, question.question_type === 'ranking')
+    const { error } = phase === 'revealed'
+      ? await supabase.rpc('rescore_submission', { p_submission_id: submissionId, p_grading_json: next, p_points_awarded: nextPoints })
+      : await supabase.from('submissions').update({ grading_json: next }).eq('id', submissionId)
     if (error) throw error
     setSubmissions(currentSubmissions => currentSubmissions.map(item =>
-      item.id === submissionId ? { ...item, grading_json: next } : item
+      item.id === submissionId ? { ...item, grading_json: next, ...(phase === 'revealed' ? { points_awarded: nextPoints, is_correct: nextPoints >= question.points_max } : {}) } : item
     ))
   } catch (error) {
     console.error('Could not update answer review:', error)
@@ -9203,7 +9240,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
   async function handleBonusReview(submissionId: string, status: 'correct' | 'incorrect') {
     const bonus = runtimeBonusFromJson(question?.bonus)
-    if (!bonus || phase === 'revealed') return
+    if (!bonus) return
     const reviewKey = `bonus:${submissionId}`
     if (reviewBusyRef.current.has(reviewKey)) return
 
@@ -9217,13 +9254,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
     reviewBusyRef.current.add(reviewKey)
     try {
-      const { error } = await supabase
-        .from('bonus_submissions')
-        .update({ grading_json: next })
-        .eq('id', submissionId)
+      const nextPoints = gradingPoints(next, bonus.points)
+      const { error } = phase === 'revealed'
+        ? await supabase.rpc('rescore_bonus_submission', { p_submission_id: submissionId, p_grading_json: next, p_points_awarded: nextPoints })
+        : await supabase.from('bonus_submissions').update({ grading_json: next }).eq('id', submissionId)
       if (error) throw error
       setBonusSubmissions(currentSubmissions => currentSubmissions.map(item =>
-        item.id === submissionId ? { ...item, grading_json: next } : item
+        item.id === submissionId ? { ...item, grading_json: next, ...(phase === 'revealed' ? { points_awarded: nextPoints, is_correct: nextPoints >= bonus.points } : {}) } : item
       ))
     } catch (error) {
       console.error('Could not update bonus review:', error)
@@ -10808,13 +10845,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               <div className="space-y-2">
                 <div className="flex min-h-9 items-center justify-end">
                   {waiting || !item || !submission ? <span style={{ color: C.liveDim }} className="text-xs">—</span> : (
-                    <ReviewBadge status={item.status} disabled={phase === 'revealed'} onCorrect={() => { void handleReviewItem(submission.id, 0, 'correct') }} onIncorrect={() => { void handleReviewItem(submission.id, 0, 'incorrect') }} />
+                    <ReviewBadge status={item.status} onCorrect={() => { void handleReviewItem(submission.id, 0, 'correct') }} onIncorrect={() => { void handleReviewItem(submission.id, 0, 'incorrect') }} />
                   )}
                 </div>
                 {showBonusInAnswers && (
                   <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="flex min-h-9 items-center justify-end pt-2">
                     {bonusRow?.submission && bonusItem ? (
-                      <ReviewBadge status={bonusItem.status} disabled={phase === 'revealed'} onCorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'correct') }} onIncorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'incorrect') }} />
+                      <ReviewBadge status={bonusItem.status} onCorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'correct') }} onIncorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'incorrect') }} />
                     ) : <span style={{ color: C.liveDim }} className="text-xs">—</span>}
                   </div>
                 )}
@@ -10847,7 +10884,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           const bonusRow = bonusAnswerRows.find(row => row.team.id === team.id) ?? null
           const bonusItem = bonusRow?.grading?.items[0] ?? null
           const hasReview = items.some(item => item.status === 'review') || (showBonusInAnswers && bonusItem?.status === 'review')
-          const score = (grading ? gradingPoints(grading, question?.points_max ?? 1) : 0)
+          const score = (grading ? gradingPoints(grading, question?.points_max ?? 1, question?.question_type === 'ranking') : 0)
             + (showBonusInAnswers && bonusRow?.grading ? gradingPoints(bonusRow.grading, activeBonus?.points ?? 1) : 0)
           const max = (question?.points_max ?? Math.max(1, items.length)) + (showBonusInAnswers ? activeBonus?.points ?? 1 : 0)
 
@@ -10949,7 +10986,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                         {submission ? (
                           <ReviewBadge
                             status={item.status}
-                            disabled={phase === 'revealed'}
+
                             onCorrect={() => { void handleReviewItem(submission.id, itemIndex, 'correct') }}
                             onIncorrect={() => { void handleReviewItem(submission.id, itemIndex, 'incorrect') }}
                           />
@@ -10996,7 +11033,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                       </div>
                       <div className="flex justify-end">
                         {bonusRow?.submission && bonusItem ? (
-                          <ReviewBadge status={bonusItem.status} disabled={phase === 'revealed'} onCorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'correct') }} onIncorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'incorrect') }} />
+                          <ReviewBadge status={bonusItem.status} onCorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'correct') }} onIncorrect={() => { void handleBonusReview(bonusRow.submission!.id, 'incorrect') }} />
                         ) : <span style={{ color: C.liveDim }} className="text-xs">—</span>}
                       </div>
                     </div>
@@ -12011,7 +12048,8 @@ function FinalResults({ go }: { go: Go }) {
     }
     return b.score - a.score || a.name.localeCompare(b.name)
   })
-  const winners = leaderboard.filter(team => (team.final_placement ?? 1) === 1)
+  const finalPlacements = competitionPlacements(leaderboard)
+  const winners = leaderboard.filter((team, index) => (team.final_placement ?? finalPlacements[index]) === 1)
   const pendingResolution = resolutions.find(resolution => resolution.status === 'pending') ?? null
   const activeAttempt = attempts.find(attempt => attempt.id === game?.current_tiebreaker_attempt_id)
     ?? attempts.filter(attempt => attempt.resolution_id === pendingResolution?.id).at(-1)
@@ -12325,7 +12363,7 @@ function FinalResults({ go }: { go: Go }) {
           <div style={{ borderTop: `1px solid ${C.liveLine}` }}>
             {leaderboard.map((team, i) => (
               <div key={team.id} style={{ borderBottom: `1px solid ${C.liveLine}` }} className="flex items-center gap-3 py-3 last:border-0">
-                <span style={{ color: (team.final_placement ?? i + 1) <= 3 ? C.liveText : C.liveDim }} className="w-9 text-center text-sm shrink-0 font-extrabold">{ordinalPlacement(team.final_placement ?? i + 1)}</span>
+                <span style={{ color: (team.final_placement ?? i + 1) <= 3 ? C.liveText : C.liveDim }} className="w-9 text-center text-sm shrink-0 font-extrabold">{ordinalPlacement(team.final_placement ?? finalPlacements[i] ?? i + 1)}</span>
                 <span style={{ color: C.liveText }} className="flex-1 text-sm font-semibold">{team.name}</span>
                 <span style={{ color: C.liveText }} className="font-extrabold tabular-nums">{team.score}</span>
                 {prizeAwardsFromJson(team.prize_awards).length > 0 && (

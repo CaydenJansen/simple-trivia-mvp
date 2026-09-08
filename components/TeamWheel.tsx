@@ -100,7 +100,7 @@ export default function TeamWheel({ teamNames, spinning = false, winnerName = nu
       const currentMod = ((current % 360) + 360) % 360
       const targetMod = ((restingRotation % 360) + 360) % 360
       const shouldSettle = shouldAnimateWheelLanding(wasSpinningRef.current, landingKey, settledLandingKeyRef.current)
-      const duration = 8000
+      const duration = 10000
       const cruisingSpeed = 2.9
       // A cubic ease starts at 3 * distance / duration. Choose the number of
       // turns so settling begins at the existing cruise speed, then only slows.

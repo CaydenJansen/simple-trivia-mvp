@@ -28,6 +28,23 @@ describe('consequential final ties', () => {
     const lowTie = [...teams, { id: 'e', name: 'E', score: 40 }]
     expect(consequentialTies(lowTie, {})).toHaveLength(1)
   })
+
+  it('skips an otherwise unnecessary first-place tie when enabled', () => {
+    expect(consequentialTies(teams, { skip_unneeded_tiebreakers: true })).toEqual([])
+  })
+
+  it('detects a tie crossing a configured custom prize position', () => {
+    const middleTie = [
+      { id: 'a', name: 'A', score: 5 },
+      { id: 'b', name: 'B', score: 4 },
+      { id: 'c', name: 'C', score: 4 },
+      { id: 'd', name: 'D', score: 1 },
+    ]
+    expect(consequentialTies(middleTie, {
+      skip_unneeded_tiebreakers: true,
+      other_prizes: [{ position: 2, enabled: true, msg: 'Prize', missing_behavior: 'ignore' }],
+    })[0]).toMatchObject({ score: 4, teamIds: ['b', 'c'], topPlaces: [2, 3] })
+  })
 })
 
 describe('final standings resolution', () => {

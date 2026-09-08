@@ -40,12 +40,32 @@ describe('prize placement semantics', () => {
     expect(calculatePrizeAwards(null, ['a']).size).toBe(0)
   })
 
+  it('awards custom positions and honours missing-team behaviour', () => {
+    const exact = calculatePrizeAwards({
+      other_prizes: [{ position: 4, enabled: true, msg: 'Fourth-place prize', missing_behavior: 'ignore' }],
+    }, ['a', 'b', 'c', 'd'])
+    expect(exact.get('d')).toEqual([{ placement: '4th', message: 'Fourth-place prize' }])
+
+    const closest = calculatePrizeAwards({
+      other_prizes: [{ position: 7, enabled: true, msg: 'Seventh-place prize', missing_behavior: 'closest' }],
+    }, ['a', 'b', 'c'])
+    expect(closest.get('c')).toEqual([{ placement: '7th', message: 'Seventh-place prize' }])
+
+    expect(calculatePrizeAwards({
+      other_prizes: [{ position: 7, enabled: true, msg: 'Unused', missing_behavior: 'ignore' }],
+    }, ['a', 'b', 'c']).size).toBe(0)
+  })
+
   it('parses only usable stored prize awards', () => {
     expect(prizeAwardsFromJson([
       { placement: '1st', message: '  Winner voucher  ' },
+      { placement: '11th', message: '  Mystery prize  ' },
       { placement: 'Fourth', message: 'Nope' },
       { placement: 'Last', message: '' },
       null,
-    ])).toEqual([{ placement: '1st', message: 'Winner voucher' }])
+    ])).toEqual([
+      { placement: '1st', message: 'Winner voucher' },
+      { placement: '11th', message: 'Mystery prize' },
+    ])
   })
 })

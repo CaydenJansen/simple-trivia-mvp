@@ -14,7 +14,7 @@ import {
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { PLAYER_SESSION_KEYS, restoredTeamFromAdmission, shouldResetPlayerSessionForJoinCode } from "@/lib/trivia/session-recovery";
 import { initialRankingOrder } from "@/lib/trivia/ranking-order";
-import { savedAnswerForQuestion } from "@/lib/trivia/player-draft";
+import { playerDraftStorageKey, readPlayerDraft, savedAnswerForQuestion, writePlayerDraft } from "@/lib/trivia/player-draft";
 import { gameCodeFromSearch, normalizeGameCode, withGameCodeInUrl } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
 import type { Database, Json } from "@/lib/supabase/database.types";
@@ -439,6 +439,23 @@ function usePlayerAutoRunClock() {
   return now === null ? null : autoRunClockFromSettings(settings, now)
 }
 
+function useAutoSubmitPlayerDraft(value: string | string[], enabled: boolean, submit: (value: string | string[]) => Promise<void>) {
+  const clock = usePlayerAutoRunClock()
+  const submitRef = useRef(submit)
+  const submittedClockKeyRef = useRef<string | null>(null)
+  useEffect(() => { submitRef.current = submit }, [submit])
+  const serializedValue = JSON.stringify(value)
+
+  useEffect(() => {
+    if (!clock || !clock.label.startsWith('Answers') || clock.paused || clock.remaining > 1 || !enabled) return
+    const key = `${clock.label}:${clock.remaining}`
+    if (submittedClockKeyRef.current === key) return
+    submittedClockKeyRef.current = key
+    const latestValue = JSON.parse(serializedValue) as string | string[]
+    void submitRef.current(latestValue)
+  }, [clock, enabled, serializedValue])
+}
+
 function useLiveQuestionDefinition() {
   const [question, setQuestion] = useState<LiveQuestionDefinition | null>(null)
   const questionKeyRef = useRef<string | null>(null)
@@ -607,7 +624,7 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
     try {
       const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('current_screen, answer_phase, current_question_key')
+        .select('current_screen, answer_phase, answer_editing_allowed, current_question_key')
         .eq('id', gameId)
         .maybeSingle()
       if (gameError || !game) throw gameError ?? new Error('Game not found')
@@ -625,7 +642,7 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
       })
       if (error) throw error
       localStorage.setItem('simple-trivia-last-answer', answerText)
-      go('submitted')
+      if (!game.answer_editing_allowed) go('submitted')
     } catch (error) {
       console.error('Could not submit answer:', error)
       const message = readableErrorMessage(error)
@@ -729,6 +746,7 @@ type PlayerSnapshot = {
   bonusPointsAwarded: number
   bonusPointsMax: number
   correctness: CorrectnessSummary | null
+  correctnessItems: CorrectnessSummary[]
 }
 
 function playerReviewItemsFromJson(value: unknown): PlayerReviewItem[] {
@@ -779,6 +797,7 @@ function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
         {items.map((item, index) => {
           const correct = item.status === 'correct'
           const review = item.status === 'review'
+          const itemCorrectness = snapshot.correctnessItems[index]
           const label = snapshot.questionType === 'multi-part'
             ? (item.label ?? String.fromCharCode(65 + index))
             : snapshot.questionType === 'ranking'
@@ -793,7 +812,7 @@ function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
                 background: review ? C.cautionMist : 'transparent',
                 padding: '14px 16px',
                 display: 'grid',
-                gridTemplateColumns: label ? '28px minmax(0, 1fr) 30px' : 'minmax(0, 1fr) 30px',
+                gridTemplateColumns: label ? '28px minmax(0, 1fr) 70px 30px' : 'minmax(0, 1fr) 70px 30px',
                 alignItems: 'center',
                 gap: 10,
               }}
@@ -843,6 +862,10 @@ function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
                   )}
                 </div>
               </div>
+
+              <span style={{ color: C.sub, fontSize: 10, fontWeight: 800, textAlign: 'right' }} className="tabular-nums">
+                {itemCorrectness ? itemCorrectness.percentage + '% teams' : ''}
+              </span>
 
               <div
                 style={{
@@ -1018,7 +1041,7 @@ function PlayerQuestionResultSummary({ snapshot }: { snapshot: PlayerSnapshot })
         )}
       </section>
 
-      {snapshot.correctness && (
+      {snapshot.correctness && !isCompoundResultType(snapshot.questionType) && (
         <p style={{ color: C.sub }} className="text-center text-xs font-bold">
           <strong style={{ color: C.violet }} className="tabular-nums">{snapshot.correctness.percentage}%</strong> of teams got it right
         </p>
@@ -1034,7 +1057,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
     isCorrect: null, pointsAwarded: 0, pointsMax: 1,
     prompt: '', correctAnswer: '—', roundLabel: '', questionLabel: '', questionType: null,
     reviewItems: [], missingAnswers: [], prizeAwards: [], bonusAnswer: '', hasBonusSubmission: false, bonusCorrectAnswer: '',
-    bonusPointsAwarded: 0, bonusPointsMax: 0, correctness: null,
+    bonusPointsAwarded: 0, bonusPointsMax: 0, correctness: null, correctnessItems: [],
   })
 
   useEffect(() => {
@@ -1075,6 +1098,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
       let submission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
       let bonusSubmission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
       let correctness: CorrectnessSummary | null = null
+      let correctnessItems: CorrectnessSummary[] = []
 
       if (game?.current_question_key) {
         const [questionResult, submissionResult, bonusSubmissionResult] = await Promise.all([
@@ -1107,12 +1131,18 @@ function usePlayerSnapshot(): PlayerSnapshot {
         if (game.answer_phase === 'revealed' && playersSeeCorrectnessPercentage(game.settings)) {
           const [{ count: teamCount }, { data: allSubmissions, error: correctnessError }] = await Promise.all([
             supabase.from('teams').select('id', { count: 'exact', head: true }).eq('game_id', activeGameId),
-            supabase.from('submissions').select('is_correct').eq('game_id', activeGameId).eq('question_key', game.current_question_key),
+            supabase.from('submissions').select('is_correct, grading_json').eq('game_id', activeGameId).eq('question_key', game.current_question_key),
           ])
           if (correctnessError) {
             console.error('Could not load the player correctness percentage:', correctnessError)
           } else {
             correctness = correctnessSummary(teamCount ?? 0, allSubmissions ?? [])
+            if (isCompoundResultType(question?.question_type ?? null)) {
+              const ownItems = playerReviewItemsFromJson(submission?.grading_json)
+              correctnessItems = ownItems.map((_, index) => correctnessSummary(teamCount ?? 0, (allSubmissions ?? []).map(row => ({
+                is_correct: playerReviewItemsFromJson(row.grading_json)[index]?.status === 'correct',
+              }))))
+            }
           }
         }
       }
@@ -1152,6 +1182,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
         bonusPointsAwarded: bonusSubmission?.points_awarded ?? 0,
         bonusPointsMax: revealedBonus?.points ?? playerBonusFromJson(question?.bonus)?.points ?? 0,
         correctness,
+        correctnessItems,
       })
     }
 
@@ -2276,12 +2307,14 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'single-answer', question?.question_key)
   const savedAnswer = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)
   const storedAnswer = typeof savedAnswer === 'string' ? savedAnswer : ''
+  const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
 
   useEffect(() => {
-    // Restore the team's previous response when the host reopens answers.
+    // Restore an unsubmitted local draft before falling back to the server response.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAnswer(storedAnswer)
-  }, [question?.question_key, storedAnswer])
+    setAnswer(readPlayerDraft<string>(localStorage, draftKey) ?? storedAnswer)
+  }, [draftKey, storedAnswer])
+  useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2291,7 +2324,7 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
       <div className="flex-1 overflow-y-auto px-5 py-6">
         <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
-        <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={e => { setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
         <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
@@ -2308,12 +2341,14 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'image-question', question?.question_key)
   const savedAnswer = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)
   const storedAnswer = typeof savedAnswer === 'string' ? savedAnswer : ''
+  const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
 
   useEffect(() => {
-    // Restore the team's previous response when the host reopens answers.
+    // Restore an unsubmitted local draft before falling back to the server response.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAnswer(storedAnswer)
-  }, [question?.question_key, storedAnswer])
+    setAnswer(readPlayerDraft<string>(localStorage, draftKey) ?? storedAnswer)
+  }, [draftKey, storedAnswer])
+  useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2329,7 +2364,7 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
         </div>
         <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
-        <textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={e => { setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
         <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
@@ -2347,12 +2382,14 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
   const choices = optionObjects(question?.options)
   const savedSelection = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)
   const storedSelection = typeof savedSelection === 'string' ? savedSelection : ''
+  const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
 
   useEffect(() => {
     // Restore the team's previous response when the host reopens answers.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSelected(storedSelection || null)
-  }, [question?.question_key, storedSelection])
+    setSelected((readPlayerDraft<string>(localStorage, draftKey) ?? storedSelection) || null)
+  }, [draftKey, question?.question_key, storedSelection])
+  useAutoSubmitPlayerDraft(selected ?? '', Boolean(selected) && Boolean(question?.question_key) && !submitting, submit)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2365,7 +2402,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
           {choices.map((choice, i) => {
             const key = choice.key ?? String.fromCharCode(65 + i)
             const selectedNow = selected === key
-            return <button key={key} onClick={() => setSelected(key)} onKeyDown={event => submitPlayerAnswerOnEnter(event, selectedNow && Boolean(question?.question_key) && !submitting, () => { void submit(key) })}
+            return <button key={key} onClick={() => { setSelected(key); writePlayerDraft(localStorage, draftKey, key) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, selectedNow && Boolean(question?.question_key) && !submitting, () => { void submit(key) })}
               style={{ background: selectedNow ? C.violetPale : C.panel, border: `2px solid ${selectedNow ? C.violet : C.line}`, borderRadius: 16, textAlign: 'left', padding: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, fontFamily: 'inherit' }}>
               <span style={{ background: selectedNow ? C.violet : C.ground, color: selectedNow ? '#fff' : C.sub, borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{key}</span>
               <span style={{ color: C.ink, fontWeight: 600, fontSize: 16 }}>{choice.label ?? ''}</span>
@@ -2387,15 +2424,19 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-answer', question?.question_key)
   const storedAnswersKey = JSON.stringify(asStringArray(savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)))
+  const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
+  const inputRefs = useRef<Array<HTMLInputElement | null>>([])
 
   useEffect(() => {
     const storedAnswers = JSON.parse(storedAnswersKey) as string[]
-    // Resize local inputs and restore the team's previous response when answers reopen.
+    const localDraft = readPlayerDraft<string[]>(localStorage, draftKey) ?? storedAnswers
+    // Resize inputs and restore an unsubmitted local draft before the server response.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAnswers(Array.from({ length: count }, (_, i) => storedAnswers[i] ?? ''))
-  }, [count, question?.question_key, storedAnswersKey])
-  const setA = (i: number, value: string) => setAnswers(current => current.map((answer, index) => index === i ? value : answer))
+    setAnswers(Array.from({ length: count }, (_, i) => localDraft[i] ?? ''))
+  }, [count, draftKey, question?.question_key, storedAnswersKey])
+  const setA = (i: number, value: string) => setAnswers(current => { const next = current.map((answer, index) => index === i ? value : answer); writePlayerDraft(localStorage, draftKey, next); return next })
   const anyFilled = answers.some(answer => answer.trim())
+  useAutoSubmitPlayerDraft(answers, anyFilled && Boolean(question?.question_key) && !submitting, submit)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2406,7 +2447,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · 1 point per correct answer`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {answers.map((answer, i) => <div key={i}>
-            <input value={answer} onChange={e => setA(i, e.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, anyFilled && Boolean(question?.question_key) && !submitting, () => { void submit(answers) })} placeholder="Type an answer…"
+            <input ref={element => { inputRefs.current[i] = element }} value={answer} onChange={e => setA(i, e.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); inputRefs.current[i + 1]?.focus() } }} placeholder="Type an answer…"
               aria-label={`Answer ${i + 1}`}
               style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 17, outline: 'none', width: '100%', padding: '13px 16px', fontFamily: 'inherit' }} />
           </div>)}
@@ -2427,14 +2468,18 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
   const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-part', question?.question_key)
   const storedAnswersKey = JSON.stringify(asStringArray(savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)))
+  const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
+  const inputRefs = useRef<Array<HTMLInputElement | null>>([])
 
   useEffect(() => {
     const storedAnswers = JSON.parse(storedAnswersKey) as string[]
-    // Resize local inputs and restore the team's previous response when answers reopen.
+    const localDraft = readPlayerDraft<string[]>(localStorage, draftKey) ?? storedAnswers
+    // Resize inputs and restore an unsubmitted local draft before the server response.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAnswers(Array.from({ length: count }, (_, i) => storedAnswers[i] ?? ''))
-  }, [count, question?.question_key, storedAnswersKey])
+    setAnswers(Array.from({ length: count }, (_, i) => localDraft[i] ?? ''))
+  }, [count, draftKey, question?.question_key, storedAnswersKey])
   const anyFilled = answers.some(answer => answer.trim())
+  useAutoSubmitPlayerDraft(answers, anyFilled && Boolean(question?.question_key) && !submitting, submit)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2447,7 +2492,7 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
           {parts.map((part, i) => <div key={part.label ?? i}>
             <p style={{ color: C.violet, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', marginBottom: 8 }}>PART {part.label ?? String.fromCharCode(65 + i)}</p>
             <p style={{ color: C.ink, fontSize: 14, lineHeight: 1.45, marginBottom: 9 }}>{part.clue}</p>
-            <input value={answers[i] ?? ''} onChange={e => setAnswers(current => current.map((value, index) => index === i ? e.target.value : value))} onKeyDown={event => submitPlayerAnswerOnEnter(event, anyFilled && Boolean(question?.question_key) && !submitting, () => { void submit(answers) })} placeholder="Answer…"
+            <input ref={element => { inputRefs.current[i] = element }} value={answers[i] ?? ''} onChange={e => setAnswers(current => { const next = current.map((value, index) => index === i ? e.target.value : value); writePlayerDraft(localStorage, draftKey, next); return next })} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); inputRefs.current[i + 1]?.focus() } }} placeholder="Answer…"
               style={{ border: `2px solid ${answers[i] ? C.violet : C.line}`, borderRadius: 12, background: C.panel, color: C.ink, fontSize: 16, outline: 'none', width: '100%', padding: '12px 14px', fontFamily: 'inherit' }} />
           </div>)}
         </div>
@@ -2470,6 +2515,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
   const optionItemsKey = JSON.stringify(Array.isArray(question?.options) ? question.options.map(String) : [])
   const correctItemsKey = JSON.stringify(asStringArray(question?.correct_answer))
   const storedItemsKey = JSON.stringify(asStringArray(savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)))
+  const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
 
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const snapshots = useRef<Map<string, number>>(new Map())
@@ -2478,13 +2524,15 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
     const optionItems = JSON.parse(optionItemsKey) as string[]
     const correctItems = JSON.parse(correctItemsKey) as string[]
     const storedItems = JSON.parse(storedItemsKey) as string[]
-    const next = storedItems.length
-      ? storedItems
+    const localDraft = readPlayerDraft<string[]>(localStorage, draftKey) ?? storedItems
+    const next = localDraft.length
+      ? localDraft
       : initialRankingOrder(optionItems, correctItems, question?.question_key ?? 'ranking-question')
     // Reset the order for a new question, or restore it when answers reopen.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (next.length) setItems(next)
-  }, [question?.question_key, optionItemsKey, correctItemsKey, storedItemsKey])
+  }, [question?.question_key, optionItemsKey, correctItemsKey, draftKey, storedItemsKey])
+  useAutoSubmitPlayerDraft(items, items.length > 0 && Boolean(question?.question_key) && !submitting, submit)
 
   function move(i: number, dir: -1 | 1) {
     const j = i + dir
@@ -2503,6 +2551,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
     setItems(current => {
       const next = [...current]
       ;[next[i], next[j]] = [next[j], next[i]]
+      writePlayerDraft(localStorage, draftKey, next)
       return next
     })
 
@@ -3006,7 +3055,8 @@ function ShowGame() {
     if (activeShowGame && ['audience-question', 'in-show-tiebreaker', 'tiebreaker-style-question'].includes(activeShowGame.game_type)) {
       if (audienceShowGameIdRef.current !== activeShowGame.id) {
         audienceShowGameIdRef.current = activeShowGame.id
-        setAudienceResponse('')
+        const audienceDraftKey = playerDraftStorageKey(gameId, teamId, `show-game:${activeShowGame.id}`)
+        setAudienceResponse(readPlayerDraft<string>(localStorage, audienceDraftKey) ?? '')
         setAudienceResponseRow(null)
         setAudienceResponses([])
       }
@@ -3164,7 +3214,7 @@ function ShowGame() {
       setOwnChoice(choice)
     } catch (choiceError) {
       const message = readableErrorMessage(choiceError)
-      setError(message.includes('CLOSED') ? 'Positions are already locked for this round.' : 'That choice did not go through. Try again.')
+      setError(message.includes('FINAL_LANE_TAKEN') ? 'Final showdown: choose a different lane from the other team.' : message.includes('CLOSED') ? 'Positions are already locked for this round.' : 'That choice did not go through. Try again.')
     } finally {
       choiceBusyRef.current = false
       setChoiceBusy(false)
@@ -3323,6 +3373,7 @@ function ShowGame() {
     ? treasureAccruedMs(new Date(ownTreasure.stealing_started_at).getTime(), showGameNow) : 0
   const treasureWarmingUp = treasureHolding && treasureHoldElapsedMs < TREASURE_WARMUP_MS
   const audienceQuestion = audienceQuestionFromSettings(showGame?.settings)
+  const audienceDraftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), teamId, showGame?.id ? `show-game:${showGame.id}` : undefined)
   const eliminationState = eliminationShowGameState(showGame?.settings)
   const showingInstructions = showGame?.status === 'ready'
   const eligibleIds = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings)
@@ -3407,10 +3458,10 @@ function ShowGame() {
                   className="flex shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 py-1 text-xs font-black disabled:cursor-default disabled:opacity-50">👍 {response.vote_count}</button>}
               </div>)}
             </div>}
-            <div className="mt-5"><WaitMsg msg="The host is choosing the result…" /></div>
+            <div className="mt-5"><WaitMsg msg={isInShowTiebreaker ? 'Waiting for the other tied teams and the result…' : 'The host is choosing the result…'} /></div>
           </div> : <div className="mt-6">
             <label htmlFor="audience-response" style={{ color: C.sub }} className="mb-2 block text-left text-xs font-black uppercase tracking-wider">Your response</label>
-            <input id="audience-response" type="text" inputMode={audienceQuestion.mode === 'closest-number' ? 'decimal' : 'text'} value={audienceResponse} onChange={event => setAudienceResponse(audienceQuestion.mode === 'closest-number' ? formatNumericResponseInput(event.target.value) : event.target.value)}
+            <input id="audience-response" type="text" inputMode={audienceQuestion.mode === 'closest-number' ? 'decimal' : 'text'} value={audienceResponse} onChange={event => { const next = audienceQuestion.mode === 'closest-number' ? formatNumericResponseInput(event.target.value) : event.target.value; setAudienceResponse(next); writePlayerDraft(localStorage, audienceDraftKey, next) }}
               onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(audienceResponse.trim()), () => { void submitAudienceResponse() })}
               placeholder={audienceQuestion.mode === 'closest-number' ? 'Enter your best guess' : 'Write something brilliant…'}
               style={{ border: `2px solid ${C.violet}`, color: C.ink }} className="w-full rounded-2xl bg-white px-4 py-4 text-lg focus:outline-none" />
@@ -3662,7 +3713,8 @@ function FinalResult() {
   const { teams, teamId } = useLiveLeaderboard(showFinalLeaderboard)
   const myIndex = teams.findIndex(team => team.id === teamId)
   const me = teams.find(team => team.id === teamId)
-  const finalPlacement = me?.final_placement ?? (myIndex >= 0 ? myIndex + 1 : null)
+  const fallbackPlacements = competitionPlacements(teams)
+  const finalPlacement = me?.final_placement ?? (myIndex >= 0 ? fallbackPlacements[myIndex] ?? null : null)
   if (!snapshot.loaded) return <PlayerSnapshotLoading />
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -3691,7 +3743,7 @@ function FinalResult() {
             <p style={{ color: C.sub, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textAlign: 'left', marginBottom: 10 }}>FINAL STANDINGS</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {teams.map((team, i) => <div key={team.id} style={{ background: team.id === teamId ? C.violetMist : C.panel, border: `1px solid ${team.id === teamId ? C.violet : C.line}`, borderRadius: 13, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
-                <span style={{ color: C.sub, width: 36, fontWeight: 800 }}>{ordinalPlacement(team.final_placement ?? i + 1)}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.violet, fontWeight: 800 }}>{team.score}</span>}
+                <span style={{ color: C.sub, width: 36, fontWeight: 800 }}>{ordinalPlacement(team.final_placement ?? fallbackPlacements[i] ?? i + 1)}</span><span style={{ color: C.ink, flex: 1, fontWeight: team.id === teamId ? 800 : 600 }}>{team.name}</span>{scoresVisible && <span style={{ color: C.violet, fontWeight: 800 }}>{team.score}</span>}
               </div>)}
             </div>
             <p style={{ color: C.sub, fontSize: 13, marginTop: 24 }}>Thanks for playing!</p>
@@ -3964,7 +4016,7 @@ function PartialCorrect() {
       <div className="flex-1 overflow-y-auto px-5 py-5">
         <PlayerQuestionCard prompt={snapshot.prompt || 'Question result'} />
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-          <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.go, fontWeight: 900 }}>½</div>
+          <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.go, fontWeight: 900 }}>{totalAwarded}/{totalMax}</div>
           <h1 style={{ color: C.ink, fontSize: 30 }} className="font-black">{totalAwarded} of {totalMax} points</h1>
           <PlayerQuestionResultSummary snapshot={snapshot} />
           {scoresVisible && <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>}

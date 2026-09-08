@@ -358,15 +358,15 @@ export function storedSubmissionGrading(
   return grading
 }
 
-export function gradingPoints(grading: SubmissionGrading, max: number) {
-  return Math.min(
-    grading.items.filter(item => item.status === 'correct').length,
-    Math.max(1, max || 1),
-  )
+export function gradingPoints(grading: SubmissionGrading, max: number, allOrNothing = false) {
+  const maximum = Math.max(1, max || 1)
+  const correct = grading.items.filter(item => item.status === 'correct').length
+  if (allOrNothing) return grading.items.length > 0 && correct === grading.items.length ? maximum : 0
+  return Math.min(correct, maximum)
 }
 
 export function scoreSubmission(question: GradingQuestion, submission: GradingSubmission) {
   const max = Math.max(1, question.points_max || 1)
   const grading = storedSubmissionGrading(question, submission)
-  return { grading, points: gradingPoints(grading, max), max }
+  return { grading, points: gradingPoints(grading, max, question.question_type === 'ranking'), max }
 }

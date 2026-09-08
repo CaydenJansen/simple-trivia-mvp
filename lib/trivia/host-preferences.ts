@@ -21,6 +21,8 @@ const PERSISTENT_GAME_SETTING_KEYS = [
   'submitted_answers_editable',
   'top_prizes',
   'bottom_prizes',
+  'other_prizes',
+  'skip_unneeded_tiebreakers',
 ] as const
 
 export function persistentHostGameSettings(settings: Record<string, Json>) {

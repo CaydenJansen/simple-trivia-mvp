@@ -1,3 +1,5 @@
+import { customPrizeSettings } from './prizes'
+
 export type ScoredTeam = {
   id: string
   name: string
@@ -44,12 +46,17 @@ function scoreGroups<T extends ScoredTeam>(teams: T[]) {
 }
 
 export function consequentialTies(teams: ScoredTeam[], settings: unknown): ConsequentialTie[] {
-  const topTargets = new Set([1])
+  const skipUnneeded = Boolean(settings && typeof settings === 'object' && !Array.isArray(settings) && (settings as Record<string, unknown>).skip_unneeded_tiebreakers === true)
+  const topTargets = new Set<number>(skipUnneeded ? [] : [1])
   const bottomTargets = new Set<number>()
   if (settings && typeof settings === 'object' && !Array.isArray(settings)) {
     const value = settings as Record<string, unknown>
     enabledPrizePlaces(value.top_prizes).forEach(place => topTargets.add(place))
     enabledPrizePlaces(value.bottom_prizes).forEach(place => bottomTargets.add(place))
+    customPrizeSettings(value.other_prizes).filter(setting => setting.enabled).forEach(setting => {
+      if (setting.position <= teams.length) topTargets.add(setting.position)
+      else if (setting.missingBehavior === 'closest' && teams.length > 0) topTargets.add(teams.length)
+    })
   }
 
   let teamsAbove = 0

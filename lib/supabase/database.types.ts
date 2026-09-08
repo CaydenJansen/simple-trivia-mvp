@@ -1262,6 +1262,14 @@ export type Database = {
         Args: { p_game_show_game_id: string }
         Returns: LiveShowGameRow
       }
+      rescore_submission: {
+        Args: { p_submission_id: string; p_grading_json: Json; p_points_awarded: number }
+        Returns: Json
+      }
+      rescore_bonus_submission: {
+        Args: { p_submission_id: string; p_grading_json: Json; p_points_awarded: number }
+        Returns: Json
+      }
       finalize_question_scoring: {
         Args: {
           p_game_id: string
