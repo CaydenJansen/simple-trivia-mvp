@@ -76,6 +76,7 @@ import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type Tri
 import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib/trivia/question-metadata";
 import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
 import { competitionPlacements, ordinalPlacement } from "@/lib/trivia/leaderboard-ranking";
+import { configuredPrizeTies } from "@/lib/trivia/final-standings";
 import { loadAllSourceRows } from "@/lib/trivia/paginated-source-load";
 import { nextQuizCopyTitle } from "@/lib/trivia/quiz-copy";
 import {
@@ -6181,7 +6182,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
     const loaded = initialAnswers.map((text, index) => ({ text, alts: acceptedGroups[index] ?? [] }))
     return loaded.length > 0 ? loaded : [{ text: '', alts: [] as string[] }]
   })
-  const [scoring, setScoring] = useState<'each' | 'all'>('each')
+  const [scoring, setScoring] = useState<'each' | 'all'>(() => qtype === 'ranking' && question.pointsMax === 1 ? 'all' : 'each')
   const [parts, setParts] = useState(() => {
     const loaded = initialOptions.map((option, index) => ({
       label: option.label ?? String.fromCharCode(65 + index),
@@ -6206,12 +6207,17 @@ function QuestionEditor({ question, title, onClose, onSave }: {
   const hasDestructiveChange = (next: QType) =>
     (qtype === 'multiple-choice' || qtype === 'multi-answer' || qtype === 'multi-part' || qtype === 'ranking') && next === 'single'
 
-  const handleTypeChange = (next: QType) => {
-    if (hasDestructiveChange(next)) { setPendingType(next); return }
+  const applyTypeChange = (next: QType) => {
     setQtype(next)
+    if (next === 'ranking') setScoring('all')
   }
 
-  const confirmTypeChange = () => { if (pendingType) { setQtype(pendingType); setPendingType(null) } }
+  const handleTypeChange = (next: QType) => {
+    if (hasDestructiveChange(next)) { setPendingType(next); return }
+    applyTypeChange(next)
+  }
+
+  const confirmTypeChange = () => { if (pendingType) { applyTypeChange(pendingType); setPendingType(null) } }
 
   const blocked = !!pendingType
 
@@ -6260,7 +6266,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
       correctAnswer = rankingItems.map(item => item.trim()).filter(Boolean)
       options = correctAnswer
       acceptedAnswers = []
-      pointsMax = 1
+      pointsMax = scoring === 'all' ? 1 : Math.max(1, asStringArray(correctAnswer).length)
     }
 
     if ((qtype === 'single' && !String(correctAnswer).trim()) || (qtype !== 'single' && asStringArray(correctAnswer).length === 0 && qtype !== 'multiple-choice')) {
@@ -7599,7 +7605,7 @@ function HostSetup({ go }: { go: Go }) {
         setTopPrizes(normalizedPrizePlaces(settings.top_prizes))
         setBotPrizes(normalizedPrizePlaces(settings.bottom_prizes))
         setCustomPrizes(normalizedCustomPrizePlaces(settings.other_prizes))
-        setSkipUnneededTiebreakers(settings.skip_unneeded_tiebreakers === true)
+        setSkipUnneededTiebreakers(settings.skip_unneeded_in_show_tiebreakers === true)
       } catch (error) {
         console.error('Could not load host defaults:', error)
         if (active) setSetupError('Your saved hosting defaults could not be loaded. The standard settings are shown instead.')
@@ -7666,7 +7672,7 @@ function HostSetup({ go }: { go: Go }) {
         top_prizes: topPrizes,
         bottom_prizes: botPrizes,
         other_prizes: customPrizes,
-        skip_unneeded_tiebreakers: skipUnneededTiebreakers,
+        skip_unneeded_in_show_tiebreakers: skipUnneededTiebreakers,
       }
       const { data: game, error: gameError } = await supabase
         .rpc('create_game_from_quiz_with_show_games', {
@@ -7957,8 +7963,8 @@ function HostSetup({ go }: { go: Go }) {
               <label style={{ borderTop: `1px solid ${C.line}` }} className="flex cursor-pointer items-start gap-3 pt-4">
                 <input type="checkbox" checked={skipUnneededTiebreakers} onChange={event => setSkipUnneededTiebreakers(event.target.checked)} style={{ accentColor: C.violet }} className="mt-0.5" />
                 <span>
-                  <strong style={{ color: C.ink }} className="block text-sm">Skip unneeded final tiebreakers</strong>
-                  <span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">If none of the prize positions are tied, finish the show without a backup tiebreaker.</span>
+                  <strong style={{ color: C.ink }} className="block text-sm">Skip unneeded in-show tiebreakers</strong>
+                  <span style={{ color: C.sub }} className="mt-1 block text-xs leading-5">When an in-show tiebreaker is reached, skip it if none of your configured prize positions are tied. Backup tiebreakers still appear automatically when a final tie needs resolving.</span>
                 </span>
               </label>
             </div>
@@ -8167,7 +8173,7 @@ function Lobby({ go }: { go: Go }) {
       if (!active) return
 
       channel = supabase
-        .channel(`lobby-teams-${game.id}`)
+        .channel(`lobby-teams-${game.id}-${crypto.randomUUID()}`)
         .on(
           "postgres_changes",
           {
@@ -8845,7 +8851,7 @@ function LiveQuestion({ go }: { go: Go }) {
 
       if (!channel) {
         channel = supabase
-          .channel(`host-live-question-${game.id}`)
+          .channel(`host-live-question-${game.id}-${crypto.randomUUID()}`)
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'game_show_game_choices', filter: `game_id=eq.${game.id}` },
@@ -8966,6 +8972,82 @@ function LiveQuestion({ go }: { go: Go }) {
   }, [activeShowGameId, activeShowGameStatus, showGame?.game_type])
 
   async function prepareShowGame(nextShowGame: LiveShowGameDefinition) {
+    let shouldSkip = false
+    if (nextShowGame.game_type === 'in-show-tiebreaker'
+      && liveGameSettingsRef.current.skip_unneeded_in_show_tiebreakers === true) {
+      if (!liveGameId) throw new Error('Live game is not available.')
+      const { data: freshTeams, error: teamError } = await supabase
+        .from('teams')
+        .select('id, name, score')
+        .eq('game_id', liveGameId)
+        .order('created_at', { ascending: true })
+      if (teamError) throw teamError
+      const currentTeams = (freshTeams ?? []) as LiveTeam[]
+      setTeams(currentTeams)
+      shouldSkip = configuredPrizeTies(currentTeams, liveGameSettingsRef.current).length === 0
+    }
+
+    if (shouldSkip) {
+      const nextItem = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
+        .find(item => item.itemPosition > nextShowGame.item_position) ?? null
+
+      if (!nextItem) {
+        if (!liveGameId) throw new Error('No live game to finalize.')
+        await finalizeLiveGame(liveGameId)
+        go('final-results')
+        return
+      }
+
+      if (nextItem.roundNumber !== nextShowGame.round_number) {
+        await updateLiveGame({
+          current_screen: roundResultsScreen(leaderboardVisibility),
+          answer_phase: 'closed',
+          current_show_game_key: null,
+        })
+        go('end-of-round')
+        return
+      }
+
+      if (nextItem.kind === 'content') {
+        await updateLiveGame({
+          current_screen: 'content-screen',
+          answer_phase: 'closed',
+          current_content_screen_key: nextItem.content.screen_key,
+          current_show_game_key: null,
+        })
+        setContentScreen(nextItem.content)
+        setShowGame(null)
+        setGameScreen('content-screen')
+        setPhase('closed')
+        return
+      }
+
+      if (nextItem.kind === 'show-game') {
+        await prepareShowGame(nextItem.showGame)
+        return
+      }
+
+      await updateLiveGame({
+        current_screen: nextItem.question.question_type,
+        answer_phase: 'open',
+        answer_editing_allowed: submittedAnswersEditableFromSettings(liveGameSettingsRef.current),
+        question_stage: 'core',
+        current_question_key: nextItem.question.question_key,
+        current_content_screen_key: null,
+        current_show_game_key: null,
+      })
+      setQuestion(nextItem.question)
+      setContentScreen(null)
+      setShowGame(null)
+      setPhase('open')
+      setAnswerEditingAllowed(submittedAnswersEditableFromSettings(liveGameSettingsRef.current))
+      setQuestionStage('core')
+      setGameScreen(nextItem.question.question_type)
+      setSubmissions([])
+      setBonusSubmissions([])
+      return
+    }
+
     setWheelSettled(false)
     await updateLiveGame({
       status: 'live',
@@ -9222,7 +9304,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
   reviewBusyRef.current.add(reviewKey)
   try {
-    const nextPoints = gradingPoints(next, question.points_max, question.question_type === 'ranking')
+    const nextPoints = gradingPoints(next, question.points_max, question.question_type === 'ranking' && question.points_max === 1)
     const { error } = phase === 'revealed'
       ? await supabase.rpc('rescore_submission', { p_submission_id: submissionId, p_grading_json: next, p_points_awarded: nextPoints })
       : await supabase.from('submissions').update({ grading_json: next }).eq('id', submissionId)
@@ -10884,7 +10966,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           const bonusRow = bonusAnswerRows.find(row => row.team.id === team.id) ?? null
           const bonusItem = bonusRow?.grading?.items[0] ?? null
           const hasReview = items.some(item => item.status === 'review') || (showBonusInAnswers && bonusItem?.status === 'review')
-          const score = (grading ? gradingPoints(grading, question?.points_max ?? 1, question?.question_type === 'ranking') : 0)
+          const score = (grading ? gradingPoints(grading, question?.points_max ?? 1, question?.question_type === 'ranking' && (question?.points_max ?? 1) === 1) : 0)
             + (showBonusInAnswers && bonusRow?.grading ? gradingPoints(bonusRow.grading, activeBonus?.points ?? 1) : 0)
           const max = (question?.points_max ?? Math.max(1, items.length)) + (showBonusInAnswers ? activeBonus?.points ?? 1 : 0)
 
@@ -11324,7 +11406,7 @@ function EndOfRound({ go }: { go: Go }) {
 
       if (!channel) {
         channel = supabase
-          .channel(`host-round-summary-${game.id}`)
+          .channel(`host-round-summary-${game.id}-${crypto.randomUUID()}`)
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${game.id}` },
@@ -12027,7 +12109,7 @@ function FinalResults({ go }: { go: Go }) {
     const gameId = localStorage.getItem('simple-trivia-host-game-id')
     const channel = gameId
       ? supabase
-        .channel(`host-final-${gameId}`)
+        .channel(`host-final-${gameId}-${crypto.randomUUID()}`)
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadFinal() })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${gameId}` }, () => { void loadFinal() })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'game_tiebreaker_submissions', filter: `game_id=eq.${gameId}` }, () => { void loadFinal() })

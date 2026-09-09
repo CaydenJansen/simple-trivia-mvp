@@ -368,5 +368,5 @@ export function gradingPoints(grading: SubmissionGrading, max: number, allOrNoth
 export function scoreSubmission(question: GradingQuestion, submission: GradingSubmission) {
   const max = Math.max(1, question.points_max || 1)
   const grading = storedSubmissionGrading(question, submission)
-  return { grading, points: gradingPoints(grading, max, question.question_type === 'ranking'), max }
+  return { grading, points: gradingPoints(grading, max, question.question_type === 'ranking' && max === 1), max }
 }

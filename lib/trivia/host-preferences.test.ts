@@ -21,4 +21,11 @@ describe('host game preferences', () => {
       leaderboard_visibility: 'round',
     })).toEqual({ auto_run_mode: 'round', leaderboard_visibility: 'round' })
   })
+
+  it('persists only the corrected in-show tiebreaker skip setting', () => {
+    expect(persistentHostGameSettings({
+      skip_unneeded_tiebreakers: true,
+      skip_unneeded_in_show_tiebreakers: true,
+    })).toEqual({ skip_unneeded_in_show_tiebreakers: true })
+  })
 })

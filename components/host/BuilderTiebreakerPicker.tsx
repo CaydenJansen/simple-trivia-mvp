@@ -15,6 +15,7 @@ export default function BuilderTiebreakerPicker({
   onClose: () => void;
 }) {
   const [tiebreakers, setTiebreakers] = useState<PickerSourceTiebreaker[]>([]);
+  const [matchingCount, setMatchingCount] = useState(0);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +30,7 @@ export default function BuilderTiebreakerPicker({
       setError(null);
       let query = supabase
         .from("source_tiebreakers")
-        .select("*")
+        .select("*", { count: "exact" })
         .eq("status", "active")
         .eq("is_verified", true)
         .order("updated_at", { ascending: false })
@@ -44,8 +45,10 @@ export default function BuilderTiebreakerPicker({
         console.error("Could not load tiebreaker library:", result.error);
         setError("Could not load tiebreakers.");
         setTiebreakers([]);
+        setMatchingCount(0);
       } else {
         setTiebreakers(result.data ?? []);
+        setMatchingCount(result.count ?? 0);
       }
       setLoading(false);
     }, 180);
@@ -105,6 +108,10 @@ export default function BuilderTiebreakerPicker({
             className="w-full rounded-xl border border-zinc-200 px-4 py-2.5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
         </div>
         <div className="flex-1 overflow-y-auto p-4">
+          <div className="mb-3 flex items-center justify-between text-xs text-zinc-500">
+            <span>{loading ? "Counting tiebreakers..." : `${matchingCount} matching tiebreaker${matchingCount === 1 ? "" : "s"}`}</span>
+            {!loading && matchingCount > 100 ? <span>Showing the newest 100</span> : null}
+          </div>
           {error ? <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : loading ? (
             <p className="py-14 text-center text-sm text-zinc-500">Loading tiebreakers…</p>
           ) : tiebreakers.length === 0 ? (

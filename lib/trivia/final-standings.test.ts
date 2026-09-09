@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildFinalStandings, consequentialTies } from './final-standings'
+import { buildFinalStandings, configuredPrizeTies, consequentialTies } from './final-standings'
 
 const teams = [
   { id: 'a', name: 'A', score: 48 },
@@ -29,8 +29,8 @@ describe('consequential final ties', () => {
     expect(consequentialTies(lowTie, {})).toHaveLength(1)
   })
 
-  it('skips an otherwise unnecessary first-place tie when enabled', () => {
-    expect(consequentialTies(teams, { skip_unneeded_tiebreakers: true })).toEqual([])
+  it('always keeps backup tiebreakers available for a first-place tie', () => {
+    expect(consequentialTies(teams, { skip_unneeded_tiebreakers: true })).toHaveLength(1)
   })
 
   it('detects a tie crossing a configured custom prize position', () => {
@@ -40,10 +40,16 @@ describe('consequential final ties', () => {
       { id: 'c', name: 'C', score: 4 },
       { id: 'd', name: 'D', score: 1 },
     ]
-    expect(consequentialTies(middleTie, {
-      skip_unneeded_tiebreakers: true,
+    expect(configuredPrizeTies(middleTie, {
       other_prizes: [{ position: 2, enabled: true, msg: 'Prize', missing_behavior: 'ignore' }],
     })[0]).toMatchObject({ score: 4, teamIds: ['b', 'c'], topPlaces: [2, 3] })
+  })
+
+  it('only keeps an in-show tiebreaker when a configured prize place is tied', () => {
+    expect(configuredPrizeTies(teams, {})).toEqual([])
+    expect(configuredPrizeTies(teams, {
+      top_prizes: [{ enabled: true, msg: 'Winner prize' }],
+    })).toHaveLength(1)
   })
 })
 

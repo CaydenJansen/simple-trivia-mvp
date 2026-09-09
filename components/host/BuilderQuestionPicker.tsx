@@ -32,6 +32,7 @@ export default function BuilderQuestionPicker({
   onClose: () => void;
 }) {
   const [questions, setQuestions] = useState<PickerSourceQuestion[]>([]);
+  const [matchingCount, setMatchingCount] = useState(0);
   const [usageByQuestion, setUsageByQuestion] = useState<Record<string, QuestionQuizUsage[]> | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -112,7 +113,7 @@ export default function BuilderQuestionPicker({
         setUsageByQuestion(null);
         let query = supabase
           .from("source_question_catalog")
-          .select("*")
+          .select("*", { count: "exact" })
           .eq("origin", origin)
           .eq("status", "active")
           .order("updated_at", { ascending: false })
@@ -125,14 +126,16 @@ export default function BuilderQuestionPicker({
         if (difficulty) query = query.eq("editorial_difficulty", Number(difficulty));
         if (tagId) query = query.contains("tag_ids", [tagId]);
 
-        const { data, error: queryError } = await query;
+        const { data, error: queryError, count } = await query;
         if (!active) return;
         if (queryError) {
           setError("Could not load questions.");
           setQuestions([]);
+          setMatchingCount(0);
         } else {
           const loadedQuestions = data ?? [];
           setQuestions(loadedQuestions);
+          setMatchingCount(count ?? 0);
 
           const sourceQuestionIds = loadedQuestions.map((question) => question.id);
           if (sourceQuestionIds.length === 0) {
@@ -235,6 +238,10 @@ export default function BuilderQuestionPicker({
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
+          <div className="mb-3 flex items-center justify-between text-xs text-zinc-500">
+            <span>{loading ? "Counting questions..." : `${matchingCount} matching question${matchingCount === 1 ? "" : "s"}`}</span>
+            {!loading && matchingCount > 50 ? <span>Showing the newest 50</span> : null}
+          </div>
           {error ? <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : loading ? (
             <p className="py-16 text-center text-sm text-zinc-500">Loading questions…</p>
           ) : questions.length === 0 ? (

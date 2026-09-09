@@ -45,9 +45,8 @@ function scoreGroups<T extends ScoredTeam>(teams: T[]) {
   return groups
 }
 
-export function consequentialTies(teams: ScoredTeam[], settings: unknown): ConsequentialTie[] {
-  const skipUnneeded = Boolean(settings && typeof settings === 'object' && !Array.isArray(settings) && (settings as Record<string, unknown>).skip_unneeded_tiebreakers === true)
-  const topTargets = new Set<number>(skipUnneeded ? [] : [1])
+function tiesAtPrizePositions(teams: ScoredTeam[], settings: unknown, includeImplicitFirst: boolean): ConsequentialTie[] {
+  const topTargets = new Set<number>(includeImplicitFirst ? [1] : [])
   const bottomTargets = new Set<number>()
   if (settings && typeof settings === 'object' && !Array.isArray(settings)) {
     const value = settings as Record<string, unknown>
@@ -69,6 +68,14 @@ export function consequentialTies(teams: ScoredTeam[], settings: unknown): Conse
     if (!topPlaces.some(place => topTargets.has(place)) && !bottomPlaces.some(place => bottomTargets.has(place))) return []
     return [{ score: group[0].score, teamIds: group.map(team => team.id), topPlaces, bottomPlaces }]
   })
+}
+
+export function consequentialTies(teams: ScoredTeam[], settings: unknown): ConsequentialTie[] {
+  return tiesAtPrizePositions(teams, settings, true)
+}
+
+export function configuredPrizeTies(teams: ScoredTeam[], settings: unknown): ConsequentialTie[] {
+  return tiesAtPrizePositions(teams, settings, false)
 }
 
 export function buildFinalStandings<T extends ScoredTeam>(teams: T[], resolutions: TieResolution[]): FinalStanding<T>[] {

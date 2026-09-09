@@ -249,4 +249,14 @@ describe('ranking grading', () => {
     expect(gradingPoints(buildSubmissionGrading(ranking, JSON.stringify(['Mercury', 'Venus', 'Earth'])), 1, true)).toBe(1)
     expect(gradingPoints(buildSubmissionGrading(ranking, JSON.stringify(['Mercury', 'Earth', 'Venus'])), 1, true)).toBe(0)
   })
+
+  it('still supports explicit per-place ranking scoring', () => {
+    const ranking = question({
+      question_type: 'ranking',
+      correct_answer: ['Mercury', 'Venus', 'Earth'],
+      points_max: 3,
+    })
+    const score = buildSubmissionGrading(ranking, JSON.stringify(['Mercury', 'Earth', 'Venus']))
+    expect(gradingPoints(score, 3, false)).toBe(1)
+  })
 })

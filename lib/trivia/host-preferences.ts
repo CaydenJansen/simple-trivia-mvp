@@ -22,7 +22,7 @@ const PERSISTENT_GAME_SETTING_KEYS = [
   'top_prizes',
   'bottom_prizes',
   'other_prizes',
-  'skip_unneeded_tiebreakers',
+  'skip_unneeded_in_show_tiebreakers',
 ] as const
 
 export function persistentHostGameSettings(settings: Record<string, Json>) {

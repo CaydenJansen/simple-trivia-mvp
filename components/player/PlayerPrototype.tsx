@@ -326,7 +326,7 @@ function useLivePlayerSync(
     void loadGameState()
 
     const channel = supabase
-      .channel(`player-game-${gameId}`)
+      .channel(`player-game-${gameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => {
         void applyGameState(payload.new as RemoteGameState)
       })
@@ -415,8 +415,11 @@ function usePlayerAutoRunClock() {
     }
 
     void load()
+    // React may restart an effect before Supabase has finished removing the
+    // previous channel. A unique topic prevents the replacement effect from
+    // attaching callbacks to an already-subscribed channel.
     const channel = supabase
-      .channel(`player-auto-run-clock-${activeGameId}`)
+      .channel(`player-auto-run-clock-${activeGameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, payload => {
         if (!active) return
         setSettings((payload.new as { settings?: Json }).settings ?? null)
@@ -510,7 +513,7 @@ function useLiveQuestionDefinition() {
 
     void loadQuestion()
     const channel = supabase
-      .channel(`player-question-${gameId}`)
+      .channel(`player-question-${gameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => {
         void loadQuestion((payload.new as { current_question_key?: string | null }).current_question_key ?? null)
       })
@@ -591,7 +594,7 @@ function useLiveContentScreenDefinition() {
 
     void loadContentScreen()
     const channel = supabase
-      .channel(`player-content-screen-${gameId}`)
+      .channel(`player-content-screen-${gameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => {
         void loadContentScreen((payload.new as { current_content_screen_key?: string | null }).current_content_screen_key ?? null)
       })
@@ -1188,7 +1191,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
 
     void loadSnapshot()
     const channel = supabase
-      .channel(`player-snapshot-${teamId}`)
+      .channel(`player-snapshot-${teamId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'teams', filter: `id=eq.${teamId}` }, () => { void loadSnapshot() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'submissions', filter: `team_id=eq.${teamId}` }, () => { void loadSnapshot() })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void loadSnapshot() })
@@ -1234,7 +1237,7 @@ function useLeaderboardVisibility() {
 
     void load()
     const channel = supabase
-      .channel(`player-leaderboard-visibility-${activeGameId}`)
+      .channel(`player-leaderboard-visibility-${activeGameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, () => { void load() })
       .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
     return () => { active = false; void supabase.removeChannel(channel) }
@@ -1259,7 +1262,7 @@ function useAnswerRevealMode() {
 
     void load()
     const channel = supabase
-      .channel(`player-answer-reveal-${activeGameId}`)
+      .channel(`player-answer-reveal-${activeGameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, () => { void load() })
       .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
     return () => { active = false; void supabase.removeChannel(channel) }
@@ -1288,7 +1291,7 @@ function useLiveLeaderboard(enabled = true) {
     }
     void load()
     const channel = supabase
-      .channel(`player-leaderboard-${gameId}`)
+      .channel(`player-leaderboard-${gameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
     return () => { active = false; void supabase.removeChannel(channel) }
@@ -2217,7 +2220,7 @@ function Waiting({ go }: { go: (s: PlayerScreen) => void }) {
     void loadTeamCount()
 
     const channel = supabase
-      .channel(`waiting-teams-${gameId}`)
+      .channel(`waiting-teams-${gameId}-${crypto.randomUUID()}`)
       .on(
         'postgres_changes',
         {
@@ -3109,7 +3112,7 @@ function ShowGame() {
     const gameId = localStorage.getItem('simple-trivia-game-id')
     if (!gameId) return
     void load()
-    const channel = supabase.channel(`player-show-game-${gameId}`)
+    const channel = supabase.channel(`player-show-game-${gameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => { void load((payload.new as { current_show_game_key?: string | null }).current_show_game_key ?? null) })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_games', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_presses', filter: `game_id=eq.${gameId}` }, () => { void load() })
@@ -3829,7 +3832,7 @@ function LiveTiebreaker() {
     }
     void poll()
     const channel = supabase
-      .channel(`player-tiebreaker-${gameId}`)
+      .channel(`player-tiebreaker-${gameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void load() })
       .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
     return () => {
@@ -4140,7 +4143,7 @@ export function PlayerFlow() {
 
     void loadScoreVisibility()
     const channel = supabase
-      .channel(`player-score-visibility-${activeGameId}`)
+      .channel(`player-score-visibility-${activeGameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, () => { void loadScoreVisibility() })
       .subscribe()
     return () => { active = false; void supabase.removeChannel(channel) }
