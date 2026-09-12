@@ -104,6 +104,7 @@ import {
   AUTO_RUN_CONTENT_SECONDS,
   AUTO_RUN_EXTENSION_SECONDS,
   AUTO_RUN_SHOW_GAME_INSTRUCTIONS_SECONDS,
+  AUTO_RUN_SUBMISSION_GRACE_MS,
   autoRunAnswerSeconds,
   autoRunClockColor,
   autoRunClockLabel,
@@ -8449,6 +8450,79 @@ function hostQuestionDetails(question: LiveQuestionDefinition | null): HostQuest
   return []
 }
 
+function questionItemCorrectness(
+  question: LiveQuestionDefinition | null,
+  totalTeams: number,
+  submissions: LiveSubmission[],
+) {
+  if (!question || !['multi-answer', 'multi-part', 'ranking'].includes(question.question_type)) return []
+
+  return asStringArray(question.correct_answer).map((_, itemIndex) => correctnessSummary(
+    totalTeams,
+    submissions.map(submission => ({
+      is_correct: storedSubmissionGrading(question, submission).items[itemIndex]?.status === 'correct',
+    })),
+  ))
+}
+
+function HostCorrectAnswerBreakdown({
+  question,
+  summaries = [],
+  revealed,
+}: {
+  question: LiveQuestionDefinition
+  summaries?: ReturnType<typeof correctnessSummary>[]
+  revealed: boolean
+}) {
+  const answers = asStringArray(question.correct_answer)
+  const details = hostQuestionDetails(question)
+  const answerColor = revealed ? C.go : C.liveViolet
+
+  return (
+    <div className="mt-2 max-w-4xl space-y-2.5">
+      {answers.map((answer, index) => {
+        const detail = details[index]
+        const label = question.question_type === 'multi-part'
+          ? detail?.label ?? String.fromCharCode(65 + index)
+          : String(index + 1)
+        const summary = summaries[index]
+
+        return (
+          <div
+            key={`${label}-${answer}-${index}`}
+            style={{ background: `${C.livePanel}80`, border: `1px solid ${C.liveLine}` }}
+            className="flex flex-wrap items-start gap-3 rounded-xl px-3 py-2.5"
+          >
+            <span
+              style={{ background: `${C.violet}25`, color: '#C4B5FD', border: `1px solid ${C.violet}35` }}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[11px] font-extrabold"
+            >
+              {label}
+            </span>
+            <div className="min-w-0 flex-1">
+              {question.question_type === 'multi-part' && detail?.text && (
+                <p style={{ color: C.liveText }} className="text-sm font-semibold leading-relaxed">{detail.text}</p>
+              )}
+              <p style={{ color: answerColor }} className="break-words text-sm font-extrabold">
+                {question.question_type === 'multi-part' ? `Answer: ${answer}` : answer}
+              </p>
+            </div>
+            {summary && (
+              <span
+                style={{ background: `${C.go}18`, color: C.go, border: `1px solid ${C.go}40` }}
+                className="shrink-0 rounded-lg px-3 py-1.5 text-right tabular-nums"
+              >
+                <strong className="block text-base font-black leading-none">{summary.percentage}%</strong>
+                <span className="mt-1 block text-[9px] font-extrabold uppercase tracking-wide">{summary.correct} of {summary.total}</span>
+              </span>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function correctAnswerDisplay(question: LiveQuestionDefinition | null) {
   if (!question) return '—'
 
@@ -9870,6 +9944,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       : answeredCount >= activeTeams.length
   )
   const coreCorrectness = correctnessSummary(activeTeams.length, activeSubmissions)
+  const coreCorrectnessItems = questionItemCorrectness(question, activeTeams.length, activeSubmissions)
   const bonusCorrectness = correctnessSummary(activeTeams.length, activeBonusSubmissions)
   const leaderboard = [...teams].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
   const leaderboardPlacements = competitionPlacements(leaderboard)
@@ -9970,7 +10045,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const timer = window.setTimeout(() => {
       setAutoRunRemaining(current => {
         if (current <= 1) {
-          window.setTimeout(() => autoRunActionRef.current(), 0)
+          window.setTimeout(() => autoRunActionRef.current(), AUTO_RUN_SUBMISSION_GRACE_MS)
           return 0
         }
         return current - 1
@@ -10628,46 +10703,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   <p style={{ color: C.liveViolet }} className="text-[10px] font-bold uppercase tracking-widest">
                     {question?.question_type === 'multi-part' ? 'Question parts + answers · Host only' : 'Correct Answer · Host only'}
                   </p>
-                  {question?.question_type === 'multi-part' ? (
-                    <div className="mt-2 max-w-4xl space-y-2.5">
-                      {questionDetails.map((detail, index) => {
-                        const answer = asStringArray(question.correct_answer)[index] ?? ''
-                        return (
-                          <div
-                            key={`${detail.label}-${detail.text}`}
-                            className="grid items-start gap-3"
-                            style={{ gridTemplateColumns: '26px minmax(0, 3fr) minmax(140px, 2fr)' }}
-                          >
-                            <span
-                              style={{
-                                background: `${C.violet}25`,
-                                color: '#C4B5FD',
-                                border: `1px solid ${C.violet}35`,
-                              }}
-                              className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-extrabold shrink-0"
-                            >
-                              {detail.label}
-                            </span>
-
-                            <span style={{ color: C.liveText }} className="text-sm font-semibold leading-relaxed pt-0.5">
-                              {detail.text}
-                            </span>
-
-                            <span style={{ color: C.liveViolet }} className="text-left text-sm font-extrabold break-words pt-0.5">
-                              → {answer}
-                            </span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ) : question?.question_type === 'multi-answer' ? (
-                    <div className="mt-1 space-y-1">
-                      {asStringArray(question.correct_answer).map((answer) => (
-                        <p key={answer} style={{ color: C.liveViolet }} className="text-lg font-extrabold">
-                          {answer}
-                        </p>
-                      ))}
-                    </div>
+                  {question && compoundQuestion ? (
+                    <HostCorrectAnswerBreakdown question={question} revealed={false} />
                   ) : (
                     <p style={{ color: C.liveViolet }} className="text-lg font-extrabold mt-0.5">{correctDisplay}</p>
                   )}
@@ -10680,46 +10717,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">
                     {question?.question_type === 'multi-part' ? 'Question parts + answers · Revealed to players' : 'Correct Answer · Revealed to players'}
                   </p>
-                  {question?.question_type === 'multi-part' ? (
-                    <div className="mt-2 max-w-4xl space-y-2.5">
-                      {questionDetails.map((detail, index) => {
-                        const answer = asStringArray(question.correct_answer)[index] ?? ''
-                        return (
-                          <div
-                            key={`${detail.label}-${detail.text}`}
-                            className="grid items-start gap-3"
-                            style={{ gridTemplateColumns: '26px minmax(0, 3fr) minmax(140px, 2fr)' }}
-                          >
-                            <span
-                              style={{
-                                background: `${C.violet}25`,
-                                color: '#C4B5FD',
-                                border: `1px solid ${C.violet}35`,
-                              }}
-                              className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-extrabold shrink-0"
-                            >
-                              {detail.label}
-                            </span>
-
-                            <span style={{ color: C.liveText }} className="text-sm font-semibold leading-relaxed pt-0.5">
-                              {detail.text}
-                            </span>
-
-                            <span style={{ color: C.go }} className="text-left text-sm font-extrabold break-words pt-0.5">
-                              → {answer}
-                            </span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ) : question?.question_type === 'multi-answer' ? (
-                    <div className="mt-1 space-y-1">
-                      {asStringArray(question.correct_answer).map((answer) => (
-                        <p key={answer} style={{ color: C.go }} className="text-xl font-extrabold">
-                          {answer}
-                        </p>
-                      ))}
-                    </div>
+                  {question && compoundQuestion ? (
+                    <HostCorrectAnswerBreakdown question={question} summaries={coreCorrectnessItems} revealed />
                   ) : (
                     <p style={{ color: C.go }} className="text-xl font-extrabold mt-0.5">{correctDisplay}</p>
                   )}
@@ -10802,13 +10801,15 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             <div className="flex items-center gap-3">
               {phase === 'revealed' && autoRunMode === 'off' && teams.length > 0 && (
                 <div className="flex items-center gap-2">
-                  <span
-                    style={{ background: `${C.go}20`, color: C.go, border: `1px solid ${C.go}45` }}
-                    className="rounded-xl px-5 py-3 text-center tabular-nums shadow-lg"
-                  >
-                    <strong className="block text-2xl font-black leading-none">{coreCorrectness.percentage}%</strong>
-                    <span className="mt-1 block text-[11px] font-extrabold uppercase tracking-wide">{coreCorrectness.correct} of {coreCorrectness.total} teams correct</span>
-                  </span>
+                  {!compoundQuestion && (
+                    <span
+                      style={{ background: `${C.go}20`, color: C.go, border: `1px solid ${C.go}45` }}
+                      className="rounded-xl px-5 py-3 text-center tabular-nums shadow-lg"
+                    >
+                      <strong className="block text-2xl font-black leading-none">{coreCorrectness.percentage}%</strong>
+                      <span className="mt-1 block text-[11px] font-extrabold uppercase tracking-wide">{coreCorrectness.correct} of {coreCorrectness.total} teams correct</span>
+                    </span>
+                  )}
                   {activeBonus && (
                     <span
                       style={{ background: `${C.violet}20`, color: '#C4B5FD', border: `1px solid ${C.violet}45` }}
@@ -11622,6 +11623,14 @@ function EndOfRound({ go }: { go: Go }) {
   const roundNumber = currentQuestion?.round_number ?? 1
   const playersSeeRoundLeaderboard = roundResultsScreen(leaderboardVisibility) === 'round-results'
   const revealCorrectness = correctnessSummary(teams.length, currentSubmissions)
+  const revealCorrectnessItems = questionItemCorrectness(
+    currentQuestion,
+    teams.length,
+    roundSubmissions.filter(submission => submission.question_key === currentQuestion?.question_key),
+  )
+  const revealCompoundQuestion = currentQuestion?.question_type === 'multi-answer'
+    || currentQuestion?.question_type === 'multi-part'
+    || currentQuestion?.question_type === 'ranking'
   const revealBonusCorrectness = correctnessSummary(teams.length, currentBonusSubmissions)
   const revealBonus = runtimeBonusFromJson(currentQuestion?.bonus)
   const playerScoresAtCheckpoint = scoreVisibility === 'live' || (scoreVisibility === 'round' && roundFinalized)
@@ -11668,16 +11677,22 @@ function EndOfRound({ go }: { go: Go }) {
             <h1 className="mx-auto mt-3 max-w-3xl text-3xl font-black leading-tight">{currentQuestion.prompt}</h1>
             <div style={{ background: `${C.go}18`, border: `1px solid ${C.go}45` }} className="mx-auto mt-7 max-w-xl rounded-2xl px-5 py-4">
               <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Correct answer</p>
-              <p style={{ color: C.go }} className="mt-2 text-2xl font-extrabold">{correctAnswerDisplay(currentQuestion)}</p>
+              {revealCompoundQuestion ? (
+                <HostCorrectAnswerBreakdown question={currentQuestion} summaries={revealCorrectnessItems} revealed />
+              ) : (
+                <p style={{ color: C.go }} className="mt-2 text-2xl font-extrabold">{correctAnswerDisplay(currentQuestion)}</p>
+              )}
             </div>
             {teams.length > 0 && (
               <div className="mt-5">
                 <p style={{ color: C.liveDim }} className="text-[10px] font-extrabold uppercase tracking-[0.18em]">Host insight</p>
                 <div className="mx-auto mt-2 flex max-w-xl flex-wrap justify-center gap-3">
-                  <span style={{ background: `${C.go}18`, color: C.go, border: `1px solid ${C.go}40` }} className="rounded-2xl px-7 py-4 text-center tabular-nums shadow-lg">
-                    <strong className="block text-4xl font-black leading-none">{revealCorrectness.percentage}%</strong>
-                    <span className="mt-2 block text-xs font-extrabold uppercase tracking-wide">{revealCorrectness.correct} of {revealCorrectness.total} teams correct</span>
-                  </span>
+                  {!revealCompoundQuestion && (
+                    <span style={{ background: `${C.go}18`, color: C.go, border: `1px solid ${C.go}40` }} className="rounded-2xl px-7 py-4 text-center tabular-nums shadow-lg">
+                      <strong className="block text-4xl font-black leading-none">{revealCorrectness.percentage}%</strong>
+                      <span className="mt-2 block text-xs font-extrabold uppercase tracking-wide">{revealCorrectness.correct} of {revealCorrectness.total} teams correct</span>
+                    </span>
+                  )}
                   {revealBonus && (
                     <span style={{ background: `${C.violet}18`, color: C.liveViolet, border: `1px solid ${C.violet}40` }} className="rounded-2xl px-6 py-4 text-center tabular-nums">
                       <strong className="block text-3xl font-black leading-none">{revealBonusCorrectness.percentage}%</strong>
@@ -12031,7 +12046,7 @@ function TieResolutionChooser({
         </div>}
         <p style={{ color: C.liveDim }} className="text-xs">The game decides placement only. It does not change either team’s trivia score.</p>
       </div>}
-      <Btn sz="lg" cls="mt-4 w-full justify-center" onClick={onConfirm} disabled={busy || !selected || (selected === 'show_game' && tieGameType === 'audience-question' && (!audiencePrompt.trim() || !audienceCorrectNumber.trim()))}>
+      <Btn hostNavigation="forward" sz="lg" cls="mt-4 w-full justify-center" onClick={onConfirm} disabled={busy || !selected || (selected === 'show_game' && tieGameType === 'audience-question' && (!audiencePrompt.trim() || !audienceCorrectNumber.trim()))}>
         {selectedLabel ? `Confirm: ${selectedLabel}` : 'Select an option to continue'}
       </Btn>
       {unusedTiebreakerCount === 0 && (
@@ -12321,13 +12336,13 @@ function FinalResults({ go }: { go: Go }) {
 
                 <div className="mt-6 flex gap-3">
                   {activeAttempt.status === 'open' && (
-                    <Btn sz="lg" cls="flex-1 justify-center" onClick={closeTiebreaker} disabled={busy || activeSubmissions.length !== activeAttempt.team_ids.length}>Close Answers</Btn>
+                    <Btn hostNavigation="forward" sz="lg" cls="flex-1 justify-center" onClick={closeTiebreaker} disabled={busy || activeSubmissions.length !== activeAttempt.team_ids.length}>Close Answers</Btn>
                   )}
                   {activeAttempt.status === 'closed' && (
-                    <Btn sz="lg" cls="flex-1 justify-center" onClick={revealTiebreaker} disabled={busy}>Reveal Closest Answer</Btn>
+                    <Btn hostNavigation="forward" sz="lg" cls="flex-1 justify-center" onClick={revealTiebreaker} disabled={busy}>Reveal Closest Answer</Btn>
                   )}
                   {activeAttempt.status === 'resolved' && (
-                    <Btn sz="lg" cls="flex-1 justify-center" onClick={continueAfterTiebreaker} disabled={busy}>Continue to Final Results</Btn>
+                    <Btn hostNavigation="forward" sz="lg" cls="flex-1 justify-center" onClick={continueAfterTiebreaker} disabled={busy}>Continue to Final Results</Btn>
                   )}
                   {activeAttempt.status === 'tied' && (
                     <div className="w-full">
@@ -12367,8 +12382,8 @@ function FinalResults({ go }: { go: Go }) {
                   })}
                 </div>
                 <div className="mt-6 flex gap-3">
-                  <Btn v="secondary" sz="md" cls="flex-1 justify-center" onClick={() => setManualMode(false)} disabled={busy}>Back</Btn>
-                  <Btn sz="lg" cls="flex-1 justify-center" onClick={saveManualOrder} disabled={busy}>Confirm Order</Btn>
+                  <Btn hostNavigation="back" v="secondary" sz="md" cls="flex-1 justify-center" onClick={() => setManualMode(false)} disabled={busy}>Back</Btn>
+                  <Btn hostNavigation="forward" sz="lg" cls="flex-1 justify-center" onClick={saveManualOrder} disabled={busy}>Confirm Order</Btn>
                 </div>
               </div>
             ) : (
@@ -12458,7 +12473,7 @@ function FinalResults({ go }: { go: Go }) {
 
         <div className="flex gap-3">
           <button type="button" onClick={() => go('recent-games')} style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="flex-1 cursor-pointer rounded-xl px-5 py-3.5 text-sm font-bold transition-colors hover:bg-white/5">View Game Summary</button>
-          <Btn v="live" sz="lg" cls="flex-1 justify-center" onClick={finishAndReturn}>Finish &amp; Return to My Quizzes</Btn>
+          <Btn hostNavigation="forward" v="live" sz="lg" cls="flex-1 justify-center" onClick={finishAndReturn}>Finish &amp; Return to My Quizzes</Btn>
         </div>
         </>
         )}
@@ -12541,7 +12556,7 @@ export default function App({
   }, [onLiveModeChange, screen])
 
   useHostKeyboardShortcuts(
-    !restoringSession && (screen === 'lobby' || screen === 'live-question' || screen === 'end-of-round'),
+    !restoringSession && (screen === 'lobby' || screen === 'live-question' || screen === 'end-of-round' || screen === 'final-results'),
   )
 
   useEffect(() => {

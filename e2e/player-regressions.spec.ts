@@ -181,6 +181,103 @@ test('a failed answer request releases the submit control for a retry', async ({
   await expect.poll(() => attempts).toBe(2)
 })
 
+test('time expiry submits every partially completed multi-answer field', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('simple-trivia-team-id', 'browser-test-team'))
+  await page.unroute('**/rest/v1/games**')
+  const deadline = Date.now() + 2_500
+  await page.route('**/rest/v1/games**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      current_screen: 'multi-answer',
+      answer_phase: 'open',
+      question_stage: 'core',
+      current_question_key: 'five-answer-question',
+      answer_editing_allowed: false,
+      settings: {
+        auto_run_clock: {
+          key: 'open-five-answer-question-core',
+          label: 'Answers close in',
+          deadline_ms: deadline,
+          paused_remaining: null,
+        },
+      },
+    }),
+  }))
+
+  const requests: Array<Record<string, unknown>> = []
+  await page.route('**/rest/v1/rpc/submit_player_answer', route => {
+    requests.push(route.request().postDataJSON() as Record<string, unknown>)
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify('submission-id') })
+  })
+
+  await page.goto('/play/prototype')
+  await page.getByRole('button', { name: '8 · Multi-Answer' }).click()
+  await page.getByLabel('Answer 1').fill('Complete answer')
+  await page.getByLabel('Answer 2').fill('half-writ')
+
+  await expect.poll(() => requests.length, { timeout: 5_000 }).toBe(1)
+  expect(JSON.parse(String(requests[0].p_answer_text))).toEqual([
+    'Complete answer',
+    'half-writ',
+    '',
+    '',
+    '',
+  ])
+  await expect(page.getByRole('status')).toContainText('Time is up. Your partial answer was submitted.')
+})
+
+test('updating an editable answer confirms that the previous response was replaced', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('simple-trivia-team-id', 'browser-test-team'))
+  await page.unroute('**/rest/v1/games**')
+  await page.route('**/rest/v1/games**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      current_screen: 'single-answer',
+      answer_phase: 'open',
+      question_stage: 'core',
+      current_question_key: 'five-answer-question',
+      answer_editing_allowed: true,
+      settings: {},
+    }),
+  }))
+  await page.route('**/rest/v1/teams**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ name: 'Browser Team', score: 0, prize_awards: [] }),
+  }))
+  await page.route('**/rest/v1/submissions**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      answer_text: 'Old answer',
+      is_correct: null,
+      points_awarded: 0,
+      grading_json: null,
+    }),
+  }))
+  await page.route('**/rest/v1/rpc/get_player_bonus_submission', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: 'null',
+  }))
+  await page.route('**/rest/v1/rpc/submit_player_answer', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify('submission-id'),
+  }))
+
+  await page.goto('/play/prototype')
+  await page.getByRole('button', { name: '5 · Single Answer' }).click()
+  const submit = page.getByRole('button', { name: 'Update Answer' })
+  await expect(submit).toBeVisible()
+  await page.getByPlaceholder('Type your answer…').fill('Replacement answer')
+  await submit.click({ force: true })
+
+  await expect(page.getByRole('status')).toContainText('Updated. Your latest answer replaced the previous one.')
+})
+
 test('a transient question load failure recovers without refreshing', async ({ page }) => {
   await page.unroute('**/rest/v1/rpc/get_player_game_question')
   let attempts = 0

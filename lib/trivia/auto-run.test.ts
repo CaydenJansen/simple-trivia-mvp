@@ -4,6 +4,7 @@ import {
   AUTO_RUN_ROUND_CHECKPOINT_SECONDS,
   autoRunAnswerSeconds,
   autoRunClockColor,
+  autoRunClockDeadlineMs,
   autoRunClockFromSettings,
   autoRunClockLabel,
   autoRunModeFromSettings,
@@ -74,6 +75,12 @@ describe('Auto-Run rules', () => {
       key: 'q1', label: 'Answers close in', remaining: 8, paused: true,
     })
     expect(autoRunClockFromSettings({ auto_run_clock: { key: 'q1', label: 'Answers close in', deadline_ms: 9_000, paused_remaining: null } }, 10_000)).toBeNull()
+  })
+
+  it('exposes the exact deadline for reliable player timeout submission', () => {
+    expect(autoRunClockDeadlineMs({ auto_run_clock: { deadline_ms: 15_000 } })).toBe(15_000)
+    expect(autoRunClockDeadlineMs({ auto_run_clock: { deadline_ms: null } })).toBeNull()
+    expect(autoRunClockDeadlineMs({})).toBeNull()
   })
 
   it('uses orange for the final ten seconds and red for the final five', () => {

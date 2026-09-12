@@ -55,6 +55,7 @@ export const AUTO_RUN_SHOW_GAME_INSTRUCTIONS_SECONDS = 20
 export const AUTO_RUN_SHOW_GAME_RESULT_SECONDS = 10
 export const AUTO_RUN_ROUND_CHECKPOINT_SECONDS = 60
 export const AUTO_RUN_EXTENSION_SECONDS = 15
+export const AUTO_RUN_SUBMISSION_GRACE_MS = 750
 
 export function autoRunShowGameResultSeconds(gameType: string | null | undefined) {
   return gameType === 'in-show-tiebreaker' ? 0 : AUTO_RUN_SHOW_GAME_RESULT_SECONDS
@@ -91,6 +92,13 @@ export function autoRunClockFromSettings(settings: unknown, now = Date.now()) {
   const remaining = paused ?? (deadline === null ? 0 : Math.max(0, Math.ceil((deadline - now) / 1000)))
   if (!key || !label || remaining <= 0) return null
   return { key, label, remaining, paused: paused !== null }
+}
+
+export function autoRunClockDeadlineMs(settings: unknown) {
+  const raw = settingsRecord(settings)?.auto_run_clock
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const deadline = (raw as Record<string, unknown>).deadline_ms
+  return typeof deadline === 'number' && Number.isFinite(deadline) ? deadline : null
 }
 
 export function autoRunClockColor(seconds: number) {

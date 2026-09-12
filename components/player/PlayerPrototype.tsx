@@ -32,7 +32,7 @@ import {
   type TeamPinMode,
 } from "@/lib/trivia/team-pin";
 import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
-import { autoRunClockColor, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
+import { autoRunClockColor, autoRunClockDeadlineMs, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
 import { nextSuggestedTeamName } from "@/lib/trivia/team-name-suggestions";
 import { showGameRewardDescription, showGameRewardFromSettings, showGameWinnerDetail } from "@/lib/trivia/show-game-rewards";
 import { correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
@@ -439,24 +439,41 @@ function usePlayerAutoRunClock() {
     return () => window.clearInterval(interval)
   }, [settings])
 
-  return now === null ? null : autoRunClockFromSettings(settings, now)
+  if (now === null) return null
+  const clock = autoRunClockFromSettings(settings, now)
+  return clock ? { ...clock, deadlineMs: autoRunClockDeadlineMs(settings) } : null
 }
 
-function useAutoSubmitPlayerDraft(value: string | string[], enabled: boolean, submit: (value: string | string[]) => Promise<void>) {
+type PlayerSubmitOptions = { deadline?: boolean }
+
+function useAutoSubmitPlayerDraft(
+  value: string | string[],
+  enabled: boolean,
+  submit: (value: string | string[], options?: PlayerSubmitOptions) => Promise<void>,
+) {
   const clock = usePlayerAutoRunClock()
   const submitRef = useRef(submit)
   const submittedClockKeyRef = useRef<string | null>(null)
+  const latestValueRef = useRef(value)
+  const enabledRef = useRef(enabled)
   useEffect(() => { submitRef.current = submit }, [submit])
-  const serializedValue = JSON.stringify(value)
+  useEffect(() => { latestValueRef.current = value }, [value])
+  useEffect(() => { enabledRef.current = enabled }, [enabled])
+  const clockDeadlineMs = clock?.deadlineMs ?? null
+  const clockKey = clock?.key ?? null
+  const clockLabel = clock?.label ?? null
+  const clockPaused = clock?.paused ?? false
 
   useEffect(() => {
-    if (!clock || !clock.label.startsWith('Answers') || clock.paused || clock.remaining > 1 || !enabled) return
-    const key = `${clock.label}:${clock.remaining}`
-    if (submittedClockKeyRef.current === key) return
-    submittedClockKeyRef.current = key
-    const latestValue = JSON.parse(serializedValue) as string | string[]
-    void submitRef.current(latestValue)
-  }, [clock, enabled, serializedValue])
+    if (!clockKey || !clockLabel?.startsWith('Answers') || clockPaused || clockDeadlineMs === null) return
+    const key = clockKey
+    const timer = window.setTimeout(() => {
+      if (!enabledRef.current || submittedClockKeyRef.current === key) return
+      submittedClockKeyRef.current = key
+      void submitRef.current(latestValueRef.current, { deadline: true })
+    }, Math.max(0, clockDeadlineMs - Date.now() - 250))
+    return () => window.clearTimeout(timer)
+  }, [clockDeadlineMs, clockKey, clockLabel, clockPaused])
 }
 
 function useLiveQuestionDefinition() {
@@ -610,12 +627,23 @@ function useLiveContentScreenDefinition() {
   return contentScreen
 }
 
-function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerScreen, expectedQuestionKey: string | undefined) {
+function useSubmitAnswer(
+  go: (s: PlayerScreen) => void,
+  expectedScreen: PlayerScreen,
+  expectedQuestionKey: string | undefined,
+  existingSubmission = false,
+) {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [submitNotice, setSubmitNotice] = useState<string | null>(null)
   const submitBusyRef = useRef(false)
+  const noticeTimerRef = useRef<number | null>(null)
 
-  async function submit(value: string | string[]) {
+  useEffect(() => () => {
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current)
+  }, [])
+
+  async function submit(value: string | string[], options: PlayerSubmitOptions = {}) {
     if (submitBusyRef.current || !expectedQuestionKey) return
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
@@ -624,16 +652,21 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
     submitBusyRef.current = true
     setSubmitting(true)
     setSubmitError(null)
+    setSubmitNotice(null)
     try {
-      const { data: game, error: gameError } = await supabase
-        .from('games')
-        .select('current_screen, answer_phase, answer_editing_allowed, current_question_key')
-        .eq('id', gameId)
-        .maybeSingle()
-      if (gameError || !game) throw gameError ?? new Error('Game not found')
-      if (game.current_screen !== expectedScreen || game.answer_phase !== 'open' || game.current_question_key !== expectedQuestionKey) {
-        go('no-answer')
-        return
+      let answerEditingAllowed = false
+      if (!options.deadline) {
+        const { data: game, error: gameError } = await supabase
+          .from('games')
+          .select('current_screen, answer_phase, answer_editing_allowed, current_question_key')
+          .eq('id', gameId)
+          .maybeSingle()
+        if (gameError || !game) throw gameError ?? new Error('Game not found')
+        if (game.current_screen !== expectedScreen || game.answer_phase !== 'open' || game.current_question_key !== expectedQuestionKey) {
+          go('no-answer')
+          return
+        }
+        answerEditingAllowed = game.answer_editing_allowed
       }
 
       const answerText = Array.isArray(value) ? JSON.stringify(value.map(item => item.trim())) : value.trim()
@@ -645,7 +678,12 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
       })
       if (error) throw error
       localStorage.setItem('simple-trivia-last-answer', answerText)
-      if (!game.answer_editing_allowed) go('submitted')
+      if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current)
+      setSubmitNotice(existingSubmission
+        ? 'Updated. Your latest answer replaced the previous one.'
+        : options.deadline ? 'Time is up. Your partial answer was submitted.' : 'Answer submitted.')
+      noticeTimerRef.current = window.setTimeout(() => setSubmitNotice(null), 3500)
+      if (!options.deadline && !answerEditingAllowed) go('submitted')
     } catch (error) {
       console.error('Could not submit answer:', error)
       const message = readableErrorMessage(error)
@@ -660,7 +698,12 @@ function useSubmitAnswer(go: (s: PlayerScreen) => void, expectedScreen: PlayerSc
     }
   }
 
-  return { submit, submitting, submitError }
+  return { submit, submitting, submitError, submitNotice }
+}
+
+function SubmitNotice({ message }: { message: string | null }) {
+  if (!message) return null
+  return <p role="status" style={{ color: C.go, fontSize: 13, fontWeight: 800, marginTop: 10 }}>Saved: {message}</p>
 }
 
 function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey: string | undefined) {
@@ -2307,14 +2350,29 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const [answer, setAnswer] = useState('')
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'single-answer', question?.question_key)
+  const { submit, submitting, submitError, submitNotice } = useSubmitAnswer(go, 'single-answer', question?.question_key, snapshot.hasSubmission)
   const savedAnswer = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)
   const storedAnswer = typeof savedAnswer === 'string' ? savedAnswer : ''
   const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
+  const answerDirtyRef = useRef(false)
+  const restoredDraftKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
+    const changedQuestion = restoredDraftKeyRef.current !== draftKey
+    if (!changedQuestion && answerDirtyRef.current) return
+    if (changedQuestion) {
+      const typedWhileQuestionLoaded = restoredDraftKeyRef.current === null && answerDirtyRef.current
+      restoredDraftKeyRef.current = draftKey
+      if (typedWhileQuestionLoaded) {
+        setAnswer(current => {
+          writePlayerDraft(localStorage, draftKey, current)
+          return current
+        })
+        return
+      }
+      answerDirtyRef.current = false
+    }
     // Restore an unsubmitted local draft before falling back to the server response.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAnswer(readPlayerDraft<string>(localStorage, draftKey) ?? storedAnswer)
   }, [draftKey, storedAnswer])
   useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit)
@@ -2327,9 +2385,10 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
       <div className="flex-1 overflow-y-auto px-5 py-6">
         <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
-        <textarea rows={3} value={answer} onChange={e => { setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={e => { answerDirtyRef.current = true; setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
     </div>
@@ -2341,14 +2400,29 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
   const [answer, setAnswer] = useState('')
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'image-question', question?.question_key)
+  const { submit, submitting, submitError, submitNotice } = useSubmitAnswer(go, 'image-question', question?.question_key, snapshot.hasSubmission)
   const savedAnswer = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)
   const storedAnswer = typeof savedAnswer === 'string' ? savedAnswer : ''
   const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
+  const answerDirtyRef = useRef(false)
+  const restoredDraftKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
+    const changedQuestion = restoredDraftKeyRef.current !== draftKey
+    if (!changedQuestion && answerDirtyRef.current) return
+    if (changedQuestion) {
+      const typedWhileQuestionLoaded = restoredDraftKeyRef.current === null && answerDirtyRef.current
+      restoredDraftKeyRef.current = draftKey
+      if (typedWhileQuestionLoaded) {
+        setAnswer(current => {
+          writePlayerDraft(localStorage, draftKey, current)
+          return current
+        })
+        return
+      }
+      answerDirtyRef.current = false
+    }
     // Restore an unsubmitted local draft before falling back to the server response.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAnswer(readPlayerDraft<string>(localStorage, draftKey) ?? storedAnswer)
   }, [draftKey, storedAnswer])
   useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit)
@@ -2367,9 +2441,10 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
         </div>
         <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
-        <textarea rows={3} value={answer} onChange={e => { setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={e => { answerDirtyRef.current = true; setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
     </div>
@@ -2381,15 +2456,30 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
   const [selected, setSelected] = useState<string | null>(null)
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'multiple-choice', question?.question_key)
+  const { submit, submitting, submitError, submitNotice } = useSubmitAnswer(go, 'multiple-choice', question?.question_key, snapshot.hasSubmission)
   const choices = optionObjects(question?.options)
   const savedSelection = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)
   const storedSelection = typeof savedSelection === 'string' ? savedSelection : ''
   const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
+  const selectionDirtyRef = useRef(false)
+  const restoredDraftKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
+    const changedQuestion = restoredDraftKeyRef.current !== draftKey
+    if (!changedQuestion && selectionDirtyRef.current) return
+    if (changedQuestion) {
+      const selectedWhileQuestionLoaded = restoredDraftKeyRef.current === null && selectionDirtyRef.current
+      restoredDraftKeyRef.current = draftKey
+      if (selectedWhileQuestionLoaded) {
+        setSelected(current => {
+          writePlayerDraft(localStorage, draftKey, current)
+          return current
+        })
+        return
+      }
+      selectionDirtyRef.current = false
+    }
     // Restore the team's previous response when the host reopens answers.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelected((readPlayerDraft<string>(localStorage, draftKey) ?? storedSelection) || null)
   }, [draftKey, question?.question_key, storedSelection])
   useAutoSubmitPlayerDraft(selected ?? '', Boolean(selected) && Boolean(question?.question_key) && !submitting, submit)
@@ -2405,7 +2495,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
           {choices.map((choice, i) => {
             const key = choice.key ?? String.fromCharCode(65 + i)
             const selectedNow = selected === key
-            return <button key={key} onClick={() => { setSelected(key); writePlayerDraft(localStorage, draftKey, key) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, selectedNow && Boolean(question?.question_key) && !submitting, () => { void submit(key) })}
+            return <button key={key} onClick={() => { selectionDirtyRef.current = true; setSelected(key); writePlayerDraft(localStorage, draftKey, key) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, selectedNow && Boolean(question?.question_key) && !submitting, () => { void submit(key) })}
               style={{ background: selectedNow ? C.violetPale : C.panel, border: `2px solid ${selectedNow ? C.violet : C.line}`, borderRadius: 16, textAlign: 'left', padding: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, fontFamily: 'inherit' }}>
               <span style={{ background: selectedNow ? C.violet : C.ground, color: selectedNow ? '#fff' : C.sub, borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{key}</span>
               <span style={{ color: C.ink, fontWeight: 600, fontSize: 16 }}>{choice.label ?? ''}</span>
@@ -2413,6 +2503,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
           })}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => selected && void submit(selected)} disabled={!selected || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
     </div>
@@ -2425,19 +2516,38 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const snapshot = usePlayerSnapshot()
   const count = multiAnswerInputCount(question?.points_max, question?.correct_answer)
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-answer', question?.question_key)
+  const { submit, submitting, submitError, submitNotice } = useSubmitAnswer(go, 'multi-answer', question?.question_key, snapshot.hasSubmission)
   const storedAnswersKey = JSON.stringify(asStringArray(savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)))
   const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
   const inputRefs = useRef<Array<HTMLInputElement | null>>([])
+  const answersDirtyRef = useRef(false)
+  const restoredDraftKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
+    const changedQuestion = restoredDraftKeyRef.current !== draftKey
+    if (!changedQuestion && answersDirtyRef.current) return
+    if (changedQuestion) {
+      const typedWhileQuestionLoaded = restoredDraftKeyRef.current === null && answersDirtyRef.current
+      restoredDraftKeyRef.current = draftKey
+      if (typedWhileQuestionLoaded) {
+        setAnswers(current => {
+          const resized = Array.from({ length: count }, (_, index) => current[index] ?? '')
+          writePlayerDraft(localStorage, draftKey, resized)
+          return resized
+        })
+        return
+      }
+      answersDirtyRef.current = false
+    }
     const storedAnswers = JSON.parse(storedAnswersKey) as string[]
     const localDraft = readPlayerDraft<string[]>(localStorage, draftKey) ?? storedAnswers
     // Resize inputs and restore an unsubmitted local draft before the server response.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAnswers(Array.from({ length: count }, (_, i) => localDraft[i] ?? ''))
   }, [count, draftKey, question?.question_key, storedAnswersKey])
-  const setA = (i: number, value: string) => setAnswers(current => { const next = current.map((answer, index) => index === i ? value : answer); writePlayerDraft(localStorage, draftKey, next); return next })
+  const setA = (i: number, value: string) => {
+    answersDirtyRef.current = true
+    setAnswers(current => { const next = current.map((answer, index) => index === i ? value : answer); writePlayerDraft(localStorage, draftKey, next); return next })
+  }
   const anyFilled = answers.some(answer => answer.trim())
   useAutoSubmitPlayerDraft(answers, anyFilled && Boolean(question?.question_key) && !submitting, submit)
 
@@ -2456,6 +2566,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
           </div>)}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => void submit(answers)} disabled={!anyFilled || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></div>
       </div>
     </div>
@@ -2469,16 +2580,32 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
   const parts = optionObjects(question?.options)
   const count = Math.max(1, parts.length || 3)
   const [answers, setAnswers] = useState<string[]>(['', '', ''])
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'multi-part', question?.question_key)
+  const { submit, submitting, submitError, submitNotice } = useSubmitAnswer(go, 'multi-part', question?.question_key, snapshot.hasSubmission)
   const storedAnswersKey = JSON.stringify(asStringArray(savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)))
   const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key)
   const inputRefs = useRef<Array<HTMLInputElement | null>>([])
+  const answersDirtyRef = useRef(false)
+  const restoredDraftKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
+    const changedQuestion = restoredDraftKeyRef.current !== draftKey
+    if (!changedQuestion && answersDirtyRef.current) return
+    if (changedQuestion) {
+      const typedWhileQuestionLoaded = restoredDraftKeyRef.current === null && answersDirtyRef.current
+      restoredDraftKeyRef.current = draftKey
+      if (typedWhileQuestionLoaded) {
+        setAnswers(current => {
+          const resized = Array.from({ length: count }, (_, index) => current[index] ?? '')
+          writePlayerDraft(localStorage, draftKey, resized)
+          return resized
+        })
+        return
+      }
+      answersDirtyRef.current = false
+    }
     const storedAnswers = JSON.parse(storedAnswersKey) as string[]
     const localDraft = readPlayerDraft<string[]>(localStorage, draftKey) ?? storedAnswers
     // Resize inputs and restore an unsubmitted local draft before the server response.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAnswers(Array.from({ length: count }, (_, i) => localDraft[i] ?? ''))
   }, [count, draftKey, question?.question_key, storedAnswersKey])
   const anyFilled = answers.some(answer => answer.trim())
@@ -2495,11 +2622,12 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
           {parts.map((part, i) => <div key={part.label ?? i}>
             <p style={{ color: C.violet, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', marginBottom: 8 }}>PART {part.label ?? String.fromCharCode(65 + i)}</p>
             <p style={{ color: C.ink, fontSize: 14, lineHeight: 1.45, marginBottom: 9 }}>{part.clue}</p>
-            <input ref={element => { inputRefs.current[i] = element }} value={answers[i] ?? ''} onChange={e => setAnswers(current => { const next = current.map((value, index) => index === i ? e.target.value : value); writePlayerDraft(localStorage, draftKey, next); return next })} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); inputRefs.current[i + 1]?.focus() } }} placeholder="Answer…"
+            <input ref={element => { inputRefs.current[i] = element }} value={answers[i] ?? ''} onChange={e => { answersDirtyRef.current = true; setAnswers(current => { const next = current.map((value, index) => index === i ? e.target.value : value); writePlayerDraft(localStorage, draftKey, next); return next }) }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); inputRefs.current[i + 1]?.focus() } }} placeholder="Answer…"
               style={{ border: `2px solid ${answers[i] ? C.violet : C.line}`, borderRadius: 12, background: C.panel, color: C.ink, fontSize: 16, outline: 'none', width: '100%', padding: '12px 14px', fontFamily: 'inherit' }} />
           </div>)}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => void submit(answers)} disabled={!anyFilled || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></div>
       </div>
     </div>
@@ -2514,7 +2642,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
   const [items, setItems] = useState<string[]>([])
   const [justMoved, setJustMoved] = useState<string | null>(null)
   const [justDisplaced, setJustDisplaced] = useState<string | null>(null)
-  const { submit, submitting, submitError } = useSubmitAnswer(go, 'ranking', question?.question_key)
+  const { submit, submitting, submitError, submitNotice } = useSubmitAnswer(go, 'ranking', question?.question_key, snapshot.hasSubmission)
   const optionItemsKey = JSON.stringify(Array.isArray(question?.options) ? question.options.map(String) : [])
   const correctItemsKey = JSON.stringify(asStringArray(question?.correct_answer))
   const storedItemsKey = JSON.stringify(asStringArray(savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.rawAnswer)))
@@ -2697,6 +2825,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
         </div>
 
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <SubmitNotice message={submitNotice} />
         <div className="mt-4">
           <Btn onClick={() => void submit(items)} disabled={!question?.question_key || items.length === 0 || submitting}>
             {submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Order' : 'Lock In Order'}
