@@ -1,0 +1,41 @@
+import type { Json } from '@/lib/supabase/database.types'
+
+function record(value: Json | null | undefined): Record<string, Json> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, Json> : {}
+}
+
+export type SharedCursorPosition = { x: number; y: number }
+
+export type SharedCursorState = {
+  x: number
+  y: number
+  candidateTeamId: string | null
+  candidateSince: number | null
+  positions: Record<string, SharedCursorPosition>
+}
+
+export function sharedCursorState(settings: Json | null | undefined): SharedCursorState {
+  const value = record(settings)
+  const rawPositions = record(value.cursor_positions)
+  const positions = Object.fromEntries(Object.entries(rawPositions).flatMap(([teamId, raw]) => {
+    const point = record(raw)
+    const x = Number(point.x)
+    const y = Number(point.y)
+    return Number.isFinite(x) && Number.isFinite(y) ? [[teamId, { x, y }]] : []
+  }))
+  const candidateSince = Number(value.cursor_candidate_since_ms)
+  return {
+    x: Number.isFinite(Number(value.cursor_x)) ? Number(value.cursor_x) : 0,
+    y: Number.isFinite(Number(value.cursor_y)) ? Number(value.cursor_y) : 0,
+    candidateTeamId: typeof value.cursor_candidate_id === 'string' ? value.cursor_candidate_id : null,
+    candidateSince: Number.isFinite(candidateSince) && candidateSince > 0 ? candidateSince : null,
+    positions,
+  }
+}
+
+export function bombPhase(settings: Json | null | undefined, now: number) {
+  const armedAt = Date.parse(String(record(settings).armed_at ?? ''))
+  if (!Number.isFinite(armedAt)) return { armed: true, seconds: 0 }
+  return { armed: now >= armedAt, seconds: Math.max(0, Math.ceil((armedAt - now) / 1000)) }
+}
+

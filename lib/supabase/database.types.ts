@@ -584,6 +584,18 @@ export type Database = {
         Update: Partial<{ id: string; game_show_game_id: string; game_id: string; team_id: string; pressed_at: string }>
         Relationships: []
       }
+      game_show_game_bids: {
+        Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; bid: number; submitted_at: string }
+        Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; bid: number; submitted_at?: string }
+        Update: Partial<{ bid: number; submitted_at: string }>
+        Relationships: []
+      }
+      game_show_game_deals: {
+        Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; assigned_value: number; swaps_used: number; decision: 'keep' | 'swap' | null; locked: boolean; last_outcome: string | null; updated_at: string }
+        Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; assigned_value: number; swaps_used?: number; decision?: 'keep' | 'swap' | null; locked?: boolean; last_outcome?: string | null; updated_at?: string }
+        Update: Partial<{ assigned_value: number; swaps_used: number; decision: 'keep' | 'swap' | null; locked: boolean; last_outcome: string | null; updated_at: string }>
+        Relationships: []
+      }
       game_show_game_choices: {
         Row: { id: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2' | 'scissors' | 'paper' | 'rock'; submitted_at: string }
         Insert: { id?: string; game_show_game_id: string; game_id: string; team_id: string; round_number: number; choice: 'heads' | 'tails' | '0' | '1' | '2' | 'scissors' | 'paper' | 'rock'; submitted_at?: string }
@@ -1238,6 +1250,21 @@ export type Database = {
         Args: { p_game_show_game_id: string }
         Returns: LiveShowGameRow
       }
+      cut_beat_the_bomb_wire: {
+        Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }
+        Returns: LiveShowGameRow
+      }
+      start_lowest_bidder: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
+      submit_lowest_bidder_bid: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_bid: number }; Returns: Database['public']['Tables']['game_show_game_bids']['Row'] }
+      get_own_lowest_bidder_bid: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: Database['public']['Tables']['game_show_game_bids']['Row'] }
+      resolve_lowest_bidder: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
+      start_deal_or_no_deal: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
+      get_own_deal_or_no_deal_state: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: Database['public']['Tables']['game_show_game_deals']['Row'] }
+      submit_deal_or_no_deal_decision: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_decision: 'keep' | 'swap' }; Returns: Database['public']['Tables']['game_show_game_deals']['Row'] }
+      advance_deal_or_no_deal: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
+      start_shared_cursor: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
+      pull_shared_cursor: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: LiveShowGameRow }
+      advance_shared_cursor: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
       start_spin_the_wheel: {
         Args: { p_game_show_game_id: string }
         Returns: LiveShowGameRow
@@ -1560,7 +1587,7 @@ type ShowGameRow = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
+  game_type: 'beat-the-bomb' | 'lowest-bidder' | 'deal-or-no-deal' | 'shared-cursor' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
   title: string
   settings: Json
   created_at: string
@@ -1572,7 +1599,7 @@ type ShowGameInsert = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
+  game_type: 'beat-the-bomb' | 'lowest-bidder' | 'deal-or-no-deal' | 'shared-cursor' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
   title: string
   settings?: Json
   created_at?: string

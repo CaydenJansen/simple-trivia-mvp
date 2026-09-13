@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ARCHIVED_SHOW_GAME_TYPES, ELIMINATION_SHOW_GAME_TYPES, HOST_PICKED_SHOW_GAME_TYPES, IMMEDIATE_WINNER_SHOW_GAME_TYPES, RANDOM_CHANCE_SHOW_GAME_TYPES, TEMPLATE_EDITOR_SHOW_GAME_TYPES, TIE_RESOLUTION_SHOW_GAME_TYPES, autoBuildShowGameTypes, eliminationShowGameState, isArchivedShowGame, isEliminationShowGame, isTiebreakerLibraryShowGame, showGameInstructions } from './elimination-show-games'
+import { ARCHIVED_SHOW_GAME_TYPES, ELIMINATION_SHOW_GAME_TYPES, HOST_PICKED_SHOW_GAME_TYPES, IMMEDIATE_WINNER_SHOW_GAME_TYPES, RANDOM_CHANCE_SHOW_GAME_TYPES, TEAM_DECISION_SHOW_GAME_TYPES, TEMPLATE_EDITOR_SHOW_GAME_TYPES, TIE_RESOLUTION_SHOW_GAME_TYPES, autoBuildShowGameTypes, eliminationShowGameState, isArchivedShowGame, isEliminationShowGame, isTiebreakerLibraryShowGame, showGameInstructions, showGameTeamRecommendation } from './elimination-show-games'
 
 describe('elimination show games', () => {
   it('recognises only multi-round elimination games', () => {
@@ -52,9 +52,9 @@ describe('elimination show games', () => {
     expect(autoBuildShowGameTypes(0)).toEqual([])
   })
 
-  it('keeps archived games playable but out of automatic generation', () => {
-    expect(ARCHIVED_SHOW_GAME_TYPES).toEqual(['beat-the-bomb', 'big-balloon', 'steal-the-treasure'])
-    expect(isArchivedShowGame('beat-the-bomb')).toBe(true)
+  it('restores Beat the Bomb while keeping retired timing games archived', () => {
+    expect(ARCHIVED_SHOW_GAME_TYPES).toEqual(['big-balloon', 'steal-the-treasure'])
+    expect(isArchivedShowGame('beat-the-bomb')).toBe(false)
     expect(isArchivedShowGame('spin-the-wheel')).toBe(false)
     const authoringSurfaces = [
       IMMEDIATE_WINNER_SHOW_GAME_TYPES,
@@ -65,5 +65,14 @@ describe('elimination show games', () => {
       RANDOM_CHANCE_SHOW_GAME_TYPES,
     ].flat()
     ARCHIVED_SHOW_GAME_TYPES.forEach(type => expect(authoringSurfaces).not.toContain(type))
+  })
+
+  it('registers the collaborative games with clear suitability guidance', () => {
+    expect(TEAM_DECISION_SHOW_GAME_TYPES).toEqual(['beat-the-bomb', 'lowest-bidder', 'deal-or-no-deal', 'shared-cursor'])
+    expect(TEMPLATE_EDITOR_SHOW_GAME_TYPES).toContain('shared-cursor')
+    expect(showGameInstructions('beat-the-bomb')).toContain('20 seconds')
+    expect(showGameTeamRecommendation('lowest-bidder')).toContain('10 or more')
+    expect(showGameTeamRecommendation('deal-or-no-deal')).toContain('20 or more')
+    expect(showGameTeamRecommendation('shared-cursor')).toContain('10 or fewer')
   })
 })

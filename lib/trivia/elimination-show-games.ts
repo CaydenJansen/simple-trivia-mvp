@@ -1,13 +1,14 @@
 import type { Json } from '@/lib/supabase/database.types'
 
-export type ShowGameType = 'beat-the-bomb' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
+export type ShowGameType = 'beat-the-bomb' | 'lowest-bidder' | 'deal-or-no-deal' | 'shared-cursor' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
 export type EliminationShowGameType = 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock'
 export type EliminationRoundPhase = 'choosing' | 'reveal'
-export const ARCHIVED_SHOW_GAME_TYPES = ['beat-the-bomb', 'big-balloon', 'steal-the-treasure'] as const satisfies readonly ShowGameType[]
+export const ARCHIVED_SHOW_GAME_TYPES = ['big-balloon', 'steal-the-treasure'] as const satisfies readonly ShowGameType[]
 export const IMMEDIATE_WINNER_SHOW_GAME_TYPES = ['spin-the-wheel'] as const satisfies readonly ShowGameType[]
+export const TEAM_DECISION_SHOW_GAME_TYPES = ['beat-the-bomb', 'lowest-bidder', 'deal-or-no-deal', 'shared-cursor'] as const satisfies readonly ShowGameType[]
 export const ELIMINATION_SHOW_GAME_TYPES = ['heads-or-tails', 'dodge-the-rock', 'scissors-paper-rock'] as const satisfies readonly ShowGameType[]
 export const HOST_PICKED_SHOW_GAME_TYPES = ['audience-question', 'tiebreaker-style-question'] as const satisfies readonly ShowGameType[]
-export const TEMPLATE_EDITOR_SHOW_GAME_TYPES = [...IMMEDIATE_WINNER_SHOW_GAME_TYPES, ...ELIMINATION_SHOW_GAME_TYPES] as const satisfies readonly ShowGameType[]
+export const TEMPLATE_EDITOR_SHOW_GAME_TYPES = [...IMMEDIATE_WINNER_SHOW_GAME_TYPES, ...TEAM_DECISION_SHOW_GAME_TYPES, ...ELIMINATION_SHOW_GAME_TYPES] as const satisfies readonly ShowGameType[]
 export const TIE_RESOLUTION_SHOW_GAME_TYPES = ['spin-the-wheel', 'heads-or-tails', 'dodge-the-rock'] as const satisfies readonly ShowGameType[]
 export const RANDOM_CHANCE_SHOW_GAME_TYPES = [...IMMEDIATE_WINNER_SHOW_GAME_TYPES, 'heads-or-tails', 'dodge-the-rock'] as const satisfies readonly ShowGameType[]
 
@@ -85,6 +86,9 @@ export function eliminationShowGameState(settings: Json | null | undefined): Eli
 export function showGameLabel(type: ShowGameType) {
   if (type === 'spin-the-wheel') return 'Spin the Wheel'
   if (type === 'beat-the-bomb') return 'Beat the Bomb'
+  if (type === 'lowest-bidder') return 'Lowest Bidder'
+  if (type === 'deal-or-no-deal') return 'Deal or No Deal'
+  if (type === 'shared-cursor') return 'Shared Cursor'
   if (type === 'heads-or-tails') return 'Heads or Tails'
   if (type === 'scissors-paper-rock') return 'Scissors Paper Rock'
   if (type === 'big-balloon') return 'Big Balloon'
@@ -98,6 +102,9 @@ export function showGameLabel(type: ShowGameType) {
 export function showGameEmoji(type: ShowGameType) {
   if (type === 'spin-the-wheel') return '🎡'
   if (type === 'beat-the-bomb') return '💣'
+  if (type === 'lowest-bidder') return '🔢'
+  if (type === 'deal-or-no-deal') return '💼'
+  if (type === 'shared-cursor') return '🎯'
   if (type === 'heads-or-tails') return '🪙'
   if (type === 'scissors-paper-rock') return '✂️'
   if (type === 'big-balloon') return '🎈'
@@ -110,7 +117,10 @@ export function showGameEmoji(type: ShowGameType) {
 
 export function showGameInstructions(type: ShowGameType) {
   if (type === 'spin-the-wheel') return 'Every joined team is placed on the wheel. It spins, slows down, and randomly selects one winner.'
-  if (type === 'beat-the-bomb') return 'Each team can press once. Be the last team to press before the randomly timed bomb explodes.'
+  if (type === 'beat-the-bomb') return 'The bomb takes 20 seconds to arm. Once it is armed, cut your wire before it explodes—but be as late as you dare. The last team to cut safely wins; any team still connected when it explodes is out.'
+  if (type === 'lowest-bidder') return 'Choose a whole number. The lowest number chosen by exactly one team wins. If another team matches your number, neither of you can win with it.'
+  if (type === 'deal-or-no-deal') return 'Every team gets a secret case worth 1–100. Keep it or request a blind swap with another team. You can swap up to three times; the highest final case wins.'
+  if (type === 'shared-cursor') return 'Every team pulls the shared cursor toward its name. Hold it over your team for one full second to win. Pulls gradually weaken so the cursor must eventually settle.'
   if (type === 'heads-or-tails') return 'Call heads or tails before each flip. Correct teams stay in; the others are knocked out. Flips continue until one team remains.'
   if (type === 'scissors-paper-rock') return 'You’ll be paired against another team. Pick scissors, paper, or rock before the ten-second timer ends. Win to advance; draws send both teams through.'
   if (type === 'big-balloon') return 'Press and hold to inflate your balloon, then release to lock in its size. Push it too far and it pops. The biggest balloon still intact wins.'
@@ -119,4 +129,11 @@ export function showGameInstructions(type: ShowGameType) {
   if (type === 'tiebreaker-style-question') return 'Everyone submits a numerical answer. The closest answer wins the configured points or prize.'
   if (type === 'audience-question') return 'Ask the room something fun, then choose your favourite submitted answer.'
   return 'Move your character between three lanes before positions lock. A rock hits one random lane each round. Survive until your team is the last one standing.'
+}
+
+export function showGameTeamRecommendation(type: ShowGameType) {
+  if (type === 'lowest-bidder') return 'Works best with 10 or more teams.'
+  if (type === 'deal-or-no-deal') return 'Works best with 20 or more teams.'
+  if (type === 'shared-cursor') return 'Works best with 10 or fewer teams.'
+  return null
 }
