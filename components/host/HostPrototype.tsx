@@ -123,7 +123,7 @@ import { playerScoreVisibilityFromSettings, type PlayerScoreVisibility } from "@
 import { teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { quizExitPrompt } from "@/lib/trivia/quiz-exit";
 import { submittedAnswersEditableFromSettings } from "@/lib/trivia/answer-editing";
-import { bombPhase } from "@/lib/trivia/collaborative-show-games";
+import { bombDangerWindowSeconds, bombPhase } from "@/lib/trivia/collaborative-show-games";
 import { hostGameSettingsRecord, persistentHostGameSettings } from "@/lib/trivia/host-preferences";
 import { isTeamDormant } from "@/lib/trivia/team-presence";
 import {
@@ -10397,6 +10397,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const eliminationSecondsRemaining = Math.max(0, Math.ceil((explodeAt - showGameNow) / 1000))
     const fuseProgress = showGame?.status === 'exploded' ? 0 : Math.max(0, Math.min(100, ((explodeAt - showGameNow) / Math.max(1, explodeAt - startedAt)) * 100))
     const hostBombPhase = bombPhase(showGame?.settings, showGameNow)
+    const hostBombDangerSeconds = bombDangerWindowSeconds(showGame?.settings, showGameNow)
     const dealRound = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) ? Number((showGame.settings as Record<string, Json>).deal_round) || 1 : 1
     return (
       <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
@@ -10507,7 +10508,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 : isDealOrNoDeal ? `${showGameDeals.filter(item => item.decision || item.locked).length} of ${participatingTeams.length} teams have decided`
                 : isSharedCursor ? `${eliminationSecondsRemaining}s before the cursor is forced to settle`
                 : isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`)
-                  : hostBombPhase.armed ? `Bomb armed · ${showGamePresses.length} of ${participatingTeams.length} teams have cut their wire.` : `Arming… ${hostBombPhase.seconds}s`}</p>
+                  : hostBombPhase.armed ? `Danger window · up to ${hostBombDangerSeconds}s left · ${showGamePresses.length} of ${participatingTeams.length} teams have cut their wire.` : `Arming… ${hostBombPhase.seconds}s`}</p>
             ))}
             {!showingShowGameInstructions && isBomb && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
               {participatingTeams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Wire cut ✓' : hostBombPhase.armed ? 'Still connected…' : 'Waiting to arm…'}</span></div>)}

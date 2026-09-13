@@ -55,7 +55,7 @@ import {
 import { audienceQuestionFromSettings, audienceQuestionPlayerInstructions, audienceResponseDraftAfterRefresh } from "@/lib/trivia/audience-question";
 import { formatNumericResponse, formatNumericResponseInput, parseNumericResponseInput } from "@/lib/trivia/numeric-response";
 import { TREASURE_WARMUP_MS, treasureAccruedMs } from "@/lib/trivia/treasure";
-import { bombPhase } from "@/lib/trivia/collaborative-show-games";
+import { bombDangerWindowSeconds, bombPhase } from "@/lib/trivia/collaborative-show-games";
 
 function readableErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message
@@ -3560,6 +3560,7 @@ function ShowGame() {
   const isDealOrNoDeal = showGame?.game_type === 'deal-or-no-deal'
   const isSharedCursor = showGame?.game_type === 'shared-cursor'
   const currentBombPhase = bombPhase(showGame?.settings, showGameNow)
+  const bombDangerSeconds = bombDangerWindowSeconds(showGame?.settings, showGameNow)
   const treasureSettings = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) ? showGame.settings as Record<string, Json> : {}
   const treasureGuardAwake = treasureSettings.guard_awake === true
   const ownTreasure = treasure.find(entry => entry.team_id === teamId)
@@ -3726,7 +3727,7 @@ function ShowGame() {
           : <div className={`mt-5 text-6xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
         {isBomb && showGame?.status === 'open' && <div className="mt-4 w-full max-w-sm space-y-2">
           <div style={{ background: '#fff1f2', border: '1px solid #fb7185', color: '#9f1239' }} className="rounded-xl px-3 py-2 text-center">
-            <p className="text-lg font-black uppercase tracking-wide">{currentBombPhase.armed?'BOMB ARMED':`ARMING · ${currentBombPhase.seconds}s`}</p>
+            <p className="text-lg font-black uppercase tracking-wide">{currentBombPhase.armed?`DANGER · ${bombDangerSeconds}s MAX`:`ARMING · ${currentBombPhase.seconds}s`}</p>
             <p className="mt-0.5 text-[11px] font-bold leading-4">{currentBombPhase.armed?'It can explode at any moment over the next 30 seconds. Cut as late as you dare.':'Get ready. Wire cutting unlocks when the bomb is armed.'}</p>
           </div>
           {latestBombPress && latestBombPressTeam && <div key={latestBombPress.pressed_at} style={{ background: C.violetPale, border: `1px solid ${C.violet}40`, color: C.violet }} className="animate-pulse rounded-xl px-4 py-3 text-sm font-black">

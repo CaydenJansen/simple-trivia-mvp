@@ -39,3 +39,8 @@ export function bombPhase(settings: Json | null | undefined, now: number) {
   return { armed: now >= armedAt, seconds: Math.max(0, Math.ceil((armedAt - now) / 1000)) }
 }
 
+export function bombDangerWindowSeconds(settings: Json | null | undefined, now: number) {
+  const armedAt = Date.parse(String(record(settings).armed_at ?? ''))
+  if (!Number.isFinite(armedAt)) return 0
+  return Math.max(0, Math.ceil((armedAt + 30_000 - now) / 1000))
+}
