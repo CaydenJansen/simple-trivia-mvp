@@ -3132,6 +3132,7 @@ function ShowGame() {
   const [treasureHolding, setTreasureHolding] = useState(false)
   const [lowestBid, setLowestBid] = useState('')
   const [ownLowestBid, setOwnLowestBid] = useState<PlayerLowestBid | null>(null)
+  const lowestBidShowGameIdRef = useRef<string | null>(null)
   const [ownDealCase, setOwnDealCase] = useState<PlayerDealCase | null>(null)
   const [collaborativeBusy, setCollaborativeBusy] = useState(false)
   const collaborativeBusyRef = useRef(false)
@@ -3251,8 +3252,11 @@ function ShowGame() {
       if (stale()) return
       const row = data && typeof data === 'object' && 'id' in data && data.id ? data as PlayerLowestBid : null
       setOwnLowestBid(row)
-      if (row) setLowestBid(String(row.bid))
-    } else { setOwnLowestBid(null); setLowestBid('') }
+      if (lowestBidShowGameIdRef.current !== activeShowGame.id) {
+        lowestBidShowGameIdRef.current = activeShowGame.id
+        setLowestBid(row ? String(row.bid) : '')
+      }
+    } else { lowestBidShowGameIdRef.current = null; setOwnLowestBid(null); setLowestBid('') }
     if (activeShowGame?.game_type === 'deal-or-no-deal' && requestId && requestToken) {
       const { data } = await supabase.rpc('get_own_deal_or_no_deal_state', { p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken })
       if (stale()) return
@@ -3687,7 +3691,7 @@ function ShowGame() {
                 <input id="lowest-bid" type="number" min="0" step="1" inputMode="numeric" value={lowestBid} onChange={event=>setLowestBid(event.target.value)} style={{border:`2px solid ${C.violet}`,color:C.ink}} className="w-full rounded-2xl bg-white px-4 py-4 text-center text-3xl font-black focus:outline-none" />
                 <button type="button" onClick={()=>void submitLowestBid()} disabled={collaborativeBusy||!lowestBid.trim()} style={{background:C.violet}} className="mt-3 w-full rounded-2xl px-6 py-4 text-lg font-black text-white disabled:opacity-40">{collaborativeBusy?'Saving…':ownLowestBid?'Update locked bid':'Lock in bid'}</button>
                 {ownLowestBid&&<p style={{color:C.go}} className="mt-3 text-sm font-bold">Your current bid is locked as {ownLowestBid.bid}.</p>}
-              </> : <><div style={{background:C.violetPale}} className="rounded-2xl px-5 py-5"><p style={{color:C.sub}} className="text-xs font-black uppercase">Your bid</p><p style={{color:C.violet}} className="mt-1 text-5xl font-black">{ownLowestBid?.bid??'—'}</p></div><h2 style={{color:won?C.go:C.ink}} className="mt-5 text-4xl font-black">{won?'You won!':'Another unique low bid won'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></>}
+              </> : <><div style={{background:C.violetPale}} className="rounded-2xl px-5 py-5"><p style={{color:C.sub}} className="text-xs font-black uppercase">Your bid</p><p style={{color:C.violet}} className="mt-1 text-5xl font-black">{ownLowestBid?.bid??'—'}</p></div><h2 style={{color:won?C.go:C.ink}} className="mt-5 text-4xl font-black">{won?'You won!':showGame.winner_team_id?'Another unique low bid won':'No unique bid this time'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></>}
             </div>
           : isDealOrNoDeal ? <div className="mt-6 w-full max-w-sm">
               <div style={{background:C.violetPale,border:`2px solid ${C.violet}40`}} className="rounded-3xl px-6 py-7"><p style={{color:C.sub}} className="text-xs font-black uppercase tracking-widest">Your secret case</p><p className="mt-3 text-6xl">💼</p><p style={{color:C.violet}} className="mt-2 text-5xl font-black">${ownDealCase?.assigned_value??'?'}</p><p style={{color:C.sub}} className="mt-2 text-sm font-bold">{ownDealCase?.swaps_used??0} of 3 swaps used</p></div>

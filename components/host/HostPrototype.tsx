@@ -10494,8 +10494,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             )}
             {!showingShowGameInstructions && !isAudienceQuestion && (showGameWinner ? (
               <div className="mt-7">
-                <p className="text-sm font-bold uppercase tracking-widest text-violet-300">Winner</p>
-                <p className="mt-2 text-4xl font-black text-emerald-400">{winner?.name ?? '—'}</p>
+                <p className="text-sm font-bold uppercase tracking-widest text-violet-300">{winner ? 'Winner' : 'Result'}</p>
+                <p className="mt-2 text-4xl font-black text-emerald-400">{winner?.name ?? 'No winner this time'}</p>
               </div>
             ) : (
               <p style={{ color: C.liveDim }} className="mt-6 text-lg">{isElimination
