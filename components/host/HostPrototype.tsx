@@ -8349,10 +8349,12 @@ function HostBonusPointsButton({ team, onAwarded }: { team: LiveTeam; onAwarded:
   const [open, setOpen] = useState(false)
   const [points, setPoints] = useState(1)
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
   const [feedback, setFeedback] = useState<string | null>(null)
 
   async function award() {
-    if (busy || !Number.isInteger(points) || points < 1 || points > 100) return
+    if (busyRef.current || !Number.isInteger(points) || points < 1 || points > 100) return
+    busyRef.current = true
     setBusy(true)
     setFeedback(null)
     const { data, error } = await supabase.rpc('award_host_bonus_points', { p_team_id: team.id, p_points: points })
@@ -8363,6 +8365,7 @@ function HostBonusPointsButton({ team, onAwarded }: { team: LiveTeam; onAwarded:
       setFeedback(`+${points} awarded`)
       window.setTimeout(() => { setOpen(false); setFeedback(null) }, 900)
     }
+    busyRef.current = false
     setBusy(false)
   }
 

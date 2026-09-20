@@ -3176,6 +3176,7 @@ function ShowGame() {
       setWheelSettled(false)
     }
     setShowGame(activeShowGame as PlayerShowGame | null)
+    if (activeShowGame?.status === 'exploded') setError(null)
     if (activeShowGame?.game_type === 'beat-the-bomb') {
       const requestId = localStorage.getItem('simple-trivia-join-request-id')
       const requestToken = localStorage.getItem('simple-trivia-join-request-token')
@@ -3319,7 +3320,7 @@ function ShowGame() {
   const collaborativePollingId = showGame?.id ?? null
   const collaborativePollingStatus = showGame?.status ?? null
   useEffect(() => {
-    if (!collaborativePollingType || !['lowest-bidder', 'deal-or-no-deal', 'shared-cursor'].includes(collaborativePollingType) || collaborativePollingStatus !== 'open') return
+    if (!collaborativePollingType || !['lowest-bidder', 'deal-or-no-deal', 'shared-cursor', 'beat-the-bomb'].includes(collaborativePollingType) || collaborativePollingStatus !== 'open') return
     let active = true
     let timer: number | null = null
     const poll = async () => {
@@ -3404,9 +3405,9 @@ function ShowGame() {
   async function pullCursor() {
     if(!showGame||showGame.game_type!=='shared-cursor'||collaborativeBusyRef.current)return
     const requestId=localStorage.getItem('simple-trivia-join-request-id');const requestToken=localStorage.getItem('simple-trivia-join-request-token');if(!requestId||!requestToken)return
-    collaborativeBusyRef.current=true;setCollaborativeBusy(true)
+    collaborativeBusyRef.current=true;setCollaborativeBusy(true);setError(null)
     const {data,error:pullError}=await supabase.rpc('pull_shared_cursor',{p_game_show_game_id:showGame.id,p_request_id:requestId,p_request_token:requestToken})
-    if(pullError)setError('That pull did not register. Try again.');else if(data)setShowGame(data as PlayerShowGame)
+    if(pullError)setError('That tap did not register. Try again.');else { setError(null); if(data)setShowGame(data as PlayerShowGame) }
     collaborativeBusyRef.current=false;setCollaborativeBusy(false)
   }
 
