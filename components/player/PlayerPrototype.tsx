@@ -55,7 +55,7 @@ import {
 import { audienceQuestionFromSettings, audienceQuestionPlayerInstructions, audienceResponseDraftAfterRefresh } from "@/lib/trivia/audience-question";
 import { formatNumericResponse, formatNumericResponseInput, parseNumericResponseInput } from "@/lib/trivia/numeric-response";
 import { TREASURE_WARMUP_MS, treasureAccruedMs } from "@/lib/trivia/treasure";
-import { bombDangerWindowSeconds, bombPhase } from "@/lib/trivia/collaborative-show-games";
+import { bombDangerWindowSeconds, bombIsOvertime, bombPhase } from "@/lib/trivia/collaborative-show-games";
 
 function readableErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message
@@ -3086,6 +3086,7 @@ type PlayerShowGame = {
 type DatabaseAudienceResponse = Database['public']['Tables']['game_show_game_responses']['Row']
 type PlayerTreasureEntry = Database['public']['Tables']['game_show_game_treasure']['Row']
 type PlayerLowestBid = Database['public']['Tables']['game_show_game_bids']['Row']
+type PlayerLowestBidMatch = { team_name: string; bid: number; is_own: boolean; is_winner: boolean }
 type PlayerDealCase = Database['public']['Tables']['game_show_game_deals']['Row']
 type PlayerAudienceResponse = {
   response_id: string
@@ -3110,7 +3111,6 @@ function ShowGame() {
   const [hasPressed, setHasPressed] = useState(false)
   const [pressing, setPressing] = useState(false)
   const pressBusyRef = useRef(false)
-  const [bombPresses, setBombPresses] = useState<Array<{ team_id: string; pressed_at: string }>>([])
   const [ownChoice, setOwnChoice] = useState<string | null>(null)
   const [choiceCounts, setChoiceCounts] = useState<Record<string, number>>({})
   const [eliminationChoices, setEliminationChoices] = useState<Record<string, string>>({})
@@ -3133,6 +3133,7 @@ function ShowGame() {
   const [lowestBid, setLowestBid] = useState('')
   const [ownLowestBid, setOwnLowestBid] = useState<PlayerLowestBid | null>(null)
   const lowestBidShowGameIdRef = useRef<string | null>(null)
+  const [lowestBidMatches, setLowestBidMatches] = useState<PlayerLowestBidMatch[]>([])
   const [ownDealCase, setOwnDealCase] = useState<PlayerDealCase | null>(null)
   const [collaborativeBusy, setCollaborativeBusy] = useState(false)
   const collaborativeBusyRef = useRef(false)
@@ -3176,11 +3177,14 @@ function ShowGame() {
     }
     setShowGame(activeShowGame as PlayerShowGame | null)
     if (activeShowGame?.game_type === 'beat-the-bomb') {
-      const { data: pressRows } = await supabase.from('game_show_game_presses').select('team_id, pressed_at').eq('game_show_game_id', activeShowGame.id).order('pressed_at', { ascending: true })
+      const requestId = localStorage.getItem('simple-trivia-join-request-id')
+      const requestToken = localStorage.getItem('simple-trivia-join-request-token')
+      const { data: ownCut } = requestId && requestToken
+        ? await supabase.rpc('get_own_beat_the_bomb_status', { p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken })
+        : { data: false }
       if (stale()) return
-      setBombPresses(pressRows ?? [])
-      setHasPressed(Boolean((pressRows ?? []).some(press => press.team_id === teamId)))
-    } else { setBombPresses([]); setHasPressed(false) }
+      setHasPressed(Boolean(ownCut))
+    } else setHasPressed(false)
     if (activeShowGame && isEliminationShowGame(activeShowGame.game_type)) {
       const state = eliminationShowGameState(activeShowGame.settings)
       const { data: roundChoices } = await supabase.from('game_show_game_choices').select('team_id, choice')
@@ -3256,7 +3260,12 @@ function ShowGame() {
         lowestBidShowGameIdRef.current = activeShowGame.id
         setLowestBid(row ? String(row.bid) : '')
       }
-    } else { lowestBidShowGameIdRef.current = null; setOwnLowestBid(null); setLowestBid('') }
+      if (activeShowGame.status === 'exploded') {
+        const { data: matchingRows } = await supabase.rpc('get_lowest_bidder_matching_result', { p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken })
+        if (stale()) return
+        setLowestBidMatches(matchingRows ?? [])
+      } else setLowestBidMatches([])
+    } else { lowestBidShowGameIdRef.current = null; setOwnLowestBid(null); setLowestBid(''); setLowestBidMatches([]) }
     if (activeShowGame?.game_type === 'deal-or-no-deal' && requestId && requestToken) {
       const { data } = await supabase.rpc('get_own_deal_or_no_deal_state', { p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken })
       if (stale()) return
@@ -3271,7 +3280,6 @@ function ShowGame() {
     const channel = supabase.channel(`player-show-game-${gameId}-${crypto.randomUUID()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, payload => { void load((payload.new as { current_show_game_key?: string | null }).current_show_game_key ?? null) })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_games', filter: `game_id=eq.${gameId}` }, () => { void load() })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_presses', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_choices', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_responses', filter: `game_id=eq.${gameId}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_show_game_balloons', filter: `game_id=eq.${gameId}` }, () => { void load() })
@@ -3312,8 +3320,17 @@ function ShowGame() {
   const collaborativePollingStatus = showGame?.status ?? null
   useEffect(() => {
     if (!collaborativePollingType || !['lowest-bidder', 'deal-or-no-deal', 'shared-cursor'].includes(collaborativePollingType) || collaborativePollingStatus !== 'open') return
-    const timer = window.setInterval(() => { void load() }, 800)
-    return () => window.clearInterval(timer)
+    let active = true
+    let timer: number | null = null
+    const poll = async () => {
+      await load()
+      if (active) timer = window.setTimeout(() => { void poll() }, 800)
+    }
+    void poll()
+    return () => {
+      active = false
+      if (timer !== null) window.clearTimeout(timer)
+    }
   }, [collaborativePollingId, collaborativePollingStatus, collaborativePollingType, load])
 
   useEffect(() => {
@@ -3565,6 +3582,7 @@ function ShowGame() {
   const isSharedCursor = showGame?.game_type === 'shared-cursor'
   const currentBombPhase = bombPhase(showGame?.settings, showGameNow)
   const bombDangerSeconds = bombDangerWindowSeconds(showGame?.settings, showGameNow)
+  const bombOvertime = bombIsOvertime(showGame?.settings)
   const treasureSettings = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) ? showGame.settings as Record<string, Json> : {}
   const treasureGuardAwake = treasureSettings.guard_awake === true
   const ownTreasure = treasure.find(entry => entry.team_id === teamId)
@@ -3586,8 +3604,6 @@ function ShowGame() {
   const wheelTeams = liveTeams.filter(team => wheelTeamIds.length === 0 || wheelTeamIds.includes(team.id))
   const teamIsEligible = Boolean(teamId && (wheelTeamIds.length === 0 || wheelTeamIds.includes(teamId)))
   const wheelWinner = liveTeams.find(team => team.id === showGame?.winner_team_id) ?? null
-  const latestBombPress = bombPresses.at(-1) ?? null
-  const latestBombPressTeam = liveTeams.find(team => team.id === latestBombPress?.team_id) ?? null
   const coinResultVisible = showGame?.game_type !== 'heads-or-tails' || coinRevealFinishedRound === eliminationState.roundNumber
   const showGameOutcome = exploded && (!isWheel || wheelSettled) && coinResultVisible
   const eliminationSecondsRemaining = Math.max(0, Math.ceil(((showGame?.explode_at ? new Date(showGame.explode_at).getTime() : showGameNow) - showGameNow) / 1000))
@@ -3691,15 +3707,15 @@ function ShowGame() {
                 <input id="lowest-bid" type="number" min="0" step="1" inputMode="numeric" value={lowestBid} onChange={event=>setLowestBid(event.target.value)} style={{border:`2px solid ${C.violet}`,color:C.ink}} className="w-full rounded-2xl bg-white px-4 py-4 text-center text-3xl font-black focus:outline-none" />
                 <button type="button" onClick={()=>void submitLowestBid()} disabled={collaborativeBusy||!lowestBid.trim()} style={{background:C.violet}} className="mt-3 w-full rounded-2xl px-6 py-4 text-lg font-black text-white disabled:opacity-40">{collaborativeBusy?'Saving…':ownLowestBid?'Update locked bid':'Lock in bid'}</button>
                 {ownLowestBid&&<p style={{color:C.go}} className="mt-3 text-sm font-bold">Your current bid is locked as {ownLowestBid.bid}.</p>}
-              </> : <><div style={{background:C.violetPale}} className="rounded-2xl px-5 py-5"><p style={{color:C.sub}} className="text-xs font-black uppercase">Your bid</p><p style={{color:C.violet}} className="mt-1 text-5xl font-black">{ownLowestBid?.bid??'—'}</p></div><h2 style={{color:won?C.go:C.ink}} className="mt-5 text-4xl font-black">{won?'You won!':showGame.winner_team_id?'Another unique low bid won':'No unique bid this time'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></>}
+              </> : <><div style={{background:C.violetPale}} className="rounded-2xl px-5 py-5"><p style={{color:C.sub}} className="text-xs font-black uppercase">Your bid</p><p style={{color:C.violet}} className="mt-1 text-5xl font-black">{ownLowestBid?.bid??'—'}</p></div><h2 style={{color:won?C.go:C.ink}} className="mt-5 text-4xl font-black">{won?'You won!':showGame.winner_team_id?'Another unique low bid won':'No unique bid this time'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}{lowestBidMatches.length>1&&<div style={{background:C.panel,border:`1px solid ${C.line}`}} className="mt-5 rounded-2xl px-5 py-4 text-left"><p style={{color:C.sub}} className="text-xs font-black uppercase tracking-wider">Also chose {ownLowestBid?.bid}</p><p style={{color:C.ink}} className="mt-2 font-bold">{lowestBidMatches.filter(item=>!item.is_own).map(item=>item.team_name).join(' · ')}</p></div>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></>}
             </div>
           : isDealOrNoDeal ? <div className="mt-6 w-full max-w-sm">
               <div style={{background:C.violetPale,border:`2px solid ${C.violet}40`}} className="rounded-3xl px-6 py-7"><p style={{color:C.sub}} className="text-xs font-black uppercase tracking-widest">Your secret case</p><p className="mt-3 text-6xl">💼</p><p style={{color:C.violet}} className="mt-2 text-5xl font-black">${ownDealCase?.assigned_value??'?'}</p><p style={{color:C.sub}} className="mt-2 text-sm font-bold">{ownDealCase?.swaps_used??0} of 3 swaps used</p></div>
-              {!exploded && !ownDealCase?.locked && !ownDealCase?.decision && <><p style={{color:C.sub}} className="mt-4 font-bold">{eliminationSecondsRemaining}s · Keep this case or request a blind swap?</p><div className="mt-3 grid grid-cols-2 gap-3"><button onClick={()=>void submitDealDecision('keep')} disabled={collaborativeBusy} style={{background:C.go}} className="rounded-2xl px-4 py-4 font-black text-white disabled:opacity-40">KEEP</button><button onClick={()=>void submitDealDecision('swap')} disabled={collaborativeBusy} style={{background:C.violet}} className="rounded-2xl px-4 py-4 font-black text-white disabled:opacity-40">SWAP</button></div></>}
-              {!exploded && (ownDealCase?.decision||ownDealCase?.locked) && <div className="mt-5"><h2 style={{color:C.ink}} className="text-2xl font-black">{ownDealCase.locked?'Case locked in':ownDealCase.decision==='swap'?'Finding a swap partner…':'Keeping this case…'}</h2><WaitMsg msg="Waiting for the other teams…" /></div>}
+              {!exploded && !ownDealCase?.locked && !ownDealCase?.decision && <><p style={{color:C.sub}} className="mt-4 font-bold">{eliminationSecondsRemaining}s · Keep this case or trade it with the bank?</p><div className="mt-3 grid grid-cols-2 gap-3"><button onClick={()=>void submitDealDecision('keep')} disabled={collaborativeBusy} style={{background:C.go}} className="rounded-2xl px-4 py-4 font-black text-white disabled:opacity-40">KEEP</button><button onClick={()=>void submitDealDecision('swap')} disabled={collaborativeBusy} style={{background:C.violet}} className="rounded-2xl px-4 py-4 font-black text-white disabled:opacity-40">SWAP</button></div></>}
+              {!exploded && (ownDealCase?.decision||ownDealCase?.locked) && <div className="mt-5"><h2 style={{color:C.ink}} className="text-2xl font-black">{ownDealCase.locked?'Case locked in':ownDealCase.decision==='swap'?'Trading with the bank…':'Keeping this case…'}</h2><WaitMsg msg="Waiting for the next round…" /></div>}
               {exploded&&<div className="mt-5"><h2 style={{color:won?C.go:C.ink}} className="text-4xl font-black">{won?'You won!':'Another case was higher'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}
             </div>
-          : isSharedCursor ? <div className="mt-5 w-full max-w-xl"><SharedCursorGame teams={wheelTeams} settings={showGame.settings} ownTeamId={teamId} />{!exploded&&<button type="button" onClick={()=>void pullCursor()} disabled={collaborativeBusy||!teamIsEligible} style={{background:C.violet,touchAction:'manipulation'}} className="mx-auto mt-4 w-full max-w-sm select-none rounded-2xl px-6 py-5 text-xl font-black text-white active:scale-95 disabled:opacity-50">PULL TO {snapshot.teamName.toUpperCase()}</button>}{exploded&&<div className="mt-5"><h2 style={{color:won?C.go:C.ink}} className="text-4xl font-black">{won?'You won!':'The cursor landed elsewhere'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}</div>
+          : isSharedCursor ? <div className="mt-5 w-full max-w-xl"><SharedCursorGame teams={wheelTeams} settings={showGame.settings} ownTeamId={teamId} />{!exploded&&<><p style={{color:C.ink}} className="mx-auto mt-4 max-w-sm text-lg font-black">TAP the button. Do not drag the cursor.</p><button type="button" aria-label={`Tap to nudge the cursor toward ${snapshot.teamName}`} onClick={()=>void pullCursor()} disabled={collaborativeBusy||!teamIsEligible} style={{background:C.violet,touchAction:'manipulation'}} className="mx-auto mt-3 w-full max-w-sm select-none rounded-2xl px-6 py-5 text-xl font-black text-white active:scale-95 disabled:opacity-50">TAP TO NUDGE TOWARD {snapshot.teamName.toUpperCase()}</button></>}{exploded&&<div className="mt-5"><h2 style={{color:won?C.go:C.ink}} className="text-4xl font-black">{won?'You won!':'The cursor landed elsewhere'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}</div>
           : isWheel ? <div className="mt-5"><TeamWheel compact teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
           : isBigBalloon ? <div className="mt-5 w-full max-w-sm">
               {!exploded && <div aria-hidden={balloonHolding || ownBalloon?.status === 'inflating' || ownBalloon?.status === 'locked' || ownBalloon?.status === 'popped'} style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className={`mb-4 min-h-11 rounded-full px-4 py-2 text-center text-lg font-black tabular-nums ${balloonHolding || ownBalloon?.status === 'inflating' || ownBalloon?.status === 'locked' || ownBalloon?.status === 'popped' ? 'invisible' : ''}`}>
@@ -3731,13 +3747,9 @@ function ShowGame() {
           : <div className={`mt-5 text-6xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
         {isBomb && showGame?.status === 'open' && <div className="mt-4 w-full max-w-sm space-y-2">
           <div style={{ background: '#fff1f2', border: '1px solid #fb7185', color: '#9f1239' }} className="rounded-xl px-3 py-2 text-center">
-            <p className="text-lg font-black uppercase tracking-wide">{currentBombPhase.armed?`DANGER · ${bombDangerSeconds}s MAX`:`ARMING · ${currentBombPhase.seconds}s`}</p>
-            <p className="mt-0.5 text-[11px] font-bold leading-4">{currentBombPhase.armed?'It can explode at any moment over the next 30 seconds. Cut as late as you dare.':'Get ready. Wire cutting unlocks when the bomb is armed.'}</p>
+            <p className="text-lg font-black uppercase tracking-wide">{currentBombPhase.armed?bombOvertime?'OVERTIME · CUT NOW':`DANGER · ${bombDangerSeconds}s MAX`:`ARMING · ${currentBombPhase.seconds}s`}</p>
+            <p className="mt-0.5 text-[11px] font-bold leading-4">{currentBombPhase.armed?bombOvertime?'The bomb is waiting for its first cut. The first cut ends overtime.':'It can explode at any moment over the next 60 seconds—but never before somebody cuts. You are flying blind.':'Get ready. Wire cutting unlocks when the bomb is armed.'}</p>
           </div>
-          {latestBombPress && latestBombPressTeam && <div key={latestBombPress.pressed_at} style={{ background: C.violetPale, border: `1px solid ${C.violet}40`, color: C.violet }} className="animate-pulse rounded-xl px-4 py-3 text-sm font-black">
-            {latestBombPressTeam.name} cut their wire!
-          </div>}
-          {bombPresses.length > 1 && <p style={{ color: C.sub }} className="text-xs font-bold">{bombPresses.length} teams have cut their wires.</p>}
         </div>}
         {!isAudienceQuestion && !isTreasure && !isLowestBidder && !isDealOrNoDeal && !isSharedCursor && (isElimination && showGame?.game_type !== 'scissors-paper-rock' && !exploded && (showGame?.game_type !== 'heads-or-tails' || eliminationState.roundPhase !== 'reveal' || coinRevealFinishedRound === eliminationState.roundNumber) ? (
           <div className="mt-5">

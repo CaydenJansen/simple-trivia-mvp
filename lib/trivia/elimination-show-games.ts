@@ -117,10 +117,10 @@ export function showGameEmoji(type: ShowGameType) {
 
 export function showGameInstructions(type: ShowGameType) {
   if (type === 'spin-the-wheel') return 'Every joined team is placed on the wheel. It spins, slows down, and randomly selects one winner.'
-  if (type === 'beat-the-bomb') return 'The bomb takes 20 seconds to arm. Once it is armed, cut your wire before it explodes—but be as late as you dare. The last team to cut safely wins; any team still connected when it explodes is out.'
+  if (type === 'beat-the-bomb') return 'The bomb takes 20 seconds to arm. Once armed, it can explode at any time in the next 60 seconds—but not until at least one team cuts. The last team to cut safely wins; if nobody cuts, overtime guarantees a winner.'
   if (type === 'lowest-bidder') return 'Choose a whole number. The lowest number chosen by exactly one team wins. If another team matches your number, neither of you can win with it.'
-  if (type === 'deal-or-no-deal') return 'Every team gets a secret case worth 1–100. Keep it or request a blind swap with another team. You can swap up to three times; the highest final case wins.'
-  if (type === 'shared-cursor') return 'Every team pulls the shared cursor toward its name. Hold it over your team for one full second to win. Pulls gradually weaken so the cursor must eventually settle.'
+  if (type === 'deal-or-no-deal') return 'Every team gets a secret case of money. Keep it or trade it with the bank for a new mystery case. You can swap up to three times; the highest final case wins.'
+  if (type === 'shared-cursor') return 'Tap your team button to nudge the shared cursor toward your name—do not drag it. Keep tapping strategically; if the cursor stays on your team for one full second, you win.'
   if (type === 'heads-or-tails') return 'Call heads or tails before each flip. Correct teams stay in; the others are knocked out. Flips continue until one team remains.'
   if (type === 'scissors-paper-rock') return 'You’ll be paired against another team. Pick scissors, paper, or rock before the ten-second timer ends. Win to advance; draws send both teams through.'
   if (type === 'big-balloon') return 'Press and hold to inflate your balloon, then release to lock in its size. Push it too far and it pops. The biggest balloon still intact wins.'

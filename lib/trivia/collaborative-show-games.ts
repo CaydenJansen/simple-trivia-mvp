@@ -33,6 +33,12 @@ export function sharedCursorState(settings: Json | null | undefined): SharedCurs
   }
 }
 
+export function lowestUniqueBid<T extends { bid: number }>(entries: T[]): T | null {
+  const counts = new Map<number, number>()
+  for (const entry of entries) counts.set(entry.bid, (counts.get(entry.bid) ?? 0) + 1)
+  return [...entries].filter(entry => counts.get(entry.bid) === 1).sort((left, right) => left.bid - right.bid)[0] ?? null
+}
+
 export function bombPhase(settings: Json | null | undefined, now: number) {
   const armedAt = Date.parse(String(record(settings).armed_at ?? ''))
   if (!Number.isFinite(armedAt)) return { armed: true, seconds: 0 }
@@ -40,7 +46,14 @@ export function bombPhase(settings: Json | null | undefined, now: number) {
 }
 
 export function bombDangerWindowSeconds(settings: Json | null | undefined, now: number) {
-  const armedAt = Date.parse(String(record(settings).armed_at ?? ''))
+  const value = record(settings)
+  const armedAt = Date.parse(String(value.armed_at ?? ''))
+  const configuredEnd = Date.parse(String(value.danger_ends_at ?? ''))
   if (!Number.isFinite(armedAt)) return 0
-  return Math.max(0, Math.ceil((armedAt + 30_000 - now) / 1000))
+  const dangerEndsAt = Number.isFinite(configuredEnd) ? configuredEnd : armedAt + 60_000
+  return Math.max(0, Math.ceil((dangerEndsAt - now) / 1000))
+}
+
+export function bombIsOvertime(settings: Json | null | undefined) {
+  return record(settings).overtime === true
 }

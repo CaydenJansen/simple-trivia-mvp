@@ -632,6 +632,12 @@ export type Database = {
         Update: Partial<{ banked_units: number; current_units: number; is_stealing: boolean; stealing_started_at: string | null; caught_count: number; updated_at: string }>
         Relationships: []
       }
+      game_score_adjustments: {
+        Row: { id: string; game_id: string; team_id: string; points: number; reason: string; awarded_by: string; created_at: string }
+        Insert: { id?: string; game_id: string; team_id: string; points: number; reason?: string; awarded_by?: string; created_at?: string }
+        Update: Partial<{ points: number; reason: string }>
+        Relationships: []
+      }
       game_tiebreakers: {
         Row: TiebreakerRow & { game_id: string }
         Insert: TiebreakerInsert & { game_id: string }
@@ -1254,9 +1260,11 @@ export type Database = {
         Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }
         Returns: LiveShowGameRow
       }
+      get_own_beat_the_bomb_status: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: boolean }
       start_lowest_bidder: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
       submit_lowest_bidder_bid: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_bid: number }; Returns: Database['public']['Tables']['game_show_game_bids']['Row'] }
       get_own_lowest_bidder_bid: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: Database['public']['Tables']['game_show_game_bids']['Row'] }
+      get_lowest_bidder_matching_result: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: { team_name: string; bid: number; is_own: boolean; is_winner: boolean }[] }
       resolve_lowest_bidder: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
       start_deal_or_no_deal: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
       get_own_deal_or_no_deal_state: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: Database['public']['Tables']['game_show_game_deals']['Row'] }
@@ -1265,6 +1273,7 @@ export type Database = {
       start_shared_cursor: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
       pull_shared_cursor: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: LiveShowGameRow }
       advance_shared_cursor: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
+      award_host_bonus_points: { Args: { p_team_id: string; p_points: number }; Returns: Database['public']['Tables']['teams']['Row'] }
       start_spin_the_wheel: {
         Args: { p_game_show_game_id: string }
         Returns: LiveShowGameRow

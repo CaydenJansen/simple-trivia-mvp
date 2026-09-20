@@ -123,7 +123,7 @@ import { playerScoreVisibilityFromSettings, type PlayerScoreVisibility } from "@
 import { teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { quizExitPrompt } from "@/lib/trivia/quiz-exit";
 import { submittedAnswersEditableFromSettings } from "@/lib/trivia/answer-editing";
-import { bombDangerWindowSeconds, bombPhase } from "@/lib/trivia/collaborative-show-games";
+import { bombDangerWindowSeconds, bombIsOvertime, bombPhase, lowestUniqueBid } from "@/lib/trivia/collaborative-show-games";
 import { hostGameSettingsRecord, persistentHostGameSettings } from "@/lib/trivia/host-preferences";
 import { isTeamDormant } from "@/lib/trivia/team-presence";
 import {
@@ -5357,7 +5357,7 @@ function QuizPreview({ title, rounds, onClose }: {
                   <p className="text-xs font-black uppercase tracking-widest text-violet-300">{active.showGame.audienceQuestionMode === 'favourite' ? 'Favourite Answer' : 'Closest Guess'}</p>
                   <p className="mt-3 text-xl font-black">{active.showGame.audienceQuestionPrompt || 'Add your audience prompt'}</p>
                 </div>}
-                {active.showGame.gameType === 'beat-the-bomb' && <><div className="mx-auto mt-7 max-w-xs rounded-2xl bg-violet-600 px-8 py-4 text-xl font-black">PRESS ME</div><p className="mt-4 text-sm text-zinc-400">Random 10–30 second fuse</p></>}
+                {active.showGame.gameType === 'beat-the-bomb' && <><div className="mx-auto mt-7 max-w-xs rounded-2xl bg-violet-600 px-8 py-4 text-xl font-black">CUT THE WIRE</div><p className="mt-4 text-sm text-zinc-400">20-second arming · up to 60-second danger window</p></>}
                 <p className="mx-auto mt-3 max-w-lg rounded-xl border border-violet-300/20 bg-violet-300/10 px-4 py-3 text-sm font-bold text-violet-100">
                   {showGameRewardDescription({
                     type: active.showGame.rewardType,
@@ -8345,6 +8345,40 @@ type LiveTeam = {
   last_seen_at?: string | null
 }
 
+function HostBonusPointsButton({ team, onAwarded }: { team: LiveTeam; onAwarded: (teamId: string, score: number) => void }) {
+  const [open, setOpen] = useState(false)
+  const [points, setPoints] = useState(1)
+  const [busy, setBusy] = useState(false)
+  const [feedback, setFeedback] = useState<string | null>(null)
+
+  async function award() {
+    if (busy || !Number.isInteger(points) || points < 1 || points > 100) return
+    setBusy(true)
+    setFeedback(null)
+    const { data, error } = await supabase.rpc('award_host_bonus_points', { p_team_id: team.id, p_points: points })
+    if (error) setFeedback('Could not award points')
+    else {
+      const updated = Array.isArray(data) ? data[0] : data
+      if (updated) onAwarded(team.id, updated.score)
+      setFeedback(`+${points} awarded`)
+      window.setTimeout(() => { setOpen(false); setFeedback(null) }, 900)
+    }
+    setBusy(false)
+  }
+
+  return <div className="relative shrink-0">
+    <button type="button" onClick={() => setOpen(current => !current)} title={`Award bonus points to ${team.name}`} style={{ color: '#C4B5FD', border: '1px solid #7C3AED66' }} className="cursor-pointer rounded-lg px-2 py-1 text-[10px] font-black hover:bg-violet-500/10">+ BONUS</button>
+    {open && <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, boxShadow: '0 16px 40px rgba(0,0,0,.45)' }} className="absolute right-0 top-8 z-50 w-52 rounded-xl p-3 text-left">
+      <p style={{ color: C.liveText }} className="truncate text-xs font-black">Bonus for {team.name}</p>
+      <div className="mt-2 flex gap-2">
+        <input aria-label={`Bonus points for ${team.name}`} type="number" min={1} max={100} step={1} value={points} onChange={event => setPoints(Number(event.target.value))} style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-sm font-black" />
+        <button type="button" onClick={() => { void award() }} disabled={busy || points < 1 || points > 100} style={{ background: C.violet }} className="rounded-lg px-3 py-1.5 text-xs font-black text-white disabled:opacity-40">Award</button>
+      </div>
+      {feedback && <p style={{ color: feedback.startsWith('+') ? C.go : C.stop }} className="mt-2 text-[10px] font-bold">{feedback}</p>}
+    </div>}
+  </div>
+}
+
 type LiveSubmission = {
   id: string
   team_id: string
@@ -9079,10 +9113,17 @@ function LiveQuestion({ go }: { go: Go }) {
   useEffect(() => {
     if (!activeShowGameId || activeShowGameStatus !== 'open' || !['deal-or-no-deal', 'shared-cursor'].includes(showGame?.game_type ?? '')) return
     const rpc = showGame?.game_type === 'shared-cursor' ? 'advance_shared_cursor' : 'advance_deal_or_no_deal'
-    const tick = () => { void supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId }) }
-    tick()
-    const timer = window.setInterval(tick, showGame?.game_type === 'shared-cursor' ? 250 : 500)
-    return () => window.clearInterval(timer)
+    let active = true
+    let timer: number | null = null
+    const tick = async () => {
+      await supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId })
+      if (active) timer = window.setTimeout(() => { void tick() }, showGame?.game_type === 'shared-cursor' ? 250 : 500)
+    }
+    void tick()
+    return () => {
+      active = false
+      if (timer !== null) window.clearTimeout(timer)
+    }
   }, [activeShowGameId, activeShowGameStatus, showGame?.game_type])
 
   async function prepareShowGame(nextShowGame: LiveShowGameDefinition) {
@@ -10398,6 +10439,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const fuseProgress = showGame?.status === 'exploded' ? 0 : Math.max(0, Math.min(100, ((explodeAt - showGameNow) / Math.max(1, explodeAt - startedAt)) * 100))
     const hostBombPhase = bombPhase(showGame?.settings, showGameNow)
     const hostBombDangerSeconds = bombDangerWindowSeconds(showGame?.settings, showGameNow)
+    const hostBombOvertime = bombIsOvertime(showGame?.settings)
+    const currentLowestUniqueBid = lowestUniqueBid(showGameBids)
     const dealRound = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) ? Number((showGame.settings as Record<string, Json>).deal_round) || 1 : 1
     return (
       <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
@@ -10477,12 +10520,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             ) : isLowestBidder ? (
               <div className="mx-auto mt-6 max-w-3xl">
                 <div className="mb-4 rounded-xl bg-violet-500/10 px-4 py-3 text-lg font-black text-violet-200">{showGame?.status === 'open' ? `${eliminationSecondsRemaining}s to lock a unique low number` : 'Bids revealed'}</div>
-                <div className="grid gap-2 sm:grid-cols-2">{participatingTeams.map(team => { const entry=showGameBids.find(bid=>bid.team_id===team.id); return <div key={team.id} style={{border:`1px solid ${showGame?.winner_team_id===team.id?C.go:C.liveLine}`,background:C.livePanel}} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className="font-black">{showGame?.status==='exploded' ? entry ? entry.bid : 'No bid' : entry ? 'Locked ✓' : 'Choosing…'}</span></div>})}</div>
+                <div className="grid gap-2 sm:grid-cols-2">{participatingTeams.map(team => { const entry=showGameBids.find(bid=>bid.team_id===team.id); const leading=showGame?.status==="open" && currentLowestUniqueBid?.team_id===team.id; return <div key={team.id} style={{border:`1px solid ${showGame?.winner_team_id===team.id||leading?C.go:C.liveLine}`,background:leading?`${C.go}18`:C.livePanel}} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className="flex items-center gap-2 font-black">{entry ? entry.bid : showGame?.status==="exploded" ? "No bid" : "Choosing…"}{leading&&<span className="text-xs uppercase tracking-wide text-emerald-400">Current leader</span>}</span></div>})}</div>
               </div>
             ) : isDealOrNoDeal ? (
               <div className="mx-auto mt-6 max-w-3xl">
                 <div className="mb-4 rounded-xl bg-violet-500/10 px-4 py-3 text-lg font-black text-violet-200">Round {dealRound} · {showGame?.status === 'open' ? `${eliminationSecondsRemaining}s to keep or swap` : 'Cases revealed'}</div>
-                <div className="grid gap-2 sm:grid-cols-2">{participatingTeams.map(team => { const entry=showGameDeals.find(item=>item.team_id===team.id); return <div key={team.id} style={{border:`1px solid ${showGame?.winner_team_id===team.id?C.go:C.liveLine}`,background:C.livePanel}} className="flex items-center gap-3 rounded-xl px-4 py-3 text-left"><span className="text-2xl">💼</span><span className="min-w-0 flex-1 truncate font-bold">{team.name}</span><span className="font-black">{showGame?.status==='exploded' ? `$${entry?.assigned_value ?? '—'}` : entry?.locked ? 'Locked' : entry?.decision==='swap' ? 'Swap requested' : entry?.decision==='keep' ? 'Keeping' : 'Choosing…'}</span></div>})}</div>
+                <div className="grid gap-2 sm:grid-cols-2">{participatingTeams.map(team => { const entry=showGameDeals.find(item=>item.team_id===team.id); return <div key={team.id} style={{border:`1px solid ${showGame?.winner_team_id===team.id?C.go:C.liveLine}`,background:C.livePanel}} className="flex items-center gap-3 rounded-xl px-4 py-3 text-left"><span className="text-2xl">💼</span><span className="min-w-0 flex-1 truncate font-bold">{team.name}</span><span className="font-black">{showGame?.status==='exploded' ? `$${entry?.assigned_value ?? '—'}` : entry?.locked ? 'Locked' : entry?.decision==='swap' ? 'Trading with bank' : entry?.decision==='keep' ? 'Keeping' : 'Choosing…'}</span></div>})}</div>
               </div>
             ) : isSharedCursor && showGame ? (
               <div className="mt-5"><SharedCursorGame teams={participatingTeams} settings={showGame.settings} dark /></div>
@@ -10508,10 +10551,10 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 : isDealOrNoDeal ? `${showGameDeals.filter(item => item.decision || item.locked).length} of ${participatingTeams.length} teams have decided`
                 : isSharedCursor ? `${eliminationSecondsRemaining}s before the cursor is forced to settle`
                 : isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`)
-                  : hostBombPhase.armed ? `Danger window · up to ${hostBombDangerSeconds}s left · ${showGamePresses.length} of ${participatingTeams.length} teams have cut their wire.` : `Arming… ${hostBombPhase.seconds}s`}</p>
+                  : hostBombPhase.armed ? hostBombOvertime ? `Overtime · waiting for the first wire cut` : `Danger window · up to ${hostBombDangerSeconds}s left · ${showGamePresses.length} of ${participatingTeams.length} teams have cut their wire.` : `Arming… ${hostBombPhase.seconds}s`}</p>
             ))}
             {!showingShowGameInstructions && isBomb && <div className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-2">
-              {participatingTeams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Wire cut ✓' : hostBombPhase.armed ? 'Still connected…' : 'Waiting to arm…'}</span></div>)}
+              {participatingTeams.map(team => <div key={team.id} style={{ border: `1px solid ${C.liveLine}`, background: C.livePanel }} className="flex items-center justify-between rounded-xl px-4 py-3 text-left"><span className="font-bold">{team.name}</span><span className={pressedTeamIds.has(team.id) ? 'text-emerald-400' : 'text-zinc-500'}>{pressedTeamIds.has(team.id) ? 'Wire cut ✓' : hostBombPhase.armed ? hostBombOvertime ? 'Cut now…' : 'Still connected…' : 'Waiting to arm…'}</span></div>)}
             </div>}
             {liveError && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{liveError}</p>}
           </section>
@@ -10701,6 +10744,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     </span>
                     <span style={{ color: C.liveText }} className="min-w-0 flex-1 truncate font-bold">{team.name}</span>
                     <span style={{ color: C.liveText }} className="font-extrabold tabular-nums">{team.score}</span>
+                <HostBonusPointsButton team={team} onAwarded={(teamId, score) => setTeams(current => current.map(item => item.id === teamId ? { ...item, score } : item))} />
                   </div>
                 ))}
               </div>
@@ -11233,6 +11277,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     className="rounded-full flex items-center justify-center text-xs font-bold shrink-0 tabular-nums">{leaderboardPlacements[i]}</div>
                   <span style={{ color: leaderboardPlacements[i] === 1 ? C.liveText : `${C.liveText}99` }} className={`text-sm flex-1 truncate ${leaderboardPlacements[i] === 1 ? 'font-bold' : 'font-medium'}`}>{team.name}</span>
                   <span style={{ color: leaderboardPlacements[i] === 1 ? C.liveText : `${C.liveText}99` }} className="text-sm font-bold tabular-nums">{team.score}</span>
+                  <HostBonusPointsButton team={team} onAwarded={(teamId, score) => setTeams(current => current.map(item => item.id === teamId ? { ...item, score } : item))} />
                   {dormant && <span style={{ color: C.liveDim }} className="text-[9px] font-black uppercase">Asleep</span>}
                   <button type="button" onClick={() => { void removeLiveTeam(team) }} disabled={removingLiveTeamId === team.id} title={`Remove ${team.name}`} style={{ color: C.liveDim }} className="cursor-pointer rounded px-1 text-xs hover:text-red-400 disabled:opacity-40">×</button>
                 </div>
@@ -11958,6 +12003,7 @@ function EndOfRound({ go }: { go: Go }) {
                   className="rounded-full flex items-center justify-center text-sm font-extrabold shrink-0">{leaderboardPlacements[i]}</div>
                 <span style={{ color: C.liveText }} className="flex-1 text-sm font-semibold">{team.name}</span>
                 <span style={{ color: C.liveText }} className="font-extrabold tabular-nums">{team.score}</span>
+                <HostBonusPointsButton team={team} onAwarded={(teamId, score) => setTeams(current => current.map(item => item.id === teamId ? { ...item, score } : item))} />
               </div>
             ))}
           </div>
@@ -12223,6 +12269,9 @@ function FinalResults({ go }: { go: Go }) {
   const displayResolution = pendingResolution
     ?? resolutions.find(resolution => resolution.id === activeAttempt?.resolution_id)
     ?? null
+  const manualPlacementStart = displayResolution
+    ? Math.max(1, leaderboard.findIndex(team => displayResolution.team_ids.includes(team.id)) + 1)
+    : 1
   const activePrepared = preparedTiebreakers.find(item => item.id === activeAttempt?.game_tiebreaker_id) ?? null
   const activeSubmissions = tiebreakerSubmissions.filter(submission => submission.attempt_id === activeAttempt?.id)
   const closestTeamIds = closestTiebreakerTeamIds(activeSubmissions.map(submission => ({
@@ -12443,7 +12492,7 @@ function FinalResults({ go }: { go: Go }) {
                   {manualOrder.map((teamId, index) => {
                     const team = teams.find(item => item.id === teamId)
                     return <div key={teamId} style={{ background: C.livePanel, border: `1px solid ${C.liveLine}` }} className="flex items-center gap-3 rounded-xl px-4 py-3">
-                      <span style={{ color: C.violet }} className="w-6 text-sm font-extrabold">{index + 1}</span>
+                      <span style={{ color: C.violet }} className="w-6 text-sm font-extrabold">{ordinalPlacement(manualPlacementStart + index)}</span>
                       <span style={{ color: C.liveText }} className="flex-1 text-sm font-bold">{team?.name ?? 'Team'}</span>
                       <button style={{ color: C.liveText }} onClick={() => moveManualTeam(index, -1)} disabled={index === 0} className="rounded-lg px-2 py-1 text-sm font-bold disabled:opacity-25">↑</button>
                       <button style={{ color: C.liveText }} onClick={() => moveManualTeam(index, 1)} disabled={index === manualOrder.length - 1} className="rounded-lg px-2 py-1 text-sm font-bold disabled:opacity-25">↓</button>

@@ -36,6 +36,7 @@ async function mockCollaborativeGame(page: Page, type: GameType) {
     if (path.endsWith('/rpc/get_own_lowest_bidder_bid')) return json({ id: 'bid-a', game_show_game_id: 'show-game-a', game_id: 'collab-game', team_id: 'team-a', bid: ownBid, submitted_at: new Date(now).toISOString() })
     if (path.endsWith('/rpc/submit_lowest_bidder_bid')) { lastRpcBody = route.request().postDataJSON() as Record<string, unknown>; ownBid = Number(lastRpcBody.p_bid); return json({ id: 'bid-a', game_show_game_id: 'show-game-a', game_id: 'collab-game', team_id: 'team-a', bid: ownBid, submitted_at: new Date().toISOString() }) }
     if (path.endsWith('/rpc/get_own_deal_or_no_deal_state')) return json({ id: 'case-a', game_show_game_id: 'show-game-a', game_id: 'collab-game', team_id: 'team-a', assigned_value: 83, swaps_used: 0, decision: null, locked: false, last_outcome: null, updated_at: new Date(now).toISOString() })
+    if (path.endsWith('/rpc/get_own_beat_the_bomb_status')) return json(false)
     if (path.endsWith('/rpc/pull_shared_cursor') || path.endsWith('/rpc/cut_beat_the_bomb_wire')) { lastRpcBody = route.request().postDataJSON() as Record<string, unknown>; return json(showGame) }
     if (path.endsWith('/rpc/touch_team_presence')) return json('team-a')
     if (path.endsWith('/games')) return json({ id: 'collab-game', title: 'Test', status: 'live', current_screen: 'show-game', answer_phase: 'closed', answer_editing_allowed: false, question_stage: 'core', current_question_key: null, current_content_screen_key: null, current_show_game_key: 'collab-a', settings: {} })
@@ -76,7 +77,7 @@ test('Shared Cursor shows every team and sends an authenticated pull', async ({ 
   await page.goto('/play')
   await expect(page.getByText('Purple People', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('Quiz Kids', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'PULL TO PURPLE PEOPLE' }).click()
+  await page.getByRole('button', { name: 'Tap to nudge the cursor toward Purple People' }).click()
   await expect.poll(() => mock.getLastRpcBody()).toMatchObject({ p_request_id: 'request-a', p_request_token: 'token-a' })
 })
 
