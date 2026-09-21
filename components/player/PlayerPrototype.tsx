@@ -3133,6 +3133,8 @@ function ShowGame() {
   const [lowestBid, setLowestBid] = useState('')
   const [ownLowestBid, setOwnLowestBid] = useState<PlayerLowestBid | null>(null)
   const lowestBidShowGameIdRef = useRef<string | null>(null)
+  const lowestBidHydratedShowGameIdRef = useRef<string | null>(null)
+  const lowestBidDirtyRef = useRef(false)
   const [lowestBidMatches, setLowestBidMatches] = useState<PlayerLowestBidMatch[]>([])
   const [ownDealCase, setOwnDealCase] = useState<PlayerDealCase | null>(null)
   const [collaborativeBusy, setCollaborativeBusy] = useState(false)
@@ -3253,13 +3255,21 @@ function ShowGame() {
     const requestId = localStorage.getItem('simple-trivia-join-request-id')
     const requestToken = localStorage.getItem('simple-trivia-join-request-token')
     if (activeShowGame?.game_type === 'lowest-bidder' && requestId && requestToken) {
+      const isNewLowestBidGame = lowestBidShowGameIdRef.current !== activeShowGame.id
+      if (isNewLowestBidGame) {
+        lowestBidShowGameIdRef.current = activeShowGame.id
+        lowestBidHydratedShowGameIdRef.current = null
+        lowestBidDirtyRef.current = false
+        setOwnLowestBid(null)
+        setLowestBid('')
+      }
       const { data } = await supabase.rpc('get_own_lowest_bidder_bid', { p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken })
       if (stale()) return
       const row = data && typeof data === 'object' && 'id' in data && data.id ? data as PlayerLowestBid : null
       setOwnLowestBid(row)
-      if (lowestBidShowGameIdRef.current !== activeShowGame.id) {
-        lowestBidShowGameIdRef.current = activeShowGame.id
-        setLowestBid(row ? String(row.bid) : '')
+      if (lowestBidHydratedShowGameIdRef.current !== activeShowGame.id) {
+        lowestBidHydratedShowGameIdRef.current = activeShowGame.id
+        setLowestBid(current => lowestBidDirtyRef.current ? current : row ? String(row.bid) : '')
       }
       if (activeShowGame.status === 'exploded') {
         const { data: matchingRows } = await supabase.rpc('get_lowest_bidder_matching_result', { p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken })
@@ -3375,8 +3385,13 @@ function ShowGame() {
     setPressing(true)
     setError(null)
     const { error: pressError } = await supabase.rpc('cut_beat_the_bomb_wire', { p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken })
-    if (pressError) setError(pressError.message.includes('already pressed') ? 'Your press is already locked in.' : 'That press did not go through. Try again.')
-    else setHasPressed(true)
+    if (pressError) {
+      const { data: ownCut } = await supabase.rpc('get_own_beat_the_bomb_status', { p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken })
+      if (ownCut || pressError.message.includes('WIRE_ALREADY_CUT')) {
+        setHasPressed(true)
+        setError(null)
+      } else setError('That press did not go through. Try again.')
+    } else setHasPressed(true)
     pressBusyRef.current = false
     setPressing(false)
     void load()
@@ -3389,7 +3404,12 @@ function ShowGame() {
     if (!requestId || !requestToken || !Number.isInteger(bid) || bid < 0) { setError('Enter a whole number of zero or more.'); return }
     collaborativeBusyRef.current=true; setCollaborativeBusy(true); setError(null)
     const { data, error: bidError } = await supabase.rpc('submit_lowest_bidder_bid',{p_game_show_game_id:showGame.id,p_request_id:requestId,p_request_token:requestToken,p_bid:bid})
-    if (bidError) setError('That bid did not go through. Try again.'); else setOwnLowestBid(data as PlayerLowestBid)
+    if (bidError) {
+      const { data: savedBid } = await supabase.rpc('get_own_lowest_bidder_bid', { p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken })
+      const verifiedBid = savedBid && typeof savedBid === 'object' && 'id' in savedBid && savedBid.id && Number(savedBid.bid) === bid ? savedBid as PlayerLowestBid : null
+      if (verifiedBid) { setOwnLowestBid(verifiedBid); setError(null) }
+      else setError('That bid did not go through. Try again.')
+    } else setOwnLowestBid(data as PlayerLowestBid)
     collaborativeBusyRef.current=false; setCollaborativeBusy(false); void load()
   }
 
@@ -3397,8 +3417,17 @@ function ShowGame() {
     if (!showGame || showGame.game_type !== 'deal-or-no-deal' || collaborativeBusyRef.current) return
     const requestId=localStorage.getItem('simple-trivia-join-request-id'); const requestToken=localStorage.getItem('simple-trivia-join-request-token'); if(!requestId||!requestToken)return
     collaborativeBusyRef.current=true; setCollaborativeBusy(true); setError(null)
+    const previousSwaps = ownDealCase?.swaps_used ?? 0
     const {data,error:decisionError}=await supabase.rpc('submit_deal_or_no_deal_decision',{p_game_show_game_id:showGame.id,p_request_id:requestId,p_request_token:requestToken,p_decision:decision})
-    if(decisionError)setError('That decision did not go through. Try again.');else setOwnDealCase(data as PlayerDealCase)
+    if(decisionError){
+      const { data: savedCase } = await supabase.rpc('get_own_deal_or_no_deal_state', { p_game_show_game_id: showGame.id, p_request_id: requestId, p_request_token: requestToken })
+      const verifiedCase = savedCase && typeof savedCase === 'object' && 'id' in savedCase && savedCase.id ? savedCase as PlayerDealCase : null
+      const decisionPersisted = verifiedCase?.decision === decision
+        || (decision === 'keep' && verifiedCase?.locked === true && verifiedCase.last_outcome === 'kept')
+        || (decision === 'swap' && verifiedCase?.last_outcome === 'bank-swapped' && verifiedCase.swaps_used > previousSwaps)
+      if (verifiedCase && decisionPersisted) { setOwnDealCase(verifiedCase); setError(null) }
+      else setError('That decision did not go through. Try again.')
+    }else setOwnDealCase(data as PlayerDealCase)
     collaborativeBusyRef.current=false;setCollaborativeBusy(false);void load()
   }
 
@@ -3705,7 +3734,7 @@ function ShowGame() {
               {!exploded ? <>
                 <div style={{background:C.violetPale,color:C.violet}} className="mb-4 rounded-xl px-4 py-3 text-center font-black tabular-nums">{eliminationSecondsRemaining}s to choose</div>
                 <label htmlFor="lowest-bid" style={{color:C.sub}} className="mb-2 block text-left text-xs font-black uppercase tracking-wider">Your whole number</label>
-                <input id="lowest-bid" type="number" min="0" step="1" inputMode="numeric" value={lowestBid} onChange={event=>setLowestBid(event.target.value)} style={{border:`2px solid ${C.violet}`,color:C.ink}} className="w-full rounded-2xl bg-white px-4 py-4 text-center text-3xl font-black focus:outline-none" />
+                <input id="lowest-bid" type="number" min="0" step="1" inputMode="numeric" value={lowestBid} onChange={event=>{lowestBidDirtyRef.current=true;setLowestBid(event.target.value)}} style={{border:`2px solid ${C.violet}`,color:C.ink}} className="w-full rounded-2xl bg-white px-4 py-4 text-center text-3xl font-black focus:outline-none" />
                 <button type="button" onClick={()=>void submitLowestBid()} disabled={collaborativeBusy||!lowestBid.trim()} style={{background:C.violet}} className="mt-3 w-full rounded-2xl px-6 py-4 text-lg font-black text-white disabled:opacity-40">{collaborativeBusy?'Saving…':ownLowestBid?'Update locked bid':'Lock in bid'}</button>
                 {ownLowestBid&&<p style={{color:C.go}} className="mt-3 text-sm font-bold">Your current bid is locked as {ownLowestBid.bid}.</p>}
               </> : <><div style={{background:C.violetPale}} className="rounded-2xl px-5 py-5"><p style={{color:C.sub}} className="text-xs font-black uppercase">Your bid</p><p style={{color:C.violet}} className="mt-1 text-5xl font-black">{ownLowestBid?.bid??'—'}</p></div><h2 style={{color:won?C.go:C.ink}} className="mt-5 text-4xl font-black">{won?'You won!':showGame.winner_team_id?'Another unique low bid won':'No unique bid this time'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}{lowestBidMatches.length>1&&<div style={{background:C.panel,border:`1px solid ${C.line}`}} className="mt-5 rounded-2xl px-5 py-4 text-left"><p style={{color:C.sub}} className="text-xs font-black uppercase tracking-wider">Also chose {ownLowestBid?.bid}</p><p style={{color:C.ink}} className="mt-2 font-bold">{lowestBidMatches.filter(item=>!item.is_own).map(item=>item.team_name).join(' · ')}</p></div>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></>}
