@@ -112,6 +112,7 @@ test('Shared Cursor shows every team and sends an authenticated pull', async ({ 
   await page.goto('/play')
   await expect(page.getByText('Purple People', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('Quiz Kids', { exact: true })).toBeVisible()
+  await expect(page.getByText('Tap stamina')).toBeVisible()
   await page.getByRole('button', { name: 'Tap to nudge the cursor toward Purple People' }).click()
   await expect.poll(() => mock.getLastRpcBody()).toMatchObject({ p_request_id: 'request-a', p_request_token: 'token-a' })
 })
@@ -145,15 +146,15 @@ test('Lowest Bidder reveals teams that duplicated the player bid', async ({ page
   await expect(page.getByText('Quiz Kids', { exact: true }).last()).toBeVisible()
 })
 
-test('Shared Cursor clears a transient tap error after a successful retry', async ({ page }) => {
+test('Shared Cursor recovers from a transient connection error after a successful retry', async ({ page }) => {
   const mock = await mockCollaborativeGame(page, 'shared-cursor')
   mock.failNextCursorTap()
   await page.goto('/play')
   const tap = page.getByRole('button', { name: 'Tap to nudge the cursor toward Purple People' })
   await tap.click()
-  await expect(page.getByText('That tap did not register. Try again.')).toBeVisible()
+  await expect(page.getByText('Connection interrupted. Reconnecting…')).toBeVisible()
   await tap.click()
-  await expect(page.getByText('That tap did not register. Try again.')).toBeHidden()
+  await expect(page.getByText('Connection interrupted. Reconnecting…')).toBeHidden()
 })
 
 test('Beat the Bomb confirms a cut when the response is lost after saving', async ({ page }) => {
