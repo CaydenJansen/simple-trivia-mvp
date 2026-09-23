@@ -46,6 +46,7 @@ export type Database = {
         Row: {
           id: string
           owner_id: string | null
+          folder_id: string | null
           title: string
           status: string
           round_count: number
@@ -58,6 +59,7 @@ export type Database = {
         Insert: {
           id?: string
           owner_id?: string | null
+          folder_id?: string | null
           title: string
           status?: string
           round_count?: number
@@ -70,6 +72,7 @@ export type Database = {
         Update: {
           id?: string
           owner_id?: string | null
+          folder_id?: string | null
           title?: string
           status?: string
           round_count?: number
@@ -79,10 +82,82 @@ export type Database = {
           created_at?: string
           updated_at?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: 'quizzes_owner_id_fkey'
+            columns: ['owner_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'quizzes_folder_id_fkey'
+            columns: ['folder_id']
+            isOneToOne: false
+            referencedRelation: 'quiz_folders'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      quiz_folders: {
+        Row: {
+          id: string
+          owner_id: string
+          name: string
+          sort_position: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          owner_id?: string
+          name: string
+          sort_position?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          owner_id?: string
+          name?: string
+          sort_position?: number
+          created_at?: string
+          updated_at?: string
+        }
         Relationships: [{
-          foreignKeyName: 'quizzes_owner_id_fkey'
+          foreignKeyName: 'quiz_folders_owner_id_fkey'
           columns: ['owner_id']
           isOneToOne: false
+          referencedRelation: 'users'
+          referencedColumns: ['id']
+        }]
+      }
+      host_join_links: {
+        Row: {
+          id: string
+          host_id: string
+          slug: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          host_id: string
+          slug: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          host_id?: string
+          slug?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [{
+          foreignKeyName: 'host_join_links_host_id_fkey'
+          columns: ['host_id']
+          isOneToOne: true
           referencedRelation: 'users'
           referencedColumns: ['id']
         }]
@@ -1011,6 +1086,14 @@ export type Database = {
       }
     }
     Functions: {
+      ensure_host_join_link: {
+        Args: Record<PropertyKey, never>
+        Returns: string
+      }
+      resolve_host_join_link: {
+        Args: { p_slug: string }
+        Returns: { game_code: string; game_title: string }[]
+      }
       create_quiz_share_link: {
         Args: { p_quiz_id: string; p_expires_in_days?: number | null }
         Returns: { share_token: string; expires_at: string | null; claim_count: number }[]

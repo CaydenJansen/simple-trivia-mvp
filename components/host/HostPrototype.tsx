@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -55,6 +56,7 @@ import { customPrizeSettings, prizeAwardsFromJson, prizeSettings, type PrizeAwar
 import { correctnessSummary } from "@/lib/trivia/correctness-rate";
 import { hostRecoveryScreen } from "@/lib/trivia/session-recovery";
 import { buildGameJoinUrl } from "@/lib/trivia/join-code";
+import { buildPermanentHostJoinUrl } from "@/lib/trivia/permanent-host-link";
 import {
   AUTO_BUILD_TIEBREAKER_COUNT,
   availableTiebreakerReplacements,
@@ -1048,11 +1050,17 @@ function AccountScreen({ go }: { go: Go }) {
   const [emailBusy, setEmailBusy] = useState(false)
   const [passwordBusy, setPasswordBusy] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
+  const [permanentJoinSlug, setPermanentJoinSlug] = useState<string | null>(null)
+  const [permanentQrDataUrl, setPermanentQrDataUrl] = useState<string | null>(null)
+  const [permanentQrBusy, setPermanentQrBusy] = useState(false)
+  const [permanentQrCopied, setPermanentQrCopied] = useState(false)
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
     let active = true
-    void supabase.auth.getUser().then(({ data, error }) => {
+
+    async function loadAccount() {
+      const { data, error } = await supabase.auth.getUser()
       if (!active) return
       if (error || !data.user) {
         setNotice({ kind: 'error', text: error?.message ?? 'Your host session has expired.' })
@@ -1060,11 +1068,31 @@ function AccountScreen({ go }: { go: Go }) {
         const signedInEmail = data.user.email ?? ''
         setCurrentEmail(signedInEmail)
         setEmail(signedInEmail)
+        const { data: joinLink, error: joinLinkError } = await supabase
+          .from('host_join_links')
+          .select('slug')
+          .eq('host_id', data.user.id)
+          .maybeSingle()
+        if (!active) return
+        if (joinLinkError) console.error('Could not load permanent host join link:', joinLinkError)
+        else setPermanentJoinSlug(joinLink?.slug ?? null)
       }
       setLoading(false)
-    })
+    }
+
+    void loadAccount()
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    if (!permanentJoinSlug) return
+    let active = true
+    const permanentUrl = buildPermanentHostJoinUrl(window.location.origin, permanentJoinSlug)
+    void QRCode.toDataURL(permanentUrl, { width: 720, margin: 3, errorCorrectionLevel: 'H', color: { dark: '#18151F', light: '#FFFFFF' } })
+      .then(url => { if (active) setPermanentQrDataUrl(url) })
+      .catch(error => { if (active) console.error('Could not generate permanent host QR:', error) })
+    return () => { active = false }
+  }, [permanentJoinSlug])
 
   async function updateEmail(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -1109,6 +1137,34 @@ function AccountScreen({ go }: { go: Go }) {
     setNotice({ kind: 'success', text: 'Password updated successfully.' })
   }
 
+  async function createPermanentQr() {
+    if (permanentQrBusy) return
+    setPermanentQrBusy(true)
+    setPermanentQrCopied(false)
+    setNotice(null)
+    const { data, error } = await supabase.rpc('ensure_host_join_link')
+    setPermanentQrBusy(false)
+    if (error || !data) {
+      console.error('Could not create permanent host QR:', error)
+      setNotice({ kind: 'error', text: 'Could not create your permanent QR code. Please try again.' })
+      return
+    }
+    setPermanentJoinSlug(data)
+    setNotice({ kind: 'success', text: 'Your permanent venue QR code is ready.' })
+  }
+
+  async function copyPermanentJoinLink() {
+    if (!permanentJoinSlug) return
+    setPermanentQrCopied(false)
+    try {
+      await navigator.clipboard.writeText(buildPermanentHostJoinUrl(window.location.origin, permanentJoinSlug))
+      setPermanentQrCopied(true)
+    } catch (error) {
+      console.error('Could not copy permanent join link:', error)
+      setNotice({ kind: 'error', text: 'Could not copy the link automatically. Select it and copy it manually.' })
+    }
+  }
+
   async function signOut() {
     setNotice(null)
     setSigningOut(true)
@@ -1118,6 +1174,10 @@ function AccountScreen({ go }: { go: Go }) {
       setNotice({ kind: 'error', text: error.message })
     }
   }
+
+  const permanentJoinUrl = typeof window !== 'undefined' && permanentJoinSlug
+    ? buildPermanentHostJoinUrl(window.location.origin, permanentJoinSlug)
+    : ''
 
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
@@ -1170,6 +1230,37 @@ function AccountScreen({ go }: { go: Go }) {
                   {passwordBusy ? 'Updating…' : 'Update Password'}
                 </button>
               </form>
+            </section>
+
+            <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl p-5 sm:p-6">
+              <p style={{ color: C.violet }} className="text-xs font-extrabold uppercase tracking-[0.14em]">Venue QR</p>
+              <h2 style={{ color: C.ink }} className="mt-1 text-lg font-extrabold">Permanent player QR code</h2>
+              <p style={{ color: C.sub }} className="mt-2 max-w-2xl text-sm leading-6">Print this once or put it on a venue screen. Whenever somebody scans it, they’ll be sent to your newest lobby or live game automatically. The QR itself never needs to change.</p>
+
+              {!permanentJoinSlug ? (
+                <button type="button" disabled={permanentQrBusy} onClick={() => void createPermanentQr()} style={{ background: C.violet }} className="mt-5 cursor-pointer rounded-xl px-5 py-3 text-sm font-bold text-white transition hover:opacity-90 disabled:cursor-wait disabled:opacity-50">
+                  {permanentQrBusy ? 'Creating…' : 'Create Permanent QR Code'}
+                </button>
+              ) : (
+                <div className="mt-5 grid gap-5 sm:grid-cols-[190px_minmax(0,1fr)] sm:items-center">
+                  <div className="flex aspect-square items-center justify-center rounded-2xl border border-zinc-200 bg-white p-3">
+                    {permanentQrDataUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- Generated data URL is not compatible with next/image.
+                      <img src={permanentQrDataUrl} alt="Your permanent player join QR code" className="h-full w-full object-contain" />
+                    ) : <span className="text-xs font-semibold text-zinc-400">Generating QR…</span>}
+                  </div>
+                  <div className="min-w-0">
+                    <label htmlFor="permanent-player-link" className="block text-xs font-bold uppercase tracking-wider text-zinc-500">Permanent join link</label>
+                    <input id="permanent-player-link" readOnly value={permanentJoinUrl} onFocus={event => event.currentTarget.select()} className="mt-2 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-3 text-sm text-zinc-700 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100" />
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => void copyPermanentJoinLink()} className="rounded-xl border border-violet-200 px-4 py-2 text-sm font-bold text-violet-700 hover:bg-violet-50">{permanentQrCopied ? 'Copied!' : 'Copy Link'}</button>
+                      {permanentQrDataUrl && <a href={permanentQrDataUrl} download="good-trivia-permanent-venue-qr.png" className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-bold text-white hover:bg-violet-700">Download QR</a>}
+                      <a href={permanentJoinUrl} target="_blank" rel="noreferrer" className="rounded-xl border border-zinc-200 px-4 py-2 text-sm font-bold text-zinc-700 hover:bg-zinc-50">Test Link</a>
+                    </div>
+                    <p style={{ color: C.sub }} className="mt-3 text-xs leading-5">With no active game, scanners see a waiting screen that checks again automatically.</p>
+                  </div>
+                </div>
+              )}
             </section>
 
             <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="flex flex-col gap-4 rounded-2xl p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
@@ -1363,6 +1454,7 @@ function RecentGamesScreen({ go }: { go: Go }) {
 
 type QuizSummary = {
   id: string
+  folder_id: string | null
   title: string
   status: 'draft' | 'ready'
   round_count: number
@@ -1370,6 +1462,10 @@ type QuizSummary = {
   estimated_minutes: number
   updated_at: string
 }
+
+type QuizFolder = Database['public']['Tables']['quiz_folders']['Row']
+
+const UNFILED_FOLDER_KEY = 'unfiled'
 
 type QuizShareDetails = {
   token: string
@@ -1414,6 +1510,7 @@ function formatEditedAt(value: string) {
 
 function Dashboard({ go }: { go: Go }) {
   const [quizzes, setQuizzes] = useState<QuizSummary[]>([])
+  const [folders, setFolders] = useState<QuizFolder[]>([])
   const [gamesHosted, setGamesHosted] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -1430,6 +1527,15 @@ function Dashboard({ go }: { go: Go }) {
   const [shareError, setShareError] = useState<string | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
   const shareBusyRef = useRef(false)
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false)
+  const [folderName, setFolderName] = useState('')
+  const [folderBusy, setFolderBusy] = useState(false)
+  const [pendingFolderRename, setPendingFolderRename] = useState<QuizFolder | null>(null)
+  const [pendingFolderDelete, setPendingFolderDelete] = useState<QuizFolder | null>(null)
+  const [draggedQuizId, setDraggedQuizId] = useState<string | null>(null)
+  const [dropFolderKey, setDropFolderKey] = useState<string | null>(null)
+  const [movingQuizId, setMovingQuizId] = useState<string | null>(null)
+  const [collapsedFolderIds, setCollapsedFolderIds] = useState<Set<string>>(() => new Set())
   const [incomingShareToken, setIncomingShareToken] = useState<string | null>(() => (
     typeof window === 'undefined' ? null : quizShareTokenFromUrl(window.location.href)
   ))
@@ -1448,11 +1554,16 @@ function Dashboard({ go }: { go: Go }) {
       setLoading(true)
       setLoadError(null)
 
-      const [quizResult, gameCountResult] = await Promise.all([
+      const [quizResult, folderResult, gameCountResult] = await Promise.all([
         supabase
           .from('quizzes')
-          .select('id, title, status, round_count, question_count, estimated_minutes, updated_at')
+          .select('id, folder_id, title, status, round_count, question_count, estimated_minutes, updated_at')
           .order('updated_at', { ascending: false }),
+        supabase
+          .from('quiz_folders')
+          .select('id, owner_id, name, sort_position, created_at, updated_at')
+          .order('sort_position', { ascending: true })
+          .order('created_at', { ascending: true }),
         supabase.rpc('get_host_game_count'),
       ])
 
@@ -1463,6 +1574,13 @@ function Dashboard({ go }: { go: Go }) {
         setLoadError('Could not load your quizzes.')
       } else {
         setQuizzes((quizResult.data ?? []) as QuizSummary[])
+      }
+
+      if (folderResult.error) {
+        console.error('Could not load quiz folders:', folderResult.error)
+        setLoadError('Could not load your quiz folders.')
+      } else {
+        setFolders(folderResult.data ?? [])
       }
 
       if (!gameCountResult.error) {
@@ -1510,6 +1628,123 @@ function Dashboard({ go }: { go: Go }) {
 
     return () => { active = false }
   }, [incomingShareToken])
+
+  function openCreateFolder() {
+    setLoadError(null)
+    setPendingFolderRename(null)
+    setFolderName('')
+    setFolderDialogOpen(true)
+  }
+
+  function openRenameFolder(folder: QuizFolder) {
+    setLoadError(null)
+    setPendingFolderRename(folder)
+    setFolderName(folder.name)
+    setFolderDialogOpen(true)
+  }
+
+  async function saveFolder() {
+    if (folderBusy) return
+    const nextName = folderName.trim()
+    if (!nextName) {
+      setLoadError('Enter a folder name before saving.')
+      return
+    }
+
+    setFolderBusy(true)
+    setLoadError(null)
+    const now = new Date().toISOString()
+
+    if (pendingFolderRename) {
+      const { data, error } = await supabase
+        .from('quiz_folders')
+        .update({ name: nextName, updated_at: now })
+        .eq('id', pendingFolderRename.id)
+        .select('id, owner_id, name, sort_position, created_at, updated_at')
+        .single()
+
+      if (error || !data) {
+        console.error('Could not rename quiz folder:', error)
+        setLoadError(error?.code === '23505' ? 'You already have a folder with that name.' : 'Could not rename that folder. Please try again.')
+        setFolderBusy(false)
+        return
+      }
+      setFolders(current => current.map(folder => folder.id === data.id ? data : folder))
+      setActionNotice(`Renamed folder to “${nextName}”.`)
+    } else {
+      const { data, error } = await supabase
+        .from('quiz_folders')
+        .insert({ name: nextName, sort_position: folders.length })
+        .select('id, owner_id, name, sort_position, created_at, updated_at')
+        .single()
+
+      if (error || !data) {
+        console.error('Could not create quiz folder:', error)
+        setLoadError(error?.code === '23505' ? 'You already have a folder with that name.' : 'Could not create that folder. Please try again.')
+        setFolderBusy(false)
+        return
+      }
+      setFolders(current => [...current, data])
+      setActionNotice(`Created “${nextName}”. Drag a quiz into it whenever you’re ready.`)
+    }
+
+    setFolderBusy(false)
+    setFolderDialogOpen(false)
+    setPendingFolderRename(null)
+    setFolderName('')
+  }
+
+  async function deleteFolder(folder: QuizFolder) {
+    if (folderBusy) return
+    setFolderBusy(true)
+    setLoadError(null)
+    const { error } = await supabase.from('quiz_folders').delete().eq('id', folder.id)
+    if (error) {
+      console.error('Could not delete quiz folder:', error)
+      setLoadError('Could not delete that folder. Please try again.')
+      setFolderBusy(false)
+      return
+    }
+
+    setFolders(current => current.filter(item => item.id !== folder.id))
+    setQuizzes(current => current.map(quiz => quiz.folder_id === folder.id ? { ...quiz, folder_id: null } : quiz))
+    setPendingFolderDelete(null)
+    setFolderBusy(false)
+    setActionNotice(`Deleted “${folder.name}”. Its quizzes are now Unfiled.`)
+  }
+
+  async function moveQuizToFolder(quizId: string, folderId: string | null) {
+    const quiz = quizzes.find(item => item.id === quizId)
+    if (!quiz || quiz.folder_id === folderId || movingQuizId) return
+    setMovingQuizId(quizId)
+    setLoadError(null)
+    const { error } = await supabase.from('quizzes').update({ folder_id: folderId }).eq('id', quizId)
+    if (error) {
+      console.error('Could not move quiz:', error)
+      setLoadError('Could not move that quiz. Please try again.')
+      setMovingQuizId(null)
+      return
+    }
+    setQuizzes(current => current.map(item => item.id === quizId ? { ...item, folder_id: folderId } : item))
+    setMovingQuizId(null)
+  }
+
+  function dropQuiz(event: ReactDragEvent<HTMLElement>, folderId: string | null) {
+    event.preventDefault()
+    const quizId = draggedQuizId ?? event.dataTransfer.getData('text/quiz-id')
+    setDropFolderKey(null)
+    setDraggedQuizId(null)
+    if (quizId) void moveQuizToFolder(quizId, folderId)
+  }
+
+  function toggleFolder(folderId: string) {
+    setCollapsedFolderIds(current => {
+      const next = new Set(current)
+      if (next.has(folderId)) next.delete(folderId)
+      else next.add(folderId)
+      return next
+    })
+  }
 
   async function deleteQuiz(quiz: QuizSummary) {
     setDeletingQuiz(true)
@@ -1627,6 +1862,13 @@ function Dashboard({ go }: { go: Go }) {
       return
     }
 
+    if (quiz.folder_id) {
+      const { error: folderError } = await supabase.from('quizzes').update({ folder_id: quiz.folder_id }).eq('id', copiedQuizId)
+      if (folderError) {
+        console.error('Could not preserve copied quiz folder:', folderError)
+      }
+    }
+
     const createdAt = new Date().toISOString()
     setQuizzes(current => [{
       ...quiz,
@@ -1726,7 +1968,7 @@ function Dashboard({ go }: { go: Go }) {
 
       const { data: copiedQuiz, error: copiedQuizError } = await supabase
         .from('quizzes')
-        .select('id, title, status, round_count, question_count, estimated_minutes, updated_at')
+        .select('id, folder_id, title, status, round_count, question_count, estimated_minutes, updated_at')
         .eq('id', copiedQuizId)
         .maybeSingle()
 
@@ -1762,7 +2004,10 @@ function Dashboard({ go }: { go: Go }) {
             </div>
           ))}
           <div className="hidden flex-1 sm:block" />
-          <Btn onClick={() => go('create-quiz')} sz="sm" cls="ml-auto sm:ml-0">
+          <Btn v="secondary" onClick={openCreateFolder} sz="sm" cls="ml-auto sm:ml-0">
+            <I.plus /> New Folder
+          </Btn>
+          <Btn onClick={() => go('create-quiz')} sz="sm">
             <I.plus /> Create Quiz
           </Btn>
         </div>
@@ -1798,32 +2043,117 @@ function Dashboard({ go }: { go: Go }) {
             <Btn onClick={() => go('create-quiz')}><I.plus /> Create Quiz</Btn>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {quizzes.map(q => (
-              <QuizCard
-                key={q.id}
-                q={q}
-                go={go}
-                duplicating={duplicatingQuizId === q.id}
-                onRename={() => openRename(q)}
-                onShare={() => { void openQuizShare(q) }}
-                onDuplicate={() => { void duplicateQuiz(q) }}
-                onDelete={() => setPendingDelete(q)}
-              />
-            ))}
-            <button
-              onClick={() => go('create-quiz')}
-              style={{ border: `2px dashed ${C.line}` }}
-              className="cursor-pointer rounded-2xl flex flex-col items-center justify-center gap-2.5 min-h-[210px] group hover:border-violet transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet/40"
-            >
-              <div style={{ background: C.violetMist }} className="w-10 h-10 rounded-xl flex items-center justify-center transition-colors group-hover:bg-violet-pale">
-                <I.plus />
-              </div>
-              <span style={{ color: C.sub }} className="text-sm font-semibold group-hover:text-violet transition-colors">Create Quiz</span>
-            </button>
+          <div className="space-y-5">
+            {[...folders.map(folder => ({ id: folder.id as string | null, name: folder.name, folder })), { id: null, name: folders.length > 0 ? 'Unfiled' : 'Quizzes', folder: null }].map(section => {
+              const sectionKey = section.id ?? UNFILED_FOLDER_KEY
+              const sectionQuizzes = quizzes.filter(quiz => quiz.folder_id === section.id)
+              const collapsed = Boolean(section.id && collapsedFolderIds.has(section.id))
+              const activeDrop = dropFolderKey === sectionKey
+
+              return (
+                <section
+                  key={sectionKey}
+                  onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropFolderKey(sectionKey) }}
+                  onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropFolderKey(null) }}
+                  onDrop={event => dropQuiz(event, section.id)}
+                  style={{ background: activeDrop ? C.violetPale : C.panel, border: `1px solid ${activeDrop ? C.violet : C.line}` }}
+                  className="rounded-3xl p-4 transition-colors sm:p-5"
+                >
+                  <div className="mb-4 flex min-h-9 items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => section.id && toggleFolder(section.id)}
+                      disabled={!section.id}
+                      aria-label={section.id ? `${collapsed ? 'Open' : 'Close'} ${section.name}` : undefined}
+                      style={{ color: section.id ? C.violet : C.sub }}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-default"
+                    >
+                      <svg width="22" height="18" viewBox="0 0 22 18" fill="none" className="shrink-0"><path d="M2 4.5A2.5 2.5 0 0 1 4.5 2H9l2 2h6.5A2.5 2.5 0 0 1 20 6.5v7A2.5 2.5 0 0 1 17.5 16h-13A2.5 2.5 0 0 1 2 13.5v-9Z" fill="currentColor" opacity=".16"/><path d="M2 6h18M2 6V4.5A2.5 2.5 0 0 1 4.5 2H9l2 2h6.5A2.5 2.5 0 0 1 20 6.5v7A2.5 2.5 0 0 1 17.5 16h-13A2.5 2.5 0 0 1 2 13.5V6Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></svg>
+                      <span style={{ color: C.ink }} className="truncate text-base font-extrabold">{section.name}</span>
+                      <span style={{ color: C.sub }} className="shrink-0 text-xs font-semibold">{sectionQuizzes.length}</span>
+                      {section.id && <span className={`ml-1 transition-transform ${collapsed ? '-rotate-90' : ''}`}><I.down /></span>}
+                    </button>
+                    {section.folder && (
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button type="button" onClick={() => openRenameFolder(section.folder!)} style={{ color: C.sub }} className="rounded-lg p-2 hover:bg-violet-mist hover:text-violet" aria-label={`Rename ${section.name}`}><I.pencil /></button>
+                        <button type="button" onClick={() => setPendingFolderDelete(section.folder!)} style={{ color: C.sub }} className="rounded-lg p-2 hover:bg-red-50 hover:text-red-600" aria-label={`Delete ${section.name}`}><I.trash /></button>
+                      </div>
+                    )}
+                  </div>
+
+                  {!collapsed && (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      {sectionQuizzes.map(q => (
+                        <QuizCard
+                          key={q.id}
+                          q={q}
+                          go={go}
+                          folders={folders}
+                          duplicating={duplicatingQuizId === q.id}
+                          moving={movingQuizId === q.id}
+                          onDragStart={event => { setDraggedQuizId(q.id); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/quiz-id', q.id) }}
+                          onDragEnd={() => { setDraggedQuizId(null); setDropFolderKey(null) }}
+                          onMove={folderId => { void moveQuizToFolder(q.id, folderId) }}
+                          onRename={() => openRename(q)}
+                          onShare={() => { void openQuizShare(q) }}
+                          onDuplicate={() => { void duplicateQuiz(q) }}
+                          onDelete={() => setPendingDelete(q)}
+                        />
+                      ))}
+                      {sectionQuizzes.length === 0 && (
+                        <div style={{ border: `2px dashed ${activeDrop ? C.violet : C.line}`, color: C.sub }} className="col-span-full flex min-h-28 items-center justify-center rounded-2xl px-5 text-center text-sm font-semibold">
+                          {activeDrop ? `Drop to move quiz into ${section.name}` : section.id ? 'Drag quizzes here, or use Move to folder from a quiz menu.' : 'Drag quizzes here to remove them from a folder.'}
+                        </div>
+                      )}
+                      {!section.id && (
+                        <button
+                          onClick={() => go('create-quiz')}
+                          style={{ border: `2px dashed ${C.line}` }}
+                          className="group flex min-h-[210px] cursor-pointer flex-col items-center justify-center gap-2.5 rounded-2xl transition-colors hover:border-violet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet/40"
+                        >
+                          <div style={{ background: C.violetMist }} className="flex h-10 w-10 items-center justify-center rounded-xl transition-colors group-hover:bg-violet-pale"><I.plus /></div>
+                          <span style={{ color: C.sub }} className="text-sm font-semibold transition-colors group-hover:text-violet">Create Quiz</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </section>
+              )
+            })}
+            {draggedQuizId && (
+              <p style={{ color: C.sub }} className="text-center text-xs font-semibold">Drop the quiz onto a folder, or onto Unfiled to remove it from a folder.</p>
+            )}
           </div>
         )}
       </main>
+      {folderDialogOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/50 px-4 backdrop-blur-sm">
+          <section role="dialog" aria-modal="true" aria-labelledby="quiz-folder-title" className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <p className="text-xs font-black uppercase tracking-widest text-violet-600">Quiz folder</p>
+            <h2 id="quiz-folder-title" className="mt-1 text-xl font-bold text-zinc-900">{pendingFolderRename ? 'Rename folder' : 'Create a folder'}</h2>
+            <p className="mt-2 text-sm leading-6 text-zinc-600">Folders keep My Quizzes tidy and stay synced with your account.</p>
+            <label htmlFor="quiz-folder-name" className="mt-5 block text-xs font-bold uppercase tracking-wider text-zinc-500">Folder name</label>
+            <input id="quiz-folder-name" autoFocus value={folderName} onChange={event => setFolderName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void saveFolder() }} placeholder="e.g. Tuesday Night Venue" className="mt-2 w-full rounded-xl border border-zinc-200 px-4 py-3 text-base font-semibold text-zinc-900 outline-none focus:border-violet focus:ring-2 focus:ring-violet/20" />
+            {loadError && <p className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{loadError}</p>}
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" disabled={folderBusy} onClick={() => { setFolderDialogOpen(false); setPendingFolderRename(null); setLoadError(null) }} className="rounded-xl border border-zinc-200 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Cancel</button>
+              <button type="button" disabled={folderBusy || !folderName.trim()} onClick={() => void saveFolder()} className="rounded-xl bg-violet px-4 py-2 text-sm font-semibold text-white hover:bg-violet-hover disabled:opacity-50">{folderBusy ? 'Saving…' : pendingFolderRename ? 'Save Name' : 'Create Folder'}</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {pendingFolderDelete && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/50 px-4 backdrop-blur-sm">
+          <section role="dialog" aria-modal="true" aria-labelledby="delete-folder-title" className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <h2 id="delete-folder-title" className="text-xl font-bold text-zinc-900">Delete folder?</h2>
+            <p className="mt-3 text-sm leading-6 text-zinc-600">“{pendingFolderDelete.name}” will be removed. The quizzes inside it will move to Unfiled and will not be deleted.</p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" disabled={folderBusy} onClick={() => setPendingFolderDelete(null)} className="rounded-xl border border-zinc-200 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Cancel</button>
+              <button type="button" disabled={folderBusy} onClick={() => void deleteFolder(pendingFolderDelete)} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">{folderBusy ? 'Deleting…' : 'Delete Folder'}</button>
+            </div>
+          </section>
+        </div>
+      )}
       {pendingDelete && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/50 px-4 backdrop-blur-sm">
           <section className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
@@ -1919,10 +2249,15 @@ function Dashboard({ go }: { go: Go }) {
   )
 }
 
-function QuizCard({ q, go, duplicating, onRename, onShare, onDuplicate, onDelete }: {
+function QuizCard({ q, go, folders, duplicating, moving, onDragStart, onDragEnd, onMove, onRename, onShare, onDuplicate, onDelete }: {
   q: QuizSummary
   go: Go
+  folders: QuizFolder[]
   duplicating: boolean
+  moving: boolean
+  onDragStart: (event: ReactDragEvent<HTMLDivElement>) => void
+  onDragEnd: () => void
+  onMove: (folderId: string | null) => void
   onRename: () => void
   onShare: () => void
   onDuplicate: () => void
@@ -1939,15 +2274,20 @@ function QuizCard({ q, go, duplicating, onRename, onShare, onDuplicate, onDelete
 
   return (
     <div
+      draggable={!moving}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      title="Drag this quiz into a folder"
       style={{
         background: C.panel,
         border: `1px solid ${C.line}`,
         borderLeft: `3px solid ${ready ? C.go : C.caution}`,
       }}
-      className="rounded-2xl p-5 flex flex-col group hover:shadow-lg transition-all duration-200"
+      className={`rounded-2xl p-5 flex flex-col group hover:shadow-lg transition-all duration-200 ${moving ? 'opacity-60' : 'cursor-grab active:cursor-grabbing'}`}
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex min-w-0 items-start gap-1">
+          <span style={{ color: C.sub }} className="mt-0.5 shrink-0 opacity-50" aria-hidden="true"><I.grip /></span>
           <h3 style={{ color: C.ink }} className="min-w-0 truncate font-bold text-[15px] leading-snug">{q.title}</h3>
           <button type="button" aria-label={`Rename ${q.title}`} title="Rename quiz" onClick={onRename} style={{ color: C.sub }} className="shrink-0 rounded-md p-1 transition-colors hover:bg-violet-mist hover:text-violet"><I.pencil /></button>
         </div>
@@ -1962,12 +2302,19 @@ function QuizCard({ q, go, duplicating, onRename, onShare, onDuplicate, onDelete
       <div style={{ borderTop: `1px solid ${C.line}` }} className="relative flex items-center gap-2 pt-3.5 mt-2">
         <Btn v="ghost" sz="sm" onClick={() => selectQuiz('quiz-builder')} cls="flex-1 justify-center">Edit</Btn>
         <Btn sz="sm" onClick={() => selectQuiz('host-setup')} cls="flex-1 justify-center" disabled={!ready}>Host Game</Btn>
-        <button disabled={duplicating} aria-label={`Quiz actions for ${q.title}`} onClick={() => setMenuOpen(open => !open)} style={{ color: C.sub }} className="p-1.5 rounded-lg hover:bg-ground transition-colors disabled:opacity-40"><I.menu /></button>
+        <button disabled={duplicating || moving} aria-label={`Quiz actions for ${q.title}`} onClick={() => setMenuOpen(open => !open)} style={{ color: C.sub }} className="p-1.5 rounded-lg hover:bg-ground transition-colors disabled:opacity-40"><I.menu /></button>
         {menuOpen && (
-          <div className="absolute bottom-10 right-0 z-20 w-44 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl">
+          <div className="absolute bottom-10 right-0 z-20 w-52 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl" onPointerDown={event => event.stopPropagation()}>
             <button onClick={() => { setMenuOpen(false); onRename() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Rename Quiz</button>
             <button onClick={() => { setMenuOpen(false); onShare() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Share Quiz</button>
             <button onClick={() => { setMenuOpen(false); onDuplicate() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">{duplicating ? 'Duplicating…' : 'Duplicate Quiz'}</button>
+            <label className="mt-1 block border-t border-zinc-100 px-3 pt-2 text-[10px] font-black uppercase tracking-wider text-zinc-400">
+              Move to folder
+              <select value={q.folder_id ?? ''} disabled={moving} onChange={event => { const folderId = event.target.value || null; setMenuOpen(false); onMove(folderId) }} className="mt-1.5 w-full rounded-lg border border-zinc-200 bg-white px-2 py-2 text-xs font-semibold normal-case tracking-normal text-zinc-700 outline-none focus:border-violet-400">
+                <option value="">Unfiled</option>
+                {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+              </select>
+            </label>
             <button onClick={() => { setMenuOpen(false); onDelete() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50">Delete Quiz</button>
           </div>
         )}
