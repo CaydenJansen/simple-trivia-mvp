@@ -38,8 +38,16 @@ export default function SharedCursorGame({ teams, settings, ownTeamId, dark = fa
           {team.name}
         </div>
       })}
-      {state.candidateTeamId && <div aria-hidden="true" style={{ left: `${50 + state.x * 39}%`, top: `${50 + state.y * 39}%`, transform: 'translate(-50%, -50%)', background: `conic-gradient(#10b981 ${candidateProgress}%, transparent ${candidateProgress}%)` }} className="absolute z-[19] h-16 w-16 rounded-full transition-[left,top] duration-300 ease-out" />}
-      <div style={{ left: `${50 + state.x * 39}%`, top: `${50 + state.y * 39}%`, transform: 'translate(-50%, -50%)', background: state.candidateTeamId ? '#fbbf24' : '#fff', border: '4px solid #7c3aed', boxShadow: '0 8px 28px rgba(124,58,237,.45)' }} className="absolute z-20 flex h-12 w-12 items-center justify-center rounded-full text-xl transition-[left,top] duration-300 ease-out">✦</div>
+      {state.candidateTeamId && <div aria-hidden="true" style={{ left: `${50 + state.x * 39}%`, top: `${50 + state.y * 39}%`, transform: 'translate(-50%, -50%)', background: `conic-gradient(#10b981 ${candidateProgress}%, transparent ${candidateProgress}%)` }} className="absolute z-[19] h-16 w-16 rounded-full transition-[left,top] duration-200 ease-out" />}
+      <div
+        aria-label="Shared mouse cursor"
+        style={{ left: `${50 + state.x * 39}%`, top: `${50 + state.y * 39}%`, transform: 'translate(-18%, -12%)', filter: 'drop-shadow(0 7px 9px rgba(35,20,70,.35))' }}
+        className="absolute z-20 h-12 w-12 transition-[left,top] duration-200 ease-out"
+      >
+        <svg viewBox="0 0 48 48" role="img" aria-hidden="true" className="h-full w-full overflow-visible">
+          <path d="M6 3.5 38.5 28l-15.1 2.2 8.6 13-7.2 4.3-8.1-13.1L6 45.5Z" fill={state.candidateTeamId ? '#fbbf24' : '#ffffff'} stroke="#6d28d9" strokeWidth="3.5" strokeLinejoin="round" />
+        </svg>
+      </div>
     </div>
     <p className={`mt-3 text-center text-sm font-black ${candidateName ? 'text-emerald-400' : dark ? 'text-zinc-400' : 'text-zinc-500'}`}>
       {candidateName ? `Locking onto ${candidateName}… hold it there!` : 'TAP your button to nudge the cursor. Do not drag it.'}

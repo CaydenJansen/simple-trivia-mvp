@@ -55,7 +55,8 @@ import {
 import { audienceQuestionFromSettings, audienceQuestionPlayerInstructions, audienceResponseDraftAfterRefresh } from "@/lib/trivia/audience-question";
 import { formatNumericResponse, formatNumericResponseInput, parseNumericResponseInput } from "@/lib/trivia/numeric-response";
 import { TREASURE_WARMUP_MS, treasureAccruedMs } from "@/lib/trivia/treasure";
-import { bombDangerWindowSeconds, bombIsOvertime, bombPhase } from "@/lib/trivia/collaborative-show-games";
+import { bombDangerWindowSeconds, bombIsOvertime, bombPhase, sharedCursorStamina } from "@/lib/trivia/collaborative-show-games";
+import { bombCutTimingSentence, secondsBeforeBombExplosion } from "@/lib/trivia/beat-the-bomb";
 
 function readableErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message
@@ -3088,6 +3089,12 @@ type PlayerTreasureEntry = Database['public']['Tables']['game_show_game_treasure
 type PlayerLowestBid = Database['public']['Tables']['game_show_game_bids']['Row']
 type PlayerLowestBidMatch = { team_name: string; bid: number; is_own: boolean; is_winner: boolean }
 type PlayerDealCase = Database['public']['Tables']['game_show_game_deals']['Row']
+type PlayerBombResult = {
+  own_pressed_at: string | null
+  winner_pressed_at: string | null
+  explosion_at: string | null
+  winner_team_id: string | null
+}
 type PlayerAudienceResponse = {
   response_id: string
   team_id: string
@@ -3111,6 +3118,7 @@ function ShowGame() {
   const [hasPressed, setHasPressed] = useState(false)
   const [pressing, setPressing] = useState(false)
   const pressBusyRef = useRef(false)
+  const [bombResult, setBombResult] = useState<PlayerBombResult | null>(null)
   const [ownChoice, setOwnChoice] = useState<string | null>(null)
   const [choiceCounts, setChoiceCounts] = useState<Record<string, number>>({})
   const [eliminationChoices, setEliminationChoices] = useState<Record<string, string>>({})
@@ -3182,12 +3190,16 @@ function ShowGame() {
     if (activeShowGame?.game_type === 'beat-the-bomb') {
       const requestId = localStorage.getItem('simple-trivia-join-request-id')
       const requestToken = localStorage.getItem('simple-trivia-join-request-token')
-      const { data: ownCut } = requestId && requestToken
-        ? await supabase.rpc('get_own_beat_the_bomb_status', { p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken })
-        : { data: false }
+      const [{ data: ownCut }, { data: resultRows }] = requestId && requestToken
+        ? await Promise.all([
+          supabase.rpc('get_own_beat_the_bomb_status', { p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken }),
+          supabase.rpc('get_own_beat_the_bomb_result', { p_game_show_game_id: activeShowGame.id, p_request_id: requestId, p_request_token: requestToken }),
+        ])
+        : [{ data: false }, { data: [] }]
       if (stale()) return
       setHasPressed(Boolean(ownCut))
-    } else setHasPressed(false)
+      setBombResult(activeShowGame.status === 'exploded' ? resultRows?.[0] ?? null : null)
+    } else { setHasPressed(false); setBombResult(null) }
     if (activeShowGame && isEliminationShowGame(activeShowGame.game_type)) {
       const state = eliminationShowGameState(activeShowGame.settings)
       const { data: roundChoices } = await supabase.from('game_show_game_choices').select('team_id, choice')
@@ -3330,7 +3342,7 @@ function ShowGame() {
   const collaborativePollingId = showGame?.id ?? null
   const collaborativePollingStatus = showGame?.status ?? null
   useEffect(() => {
-    if (!collaborativePollingType || !['lowest-bidder', 'deal-or-no-deal', 'shared-cursor', 'beat-the-bomb'].includes(collaborativePollingType) || collaborativePollingStatus !== 'open') return
+    if (!collaborativePollingType || !['lowest-bidder', 'deal-or-no-deal', 'beat-the-bomb'].includes(collaborativePollingType) || collaborativePollingStatus !== 'open') return
     let active = true
     let timer: number | null = null
     const poll = async () => {
@@ -3343,6 +3355,33 @@ function ShowGame() {
       if (timer !== null) window.clearTimeout(timer)
     }
   }, [collaborativePollingId, collaborativePollingStatus, collaborativePollingType, load])
+
+  useEffect(() => {
+    if (collaborativePollingType !== 'shared-cursor' || collaborativePollingStatus !== 'open' || !collaborativePollingId) return
+    let active = true
+    let syncing = false
+    let timer: number | null = null
+    const syncCursor = async () => {
+      if (syncing) return
+      syncing = true
+      const { data } = await supabase
+        .from('game_show_games')
+        .select('id, show_game_key, round_number, round_title, game_type, title, settings, status, started_at, explode_at, winner_team_id')
+        .eq('id', collaborativePollingId)
+        .maybeSingle()
+      if (active && data) {
+        setShowGame(current => current?.id === data.id ? data as PlayerShowGame : current)
+        setShowGameNow(Date.now())
+      }
+      syncing = false
+      if (active) timer = window.setTimeout(() => { void syncCursor() }, 400)
+    }
+    void syncCursor()
+    return () => {
+      active = false
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [collaborativePollingId, collaborativePollingStatus, collaborativePollingType])
 
   useEffect(() => {
     if (showGame?.game_type !== 'steal-the-treasure' || showGame.status !== 'open') return
@@ -3436,7 +3475,7 @@ function ShowGame() {
     const requestId=localStorage.getItem('simple-trivia-join-request-id');const requestToken=localStorage.getItem('simple-trivia-join-request-token');if(!requestId||!requestToken)return
     collaborativeBusyRef.current=true;setCollaborativeBusy(true);setError(null)
     const {data,error:pullError}=await supabase.rpc('pull_shared_cursor',{p_game_show_game_id:showGame.id,p_request_id:requestId,p_request_token:requestToken})
-    if(pullError)setError('That tap did not register. Try again.');else { setError(null); if(data)setShowGame(data as PlayerShowGame) }
+    if(pullError)setError('Connection interrupted. Reconnecting…');else { setError(null); if(data){setShowGame(data as PlayerShowGame);setShowGameNow(Date.now())} }
     collaborativeBusyRef.current=false;setCollaborativeBusy(false)
   }
 
@@ -3614,6 +3653,9 @@ function ShowGame() {
   const bombDangerSeconds = bombDangerWindowSeconds(showGame?.settings, showGameNow)
   const bombOvertime = bombIsOvertime(showGame?.settings)
   const treasureSettings = showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) ? showGame.settings as Record<string, Json> : {}
+  const cursorStamina = sharedCursorStamina(showGame?.settings, teamId, showGameNow)
+  const ownBombSeconds = secondsBeforeBombExplosion(bombResult?.own_pressed_at, bombResult?.explosion_at)
+  const winnerBombSeconds = secondsBeforeBombExplosion(bombResult?.winner_pressed_at, bombResult?.explosion_at)
   const treasureGuardAwake = treasureSettings.guard_awake === true
   const ownTreasure = treasure.find(entry => entry.team_id === teamId)
   const currentWinningTreasureUnits = treasure.reduce((highest, entry) => Math.max(highest, entry.banked_units), 0)
@@ -3745,7 +3787,7 @@ function ShowGame() {
               {!exploded && (ownDealCase?.decision||ownDealCase?.locked) && <div className="mt-5"><h2 style={{color:C.ink}} className="text-2xl font-black">{ownDealCase.locked?'Case locked in':ownDealCase.decision==='swap'?'Trading with the bank…':'Keeping this case…'}</h2><WaitMsg msg="Waiting for the next round…" /></div>}
               {exploded&&<div className="mt-5"><h2 style={{color:won?C.go:C.ink}} className="text-4xl font-black">{won?'You won!':'Another case was higher'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}
             </div>
-          : isSharedCursor ? <div className="mt-5 w-full max-w-xl"><SharedCursorGame teams={wheelTeams} settings={showGame.settings} ownTeamId={teamId} />{!exploded&&<><p style={{color:C.ink}} className="mx-auto mt-4 max-w-sm text-lg font-black">TAP the button. Do not drag the cursor.</p><button type="button" aria-label={`Tap to nudge the cursor toward ${snapshot.teamName}`} onClick={()=>void pullCursor()} disabled={collaborativeBusy||!teamIsEligible} style={{background:C.violet,touchAction:'manipulation'}} className="mx-auto mt-3 w-full max-w-sm select-none rounded-2xl px-6 py-5 text-xl font-black text-white active:scale-95 disabled:opacity-50">TAP TO NUDGE TOWARD {snapshot.teamName.toUpperCase()}</button></>}{exploded&&<div className="mt-5"><h2 style={{color:won?C.go:C.ink}} className="text-4xl font-black">{won?'You won!':'The cursor landed elsewhere'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}</div>
+          : isSharedCursor ? <div className="mt-5 w-full max-w-xl"><SharedCursorGame teams={wheelTeams} settings={showGame.settings} ownTeamId={teamId} />{!exploded&&<><p style={{color:C.ink}} className="mx-auto mt-4 max-w-sm text-lg font-black">TAP the button. Do not drag the cursor.</p><div className="mx-auto mt-3 w-full max-w-sm text-left"><div className="flex items-center justify-between text-xs font-black uppercase tracking-wider" style={{color:cursorStamina.coolingDown?C.stop:C.sub}}><span>Tap stamina</span><span>{cursorStamina.coolingDown?`Recovering · ${cursorStamina.cooldownSeconds}s`:`${cursorStamina.remaining}/${cursorStamina.maximum}`}</span></div><div style={{background:C.line}} className="mt-2 h-3 overflow-hidden rounded-full"><div style={{width:`${cursorStamina.percent}%`,background:cursorStamina.coolingDown?C.stop:C.violet}} className="h-full rounded-full transition-[width] duration-200" /></div><p style={{color:C.sub}} className="mt-1.5 text-xs font-semibold">Use all five taps too quickly and you’ll need to recover for 3 seconds.</p></div><button type="button" aria-label={`Tap to nudge the cursor toward ${snapshot.teamName}`} onClick={()=>void pullCursor()} disabled={collaborativeBusy||!teamIsEligible||cursorStamina.coolingDown} style={{background:C.violet,touchAction:'manipulation'}} className="mx-auto mt-3 w-full max-w-sm select-none rounded-2xl px-6 py-5 text-xl font-black text-white active:scale-95 disabled:opacity-50">{cursorStamina.coolingDown?`RECOVERING · ${cursorStamina.cooldownSeconds}s`:`TAP TOWARD ${snapshot.teamName.toUpperCase()}`}</button></>}{exploded&&<div className="mt-5"><h2 style={{color:won?C.go:C.ink}} className="text-4xl font-black">{won?'You won!':'The cursor landed elsewhere'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}</div>
           : isWheel ? <div className="mt-5"><TeamWheel compact teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
           : isBigBalloon ? <div className="mt-5 w-full max-w-sm">
               {!exploded && <div aria-hidden={balloonHolding || ownBalloon?.status === 'inflating' || ownBalloon?.status === 'locked' || ownBalloon?.status === 'popped'} style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className={`mb-4 min-h-11 rounded-full px-4 py-2 text-center text-lg font-black tabular-nums ${balloonHolding || ownBalloon?.status === 'inflating' || ownBalloon?.status === 'locked' || ownBalloon?.status === 'popped' ? 'invisible' : ''}`}>
@@ -3789,7 +3831,7 @@ function ShowGame() {
         ) : showGameOutcome && showGame?.game_type !== 'scissors-paper-rock' ? (
           <div className="mt-7">
             <h2 style={{ color: won ? C.go : C.ink }} className="text-4xl font-black">{won ? 'You won!' : isElimination ? 'Another team survived' : isBigBalloon ? 'Another balloon was bigger' : isWheel ? 'Another team was selected' : 'The bomb exploded!'}</h2>
-            <p style={{ color: C.sub }} className="mt-3 text-base font-semibold">{won ? showGameWinnerDetail(reward) : (isElimination ? 'Thanks for playing!' : isBigBalloon ? 'Better luck on the next inflation.' : isWheel ? 'Better luck on the next spin.' : 'Another team got the final press this time.')}</p>
+            {isBomb ? <div style={{ color: C.sub }} className="mt-3 space-y-1 text-base font-semibold">{ownBombSeconds !== null ? <p>{bombCutTimingSentence('You', ownBombSeconds)}</p> : <p>The bomb exploded before you cut the wire.</p>}{!won && winnerBombSeconds !== null && <p>{bombCutTimingSentence('The winner', winnerBombSeconds)}</p>}{won && <p>{showGameWinnerDetail(reward)}</p>}</div> : <p style={{ color: C.sub }} className="mt-3 text-base font-semibold">{won ? showGameWinnerDetail(reward) : (isElimination ? 'Thanks for playing!' : isBigBalloon ? 'Better luck on the next inflation.' : isWheel ? 'Better luck on the next spin.' : 'Another team got the final press this time.')}</p>}
             <div className="mt-7"><WaitMsg msg="Waiting for the host to continue…" /></div>
           </div>
         ) : isBigBalloon ? (

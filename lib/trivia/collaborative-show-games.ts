@@ -14,6 +14,14 @@ export type SharedCursorState = {
   positions: Record<string, SharedCursorPosition>
 }
 
+export type SharedCursorStamina = {
+  remaining: number
+  maximum: number
+  percent: number
+  coolingDown: boolean
+  cooldownSeconds: number
+}
+
 export function sharedCursorState(settings: Json | null | undefined): SharedCursorState {
   const value = record(settings)
   const rawPositions = record(value.cursor_positions)
@@ -30,6 +38,29 @@ export function sharedCursorState(settings: Json | null | undefined): SharedCurs
     candidateTeamId: typeof value.cursor_candidate_id === 'string' ? value.cursor_candidate_id : null,
     candidateSince: Number.isFinite(candidateSince) && candidateSince > 0 ? candidateSince : null,
     positions,
+  }
+}
+
+export function sharedCursorStamina(settings: Json | null | undefined, teamId: string | null | undefined, now: number): SharedCursorStamina {
+  const maximum = 5
+  const value = record(settings)
+  const staminaByTeam = record(value.cursor_stamina)
+  const team = teamId ? record(staminaByTeam[teamId]) : {}
+  const savedRemaining = Math.max(0, Math.min(maximum, Number(team.remaining ?? maximum)))
+  const updatedAt = Number(team.updated_at_ms ?? now)
+  const rawCooldownUntil = team.cooldown_until_ms
+  const cooldownUntil = rawCooldownUntil === null || rawCooldownUntil === undefined ? Number.NaN : Number(rawCooldownUntil)
+  const coolingDown = Number.isFinite(cooldownUntil) && cooldownUntil > now
+  const cooldownCompleted = Number.isFinite(cooldownUntil) && cooldownUntil <= now
+  const cooldownSeconds = coolingDown ? Math.max(1, Math.ceil((cooldownUntil - now) / 1000)) : 0
+  const recovered = coolingDown ? 0 : Math.max(0, Math.floor((now - updatedAt) / 1000))
+  const remaining = coolingDown ? 0 : cooldownCompleted ? maximum : Math.min(maximum, savedRemaining + recovered)
+  return {
+    remaining,
+    maximum,
+    percent: (remaining / maximum) * 100,
+    coolingDown,
+    cooldownSeconds,
   }
 }
 

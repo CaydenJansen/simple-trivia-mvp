@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bombDangerWindowSeconds, bombIsOvertime, bombPhase, lowestUniqueBid, sharedCursorState } from './collaborative-show-games'
+import { bombDangerWindowSeconds, bombIsOvertime, bombPhase, lowestUniqueBid, sharedCursorStamina, sharedCursorState } from './collaborative-show-games'
 
 describe('collaborative show-game state', () => {
   it('parses shared cursor positions defensively', () => {
@@ -24,5 +24,13 @@ describe('collaborative show-game state', () => {
     const bids = [{ team_id: 'a', bid: 1 }, { team_id: 'b', bid: 1 }, { team_id: 'c', bid: 2 }, { team_id: 'd', bid: 4 }]
     expect(lowestUniqueBid(bids)).toEqual({ team_id: 'c', bid: 2 })
     expect(lowestUniqueBid([{ bid: 3 }, { bid: 3 }])).toBeNull()
+  })
+
+  it('recovers shared cursor stamina and enforces the cooldown window', () => {
+    const settings = { cursor_stamina: { 'team-a': { remaining: 2, updated_at_ms: 1_000, cooldown_until_ms: null } } }
+    expect(sharedCursorStamina(settings, 'team-a', 3_100)).toMatchObject({ remaining: 4, percent: 80, coolingDown: false })
+    const cooling = { cursor_stamina: { 'team-a': { remaining: 0, updated_at_ms: 1_000, cooldown_until_ms: 4_000 } } }
+    expect(sharedCursorStamina(cooling, 'team-a', 2_100)).toMatchObject({ remaining: 0, percent: 0, coolingDown: true, cooldownSeconds: 2 })
+    expect(sharedCursorStamina(cooling, 'team-a', 4_100)).toMatchObject({ remaining: 5, percent: 100, coolingDown: false })
   })
 })

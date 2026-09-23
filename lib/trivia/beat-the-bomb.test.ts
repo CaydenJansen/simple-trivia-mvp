@@ -3,6 +3,8 @@ import {
   BEAT_THE_BOMB_MAX_SECONDS,
   BEAT_THE_BOMB_MIN_SECONDS,
   beatTheBombWinner,
+  bombCutTimingSentence,
+  secondsBeforeBombExplosion,
   shouldResolveBeatTheBomb,
 } from './beat-the-bomb'
 
@@ -30,5 +32,12 @@ describe('Beat the Bomb semantics', () => {
       { teamId: 'bravo', pressedAtMs: 2_500 },
       { teamId: 'charlie', pressedAtMs: 2_000 },
     ])).toBe('bravo')
+  })
+
+  it('reports each cut relative to the authoritative explosion time', () => {
+    expect(secondsBeforeBombExplosion('2026-09-23T08:00:46.000Z', '2026-09-23T08:01:00.000Z')).toBe(14)
+    expect(bombCutTimingSentence('You', 14)).toBe('You cut the wire 14 seconds before the bomb exploded.')
+    expect(bombCutTimingSentence('The winner', 1)).toBe('The winner cut the wire 1 second before the bomb exploded.')
+    expect(bombCutTimingSentence('You', 0)).toBe('You cut the wire at the last possible moment.')
   })
 })

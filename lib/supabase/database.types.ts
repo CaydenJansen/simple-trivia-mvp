@@ -1344,6 +1344,7 @@ export type Database = {
         Returns: LiveShowGameRow
       }
       get_own_beat_the_bomb_status: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: boolean }
+      get_own_beat_the_bomb_result: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: { own_pressed_at: string | null; winner_pressed_at: string | null; explosion_at: string | null; winner_team_id: string | null }[] }
       start_lowest_bidder: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
       submit_lowest_bidder_bid: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_bid: number }; Returns: Database['public']['Tables']['game_show_game_bids']['Row'] }
       get_own_lowest_bidder_bid: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: Database['public']['Tables']['game_show_game_bids']['Row'] }
