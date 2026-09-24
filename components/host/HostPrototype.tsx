@@ -14,6 +14,7 @@ import { flushSync } from "react-dom";
 import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase/client";
 import { allocateTemplateQuestions } from '@/lib/trivia/template-allocation';
+import { speedScoringEnabled, speedClock, speedAward, type ScoringMode } from '@/lib/trivia/speed-scoring';
 import QuestionsArea from "@/components/host/QuestionsArea";
 import BuilderQuestionPicker, { type PickerSourceQuestion } from "@/components/host/BuilderQuestionPicker";
 import BuilderTiebreakerPicker, { type PickerSourceTiebreaker } from "@/components/host/BuilderTiebreakerPicker";
@@ -7926,6 +7927,7 @@ function ReviewQuestion({ item, idx, onEdit }: {
 // ─── SCREEN 7: HOST SETUP ─────────────────────────────────────────────────────
 
 function HostSetup({ go }: { go: Go }) {
+  const [scoringMode, setScoringMode] = useState<ScoringMode>('classic')
   const [reveal, setReveal] = useState<'each' | 'round'>('each')
   const [lb, setLb] = useState<LeaderboardVisibility>('round')
   const [autoRunMode, setAutoRunMode] = useState<AutoRunMode>('off')
@@ -7961,6 +7963,7 @@ function HostSetup({ go }: { go: Go }) {
         setLb(leaderboardVisibilityFromSettings(settings))
         setAutoRunMode(autoRunModeFromSettings(settings))
         setAutoRunSpeed(autoRunSpeedFromSettings(settings))
+        setScoringMode(speedScoringEnabled(settings) ? 'speed' : 'classic')
         setScoreVisibility(playerScoreVisibilityFromSettings(settings))
         setShowCorrectnessPercentage(settings.show_correctness_percentage_to_players === true)
         setSubmittedAnswersEditable(submittedAnswersEditableFromSettings(settings))
@@ -8023,6 +8026,7 @@ function HostSetup({ go }: { go: Go }) {
 
     try {
       const gameSettings: Record<string, Json> = {
+        scoring_mode: scoringMode,
         answer_reveal: reveal,
         leaderboard_visibility: lb,
         auto_run_mode: autoRunMode,
@@ -8115,6 +8119,18 @@ function HostSetup({ go }: { go: Go }) {
             </div>
           </SCard>
 
+          <SCard title="Scoring">
+            <div className="grid grid-cols-2 gap-2">
+              {(['classic', 'speed'] as ScoringMode[]).map(mode => <button key={mode} type="button" onClick={() => setScoringMode(mode)} aria-pressed={scoringMode === mode}
+                style={{ border: `1.5px solid ${scoringMode === mode ? C.violet : C.line}`, background: scoringMode === mode ? C.violetMist : 'white', color: scoringMode === mode ? C.violet : C.sub }}
+                className="rounded-xl px-3 py-2.5 text-left text-sm font-semibold">{mode === 'classic' ? 'Classic points' : 'Speed-based points'}</button>)}
+            </div>
+            <p style={{ color: C.sub }} className="mt-3 text-xs leading-5">{scoringMode === 'speed'
+              ? 'Correct answers earn up to 100 points, falling to 50 as the timer runs down. Partial answers earn partial points. Bonus questions also earn up to 100; points games award 100. Answer updates use the latest submission time. Timers run even with Auto-Run off.'
+              : 'Use the points set for each question and game.'}</p>
+            <p style={{ color: C.violet }} className="mt-2 text-xs font-bold">Scoring mode is fixed for the entire game.</p>
+          </SCard>
+
           <SCard title="Auto-Run">
             <p style={{ color: C.sub }} className="mb-3 text-xs leading-5">
               Run each round automatically, then stop so you can review and finalize it before starting the next round.
@@ -8138,10 +8154,10 @@ function HostSetup({ go }: { go: Go }) {
                 </button>
               ))}
             </div>
-            {autoRunMode === 'round' && <div className="mt-4">
-              <p style={{ color: C.sub }} className="mb-2 text-xs font-bold">Speed</p>
+            {(autoRunMode === 'round' || scoringMode === 'speed') && <div className="mt-4">
+              <p style={{ color: C.sub }} className="mb-2 text-xs font-bold">Question timer speed{scoringMode === 'speed' ? ' — fixed for this game' : ''}</p>
               <div className="grid grid-cols-3 gap-2">
-                {(['fast', 'medium', 'slow'] as AutoRunSpeed[]).map(speed => <button key={speed} type="button" onClick={() => setAutoRunSpeed(speed)} style={{ border: `1.5px solid ${autoRunSpeed === speed ? C.violet : C.line}`, background: autoRunSpeed === speed ? C.violetMist : 'white', color: autoRunSpeed === speed ? C.violet : C.sub }} className="rounded-xl px-3 py-2 text-sm font-semibold capitalize">{speed}</button>)}
+                {(['fast', 'medium', 'slow'] as AutoRunSpeed[]).map(speed => <button key={speed} type="button" onClick={() => setAutoRunSpeed(speed)} style={{ border: `1.5px solid ${autoRunSpeed === speed ? C.violet : C.line}`, background: autoRunSpeed === speed ? C.violetMist : 'white', color: autoRunSpeed === speed ? C.violet : C.sub }} className="rounded-xl px-3 py-2 text-sm font-semibold capitalize">{speed === 'medium' ? 'Normal' : speed}</button>)}
               </div>
             </div>}
           </SCard>
@@ -8737,6 +8753,7 @@ function HostBonusPointsButton({ team, onAwarded }: { team: LiveTeam; onAwarded:
 }
 
 type LiveSubmission = {
+  speed_points_max?: number | null
   id: string
   team_id: string
   question_key?: string
@@ -9066,6 +9083,13 @@ function LiveQuestion({ go }: { go: Go }) {
   const autoRunActionRef = useRef<() => void>(() => {})
   const autoRunPublishedKeyRef = useRef('')
   const liveGameSettingsRef = useRef<Record<string, Json>>({})
+  const isSpeedGame = speedScoringEnabled(liveGameSettingsRef.current)
+  const [syncedSpeedClock, setSyncedSpeedClock] = useState<ReturnType<typeof speedClock>>(null)
+  const expectedSpeedClockKey = `speed-${question?.question_key}-${questionStage}`
+  const currentSpeedClock = [syncedSpeedClock, speedClock(liveGameSettingsRef.current)]
+    .find(clock => clock?.key === expectedSpeedClockKey) ?? null
+  const [speedRemaining, setSpeedRemaining] = useState(0)
+  const speedCloseRef = useRef<() => void>(() => {})
   const audienceResolveBusyRef = useRef(false)
   const reviewBusyRef = useRef(new Set<string>())
   const [liveError, setLiveError] = useState<string | null>(null)
@@ -9307,13 +9331,13 @@ function LiveQuestion({ go }: { go: Go }) {
         const [submissionResult, bonusSubmissionResult] = await Promise.all([
           supabase
             .from('submissions')
-            .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+            .select('id, team_id, answer_text, is_correct, points_awarded, grading_json, speed_points_max')
             .eq('game_id', game.id)
             .eq('question_key', currentQuestion.question_key)
             .order('created_at', { ascending: true }),
           supabase
             .from('bonus_submissions')
-            .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+            .select('id, team_id, answer_text, is_correct, points_awarded, grading_json, speed_points_max')
             .eq('game_id', game.id)
             .eq('question_key', currentQuestion.question_key)
             .order('created_at', { ascending: true }),
@@ -9830,7 +9854,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         .then(({ error: signalError }) => { if (signalError) console.error('Could not record answer-alternative signal:', signalError) })
     }
     setSubmissions(currentSubmissions => currentSubmissions.map(item =>
-      item.id === submissionId ? { ...item, grading_json: next, ...(submission.is_correct !== null ? { points_awarded: nextPoints, is_correct: nextPoints >= question.points_max } : {}) } : item
+      item.id === submissionId ? { ...item, grading_json: next, ...(submission.is_correct !== null ? { points_awarded: submission.speed_points_max == null ? nextPoints : speedAward(nextPoints, question.points_max, submission.speed_points_max), is_correct: nextPoints >= question.points_max } : {}) } : item
     ))
     if (submission.is_correct !== null && liveGameId) {
       const { data, error } = await supabase.from('teams').select('id, name, score, last_seen_at').eq('game_id', liveGameId)
@@ -9866,7 +9890,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         : await supabase.from('bonus_submissions').update({ grading_json: next }).eq('id', submissionId)
       if (error) throw error
       setBonusSubmissions(currentSubmissions => currentSubmissions.map(item =>
-        item.id === submissionId ? { ...item, grading_json: next, ...(submission.is_correct !== null ? { points_awarded: nextPoints, is_correct: nextPoints >= bonus.points } : {}) } : item
+        item.id === submissionId ? { ...item, grading_json: next, ...(submission.is_correct !== null ? { points_awarded: submission.speed_points_max == null ? nextPoints : speedAward(nextPoints, bonus.points, submission.speed_points_max), is_correct: nextPoints >= bonus.points } : {}) } : item
       ))
       if (submission.is_correct !== null && liveGameId) {
         const { data, error } = await supabase.from('teams').select('id, name, score, last_seen_at').eq('game_id', liveGameId)
@@ -9885,7 +9909,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
     const { data: freshSubmissions, error: submissionError } = await supabase
       .from('submissions')
-      .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+      .select('id, team_id, answer_text, is_correct, points_awarded, grading_json, speed_points_max')
       .eq('game_id', liveGameId)
       .eq('question_key', question.question_key)
 
@@ -9893,7 +9917,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
     const { data: freshBonusSubmissions, error: bonusSubmissionError } = await supabase
       .from('bonus_submissions')
-      .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+      .select('id, team_id, answer_text, is_correct, points_awarded, grading_json, speed_points_max')
       .eq('game_id', liveGameId)
       .eq('question_key', question.question_key)
 
@@ -9921,13 +9945,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const [submissionResult, bonusSubmissionResult, teamResult] = await Promise.all([
       supabase
         .from('submissions')
-        .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+        .select('id, team_id, answer_text, is_correct, points_awarded, grading_json, speed_points_max')
         .eq('game_id', liveGameId)
         .eq('question_key', question.question_key)
         .order('created_at', { ascending: true }),
       supabase
         .from('bonus_submissions')
-        .select('id, team_id, answer_text, is_correct, points_awarded, grading_json')
+        .select('id, team_id, answer_text, is_correct, points_awarded, grading_json, speed_points_max')
         .eq('game_id', liveGameId)
         .eq('question_key', question.question_key)
         .order('created_at', { ascending: true }),
@@ -10446,6 +10470,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
   async function publishAutoRunClock(remaining: number, paused = false) {
     if (!liveGameId || autoRunMode !== 'round') return
+    if (isSpeedGame && phase === 'open' && currentSpeedClock) return
     const safeRemaining = Math.max(0, Math.trunc(remaining))
     const autoRunClock: Json = safeRemaining > 0
       ? {
@@ -10495,7 +10520,40 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }, [autoRunMode, autoRunOperating, autoRunPaused, autoRunTimer.key, autoRunTimer.seconds, liveGameId])
 
   useEffect(() => {
+    speedCloseRef.current = () => { if (!actionBusyRef.current) void handleCloseAnswers() }
+  })
+  useEffect(() => {
+    if (!isSpeedGame || !liveGameId || phase !== 'open') return
+    let active = true
+    let loading = false
+    const sync = async () => {
+      if (loading) return
+      loading = true
+      const { data, error } = await supabase.from('games').select('settings').eq('id', liveGameId).maybeSingle()
+      loading = false
+      if (!active || error) return
+      const clock = speedClock(data?.settings)
+      if (clock?.key === expectedSpeedClockKey) setSyncedSpeedClock(clock)
+    }
+    void sync()
+    const timer = window.setInterval(() => { void sync() }, 3000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [isSpeedGame, liveGameId, phase, expectedSpeedClockKey])
+  const speedDeadline = currentSpeedClock?.deadline_ms ?? null
+  useEffect(() => {
+    if (speedDeadline === null || phase !== 'open') return
+    const tick = () => {
+      setSpeedRemaining(Math.max(0, Math.ceil((speedDeadline - Date.now()) / 1000)))
+      if (Date.now() >= speedDeadline + AUTO_RUN_SUBMISSION_GRACE_MS) speedCloseRef.current()
+    }
+    const timer = window.setInterval(tick, 250)
+    const initial = window.setTimeout(tick, 0)
+    return () => { window.clearInterval(timer); window.clearTimeout(initial) }
+  }, [speedDeadline, phase])
+
+  useEffect(() => {
     if (autoRunMode !== 'round' || !autoRunOperating || autoRunPaused || actionBusy || autoRunRemaining <= 0) return
+    if (isSpeedGame && phase === 'open' && speedDeadline !== null) return
     const timer = window.setTimeout(() => {
       setAutoRunRemaining(current => {
         if (current <= 1) {
@@ -10506,10 +10564,11 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       })
     }, 1000)
     return () => window.clearTimeout(timer)
-  }, [actionBusy, autoRunMode, autoRunOperating, autoRunPaused, autoRunRemaining, autoRunTimer.key])
+  }, [actionBusy, autoRunMode, autoRunOperating, autoRunPaused, autoRunRemaining, autoRunTimer.key, isSpeedGame, phase, speedDeadline])
 
   useEffect(() => {
     if (autoRunMode !== 'round' || !autoRunOperating || !allActivePlayersLocked) return
+    if (isSpeedGame) return
     // Submission Realtime events shorten, but never lengthen, the live countdown.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setAutoRunRemaining(current => {
@@ -10519,7 +10578,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     })
     // The clock publisher is intentionally keyed by the observable lock state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allActivePlayersLocked, autoRunMode, autoRunOperating])
+  }, [allActivePlayersLocked, autoRunMode, autoRunOperating, isSpeedGame])
 
   async function updateLiveSettings(patch: Record<string, Json>) {
     if (!liveGameId || settingsBusyRef.current) return false
@@ -10622,6 +10681,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       {emergency && (
         <div style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, right: 0, top: '100%', marginTop: 6, width: 340, zIndex: 60 }} className="absolute max-h-[calc(100dvh-72px)] space-y-3 overflow-y-auto rounded-xl p-4 text-left shadow-2xl">
           <p style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">Live game settings</p>
+          <p style={{ color: C.liveText }} className="text-xs font-bold">{isSpeedGame ? 'Speed-based points · fixed for this game' : 'Classic points · fixed for this game'}</p>
           <p style={{ color: C.liveDim }} className="text-xs leading-5">Changes apply to this game and become your defaults for future games.</p>
           <label className="block text-xs font-bold" style={{ color: C.liveText }}>Answer reveal
             <select value={answerRevealMode} disabled={settingsBusy} onChange={event => {
@@ -10660,7 +10720,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             <span>Auto-Run</span><input type="checkbox" checked={autoRunMode === 'round'} disabled={settingsBusy} onChange={event => { void setLiveAutoRun(event.target.checked) }} className="h-5 w-5 cursor-pointer accent-violet-600" />
           </label>
           {autoRunMode === 'round' && <label className="block text-xs font-bold" style={{ color: C.liveText }}>Auto-Run speed
-            <select value={autoRunSpeed} disabled={settingsBusy} onChange={event => {
+            <select value={autoRunSpeed} disabled={settingsBusy || isSpeedGame} onChange={event => {
               const value = event.target.value as AutoRunSpeed
               void updateLiveSettings({ auto_run_speed: value, auto_run_clock: null }).then(saved => {
                 if (!saved) return
@@ -10668,7 +10728,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 autoRunPublishedKeyRef.current = ''
               })
             }} style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}`, color: C.liveText }} className="mt-1.5 w-full cursor-pointer rounded-lg px-3 py-2 text-sm">
-              <option value="fast">Fast</option><option value="medium">Medium (+20%)</option><option value="slow">Slow (+40%)</option>
+              <option value="fast">Fast</option><option value="medium">Normal (+20%)</option><option value="slow">Slow (+40%)</option>
             </select>
           </label>}
           {approvalRequired && <p style={{ color: C.liveDim }} className="text-xs">Review each team before they enter the game.</p>}
@@ -10704,7 +10764,13 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       )}
     </div>
   )
-  const autoRunControls = autoRunMode === 'round' ? (
+  const autoRunControls = isSpeedGame && phase === 'open' && currentSpeedClock ? (
+    <div role="timer" className="rounded-xl border border-violet-400/40 bg-violet-500/10 px-4 py-3 text-center" style={{ color: C.liveText }}>
+      <p className="text-xs font-bold">Speed points · Answers close in</p>
+      <p className="text-2xl font-black tabular-nums">{autoRunClockLabel(speedRemaining)}</p>
+      <p className="text-xs">Up to 100 points · timer cannot be paused or extended</p>
+    </div>
+  ) : autoRunMode === 'round' ? (
     <section style={{ background: C.livePanel, borderBottom: `1px solid ${C.liveLine}` }} className="sticky top-[52px] z-30 flex flex-wrap items-center justify-center gap-3 px-5 py-2.5 shadow-lg">
       <span style={{ color: autoRunOperating && !autoRunPaused ? '#C4B5FD' : C.caution }} className="text-xs font-black uppercase tracking-wider">
         {autoRunOperating ? autoRunPaused ? 'Auto-Run paused' : 'Auto-Run on' : 'Manual control'}
@@ -11122,7 +11188,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 On player screens
               </p>
               <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest">
-                {(question?.category ?? 'General')} · {question?.difficulty ?? '—'} · {question?.points_max ?? 1} pts max
+                {(question?.category ?? 'General')} · {question?.difficulty ?? '—'} · {isSpeedGame ? 100 : question?.points_max ?? 1} pts max
               </p>
             </div>
 
@@ -11222,7 +11288,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               >
                 <div className="flex items-center justify-between gap-4">
                   <p style={{ color: '#C4B5FD' }} className="text-[10px] font-extrabold uppercase tracking-widest">
-                    Bonus · {activeBonus.points} {activeBonus.points === 1 ? 'point' : 'points'}
+                    Bonus · {isSpeedGame ? 'up to 100 points' : `${activeBonus.points} ${activeBonus.points === 1 ? 'point' : 'points'}`}
                   </p>
                   <span style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">
                     {questionStage === 'core' && phase !== 'revealed' ? 'Host only · Up next' : 'Shown to players'}
@@ -11446,9 +11512,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           const bonusRow = bonusAnswerRows.find(row => row.team.id === team.id) ?? null
           const bonusItem = bonusRow?.grading?.items[0] ?? null
           const hasReview = items.some(item => item.status === 'review') || (showBonusInAnswers && bonusItem?.status === 'review')
-          const score = (grading ? gradingPoints(grading, question?.points_max ?? 1, question?.question_type === 'ranking' && (question?.points_max ?? 1) === 1) : 0)
-            + (showBonusInAnswers && bonusRow?.grading ? gradingPoints(bonusRow.grading, activeBonus?.points ?? 1) : 0)
-          const max = (question?.points_max ?? Math.max(1, items.length)) + (showBonusInAnswers ? activeBonus?.points ?? 1 : 0)
+          const coreBase = grading ? gradingPoints(grading, question?.points_max ?? 1, question?.question_type === 'ranking' && (question?.points_max ?? 1) === 1) : 0
+          const bonusBase = showBonusInAnswers && bonusRow?.grading ? gradingPoints(bonusRow.grading, activeBonus?.points ?? 1) : 0
+          const score = isSpeedGame
+            ? speedAward(coreBase, question?.points_max ?? 1, submission?.speed_points_max ?? 100) + speedAward(bonusBase, activeBonus?.points ?? 1, bonusRow?.submission?.speed_points_max ?? 100)
+            : coreBase + bonusBase
+          const max = isSpeedGame ? 100 + (showBonusInAnswers ? 100 : 0) : (question?.points_max ?? Math.max(1, items.length)) + (showBonusInAnswers ? activeBonus?.points ?? 1 : 0)
 
           return (
             <div
@@ -11608,7 +11677,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                   <span style={{ color: C.liveDim }} className="text-xs">—</span>
                 ) : (
                   <span
-                    style={{ color: score === max ? C.go : score === 0 ? C.stop : C.caution }}
+                    style={{ color: coreBase >= (question?.points_max ?? 1) && (!showBonusInAnswers || bonusBase >= (activeBonus?.points ?? 1)) ? C.go : score === 0 ? C.stop : C.caution }}
                     className="text-sm font-extrabold tabular-nums"
                   >
                     {score}
@@ -11875,8 +11944,8 @@ function EndOfRound({ go }: { go: Go }) {
       if (current) {
         const roundKeys = questions.filter(item => item.round_number === current.round_number).map(item => item.question_key)
         const [submissionResult, bonusSubmissionResult] = await Promise.all([
-          supabase.from('submissions').select('id, team_id, question_key, answer_text, is_correct, points_awarded, grading_json').eq('game_id', game.id).in('question_key', roundKeys),
-          supabase.from('bonus_submissions').select('id, team_id, question_key, answer_text, is_correct, points_awarded, grading_json').eq('game_id', game.id).in('question_key', roundKeys),
+          supabase.from('submissions').select('id, team_id, question_key, answer_text, is_correct, points_awarded, grading_json, speed_points_max').eq('game_id', game.id).in('question_key', roundKeys),
+          supabase.from('bonus_submissions').select('id, team_id, question_key, answer_text, is_correct, points_awarded, grading_json, speed_points_max').eq('game_id', game.id).in('question_key', roundKeys),
         ])
         if (active && version === loadVersion) {
           setRoundSubmissions((submissionResult.data ?? []) as LiveSubmission[])
@@ -12040,7 +12109,7 @@ function EndOfRound({ go }: { go: Go }) {
           .then(({ error: signalError }) => { if (signalError) console.error('Could not record answer-alternative signal:', signalError) })
       }
       const setter = bonus ? setRoundBonusSubmissions : setRoundSubmissions
-      setter(rows => rows.map(row => row.id === submission.id ? { ...row, grading_json: next, ...(scored ? { points_awarded: nextPoints, is_correct: nextPoints >= pointsMax } : {}) } : row))
+      setter(rows => rows.map(row => row.id === submission.id ? { ...row, grading_json: next, ...(scored ? { points_awarded: submission.speed_points_max == null ? nextPoints : speedAward(nextPoints, pointsMax, submission.speed_points_max), is_correct: nextPoints >= pointsMax } : {}) } : row))
       if (scored && gameId) {
         const { data: refreshedTeams, error: teamsError } = await supabase.from('teams').select('id, name, score').eq('game_id', gameId).order('score', { ascending: false })
         if (!teamsError) setTeams((refreshedTeams ?? []) as LiveTeam[])

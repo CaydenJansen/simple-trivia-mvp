@@ -4,6 +4,7 @@ import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { gradingPoints, multiAnswerMissing, storedSubmissionGrading } from './grading'
 import { runtimeBonusFromJson, storedBonusGrading } from './bonus-grading'
+import { speedAward } from './speed-scoring'
 
 // Exercise the actual component handlers, including their persistence branch.
 // Database tests separately verify that the rescore RPC changes team totals.
@@ -21,19 +22,21 @@ function handler(name: string) {
 
 describe('host review persistence', () => {
   for (const name of ['handleReviewItem', 'handleBonusReview', 'reviewRoundSubmission']) {
-    for (const scored of [false, true]) {
-      it(`${name} ${scored ? 'rescores previously scored' : 'only reviews unscored'} answers while closed`, async () => {
-        const submission = { id: 's1', team_id: 't1', question_key: 'q1', answer_text: 'Canada', is_correct: scored ? false : null, points_awarded: 0, grading_json: { items: [{ submitted: 'Canada', expected: 'Canada', status: 'incorrect' }] } }
+    for (const { scored, speed } of [{ scored: false, speed: null }, { scored: true, speed: null }, { scored: true, speed: 75 }]) {
+      it(`${name} ${scored ? 'rescores previously scored' : 'only reviews unscored'} answers while closed${speed ? ' with speed points' : ''}`, async () => {
+        const submission = { id: 's1', team_id: 't1', question_key: 'q1', answer_text: 'Canada', is_correct: scored ? false : null, points_awarded: 0, speed_points_max: speed, grading_json: { items: [{ submitted: 'Canada', expected: 'Canada', status: 'incorrect' }] } }
         const question = { question_key: 'q1', question_type: 'single-answer', correct_answer: 'Canada', options: null, points_max: 1, bonus: { prompt: 'Bonus?', correct_answer: 'Canada', points: 1 } }
         const rpc = vi.fn(async (...args: unknown[]) => ({ error: null, args }))
         const update = vi.fn(() => ({ eq: async () => ({ error: null }) }))
         const errors: string[] = []
+        let updated = submission
+        const setter = (updateRows: (rows: typeof submission[]) => typeof submission[]) => { updated = updateRows([submission])[0] }
         const context = vm.createContext({
           question, phase: 'closed', submissions: [submission], bonusSubmissions: [submission], roundQuestions: [question],
-          storedSubmissionGrading, storedBonusGrading, runtimeBonusFromJson, gradingPoints, multiAnswerMissing,
+          storedSubmissionGrading, storedBonusGrading, runtimeBonusFromJson, gradingPoints, multiAnswerMissing, speedAward,
           reviewBusyRef: { current: new Set() }, roundReviewBusyRef: { current: new Set() },
           liveGameId: null, gameId: null, supabase: { rpc, from: () => ({ update }) },
-          setSubmissions: () => {}, setBonusSubmissions: () => {}, setRoundSubmissions: () => {}, setRoundBonusSubmissions: () => {},
+          setSubmissions: setter, setBonusSubmissions: setter, setRoundSubmissions: setter, setRoundBonusSubmissions: setter,
           setLiveError: (message: string) => errors.push(message), setError: (message: string) => errors.push(message), console,
         })
         vm.runInContext(handler(name), context)
@@ -44,6 +47,8 @@ describe('host review persistence', () => {
         if (scored) {
           expect(rpc).toHaveBeenCalledWith(name === 'handleBonusReview' ? 'rescore_bonus_submission' : 'rescore_submission', expect.objectContaining({ p_submission_id: 's1', p_points_awarded: 1 }))
           expect(update).not.toHaveBeenCalled()
+          expect(updated.points_awarded).toBe(speed ?? 1)
+          expect(updated.is_correct).toBe(true)
         } else {
           expect(update).toHaveBeenCalled()
           expect(rpc.mock.calls.some(call => String(call[0]).startsWith('rescore_'))).toBe(false)

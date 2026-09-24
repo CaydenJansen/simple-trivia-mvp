@@ -10,6 +10,7 @@ export function mergeHostGameSettings(current: Json | null | undefined, patch: R
 }
 
 const PERSISTENT_GAME_SETTING_KEYS = [
+  'scoring_mode',
   'answer_reveal',
   'leaderboard_visibility',
   'auto_run_mode',

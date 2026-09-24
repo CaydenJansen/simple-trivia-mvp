@@ -33,6 +33,7 @@ import {
 } from "@/lib/trivia/team-pin";
 import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from "@/lib/trivia/team-admission";
 import { autoRunClockColor, autoRunClockDeadlineMs, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
+import { speedClock, speedScoringEnabled, speedPointsAvailable } from '@/lib/trivia/speed-scoring';
 import { nextSuggestedTeamName } from "@/lib/trivia/team-name-suggestions";
 import { showGameRewardDescription, showGameRewardFromSettings, showGameWinnerDetail } from "@/lib/trivia/show-game-rewards";
 import { answerCorrectnessSummaries, correctAnswerIndex, correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
@@ -111,6 +112,7 @@ const QUESTION_SCREENS = new Set<PlayerScreen>([
 ])
 
 type RemoteGameState = {
+  settings?: Json
   current_screen: string | null
   answer_phase: string | null
   answer_editing_allowed: boolean | null
@@ -258,6 +260,7 @@ async function resolveLivePlayerScreen(gameId: string, teamId: string, gameState
       bonusSubmission,
       corePointsMax: question?.points_max ?? 1,
       bonusPointsMax: runtimeBonusFromJson(question?.bonus)?.points ?? 0,
+      speedScoring: speedScoringEnabled(gameState.settings),
     }) as PlayerScreen
   }
 
@@ -307,7 +310,7 @@ function useLivePlayerSync(
       loadingGameState = true
       const { data, error } = await supabase
         .from('games')
-        .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
+        .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key, settings')
         .eq('id', activeGameId)
         .maybeSingle()
       loadingGameState = false
@@ -430,8 +433,15 @@ function usePlayerAutoRunClock() {
       })
       .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
 
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void load() }, 3000)
+    const wake = () => { if (document.visibilityState === 'visible') void load() }
+    window.addEventListener('online', wake)
+    document.addEventListener('visibilitychange', wake)
     return () => {
       active = false
+      window.clearInterval(timer)
+      window.removeEventListener('online', wake)
+      document.removeEventListener('visibilitychange', wake)
       void supabase.removeChannel(channel)
     }
   }, [])
@@ -443,6 +453,12 @@ function usePlayerAutoRunClock() {
   }, [settings])
 
   if (now === null) return null
+  const speed = speedClock(settings)
+  if (speed) {
+    const remaining = Math.max(0, Math.ceil((speed.deadline_ms - now) / 1000))
+    const points = speedPointsAvailable(speed.duration_seconds - remaining, speed.duration_seconds)
+    return { key: speed.key, label: `Answers close in · up to ${points} points`, remaining, paused: false, deadlineMs: speed.deadline_ms }
+  }
   const clock = autoRunClockFromSettings(settings, now)
   return clock ? { ...clock, deadlineMs: autoRunClockDeadlineMs(settings) } : null
 }
@@ -453,6 +469,8 @@ function useAutoSubmitPlayerDraft(
   value: string | string[],
   enabled: boolean,
   submit: (value: string | string[], options?: PlayerSubmitOptions) => Promise<void>,
+  questionKey?: string,
+  stage: 'core' | 'bonus' = 'core',
 ) {
   const clock = usePlayerAutoRunClock()
   const submitRef = useRef(submit)
@@ -469,6 +487,7 @@ function useAutoSubmitPlayerDraft(
 
   useEffect(() => {
     if (!clockKey || !clockLabel?.startsWith('Answers') || clockPaused || clockDeadlineMs === null) return
+    if (clockKey.startsWith('speed-') && clockKey !== `speed-${questionKey}-${stage}`) return
     const key = clockKey
     const timer = window.setTimeout(() => {
       if (!enabledRef.current || submittedClockKeyRef.current === key) return
@@ -476,7 +495,7 @@ function useAutoSubmitPlayerDraft(
       void submitRef.current(latestValueRef.current, { deadline: true })
     }, Math.max(0, clockDeadlineMs - Date.now() - 250))
     return () => window.clearTimeout(timer)
-  }, [clockDeadlineMs, clockKey, clockLabel, clockPaused])
+  }, [clockDeadlineMs, clockKey, clockLabel, clockPaused, questionKey, stage, enabled])
 }
 
 function useLiveQuestionDefinition() {
@@ -790,6 +809,7 @@ type PlayerSnapshot = {
   isCorrect: boolean | null
   pointsAwarded: number
   pointsMax: number
+  speedScoring?: boolean
   prompt: string
   correctAnswer: string
   roundLabel: string
@@ -972,7 +992,7 @@ function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
 }
 
 function PlayerSimpleAnswerResult({ snapshot }: { snapshot: PlayerSnapshot }) {
-  const correct = snapshot.pointsAwarded > 0 && snapshot.pointsAwarded >= snapshot.pointsMax
+  const correct = snapshot.isCorrect === true
   const hasCorrection = !correct && snapshot.correctAnswer && snapshot.correctAnswer !== '—'
 
   return (
@@ -1226,7 +1246,8 @@ function usePlayerSnapshot(): PlayerSnapshot {
         hasSubmission: Boolean(submission),
         isCorrect: submission?.is_correct ?? null,
         pointsAwarded: submission?.points_awarded ?? 0,
-        pointsMax: question?.points_max ?? 1,
+        pointsMax: speedScoringEnabled(game?.settings) ? 100 : question?.points_max ?? 1,
+        speedScoring: speedScoringEnabled(game?.settings),
         prompt: question?.prompt ?? '',
         correctAnswer: correctAnswerLabel(question),
         roundLabel: question ? `Round ${question.round_number}` : '',
@@ -1239,7 +1260,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
         hasBonusSubmission: Boolean(bonusSubmission),
         bonusCorrectAnswer: revealedBonus?.correctAnswer ?? '',
         bonusPointsAwarded: bonusSubmission?.points_awarded ?? 0,
-        bonusPointsMax: revealedBonus?.points ?? playerBonusFromJson(question?.bonus)?.points ?? 0,
+        bonusPointsMax: speedScoringEnabled(game?.settings) && question?.bonus ? 100 : revealedBonus?.points ?? playerBonusFromJson(question?.bonus)?.points ?? 0,
         correctness,
         correctnessItems,
       })
@@ -1443,6 +1464,7 @@ function TopBar({
           </div>
           {autoRunClock && (
             <div
+              role="timer"
               title={autoRunClock.label}
               style={{ color: clockTone, border: `1px solid ${clockTone}55`, background: `${clockTone}10` }}
               className="shrink-0 rounded-lg px-2 py-1 text-[11px] font-black tabular-nums transition-colors"
@@ -1459,6 +1481,11 @@ function TopBar({
             </div>
           )}
         </div>
+      )}
+      {autoRunClock?.key.startsWith('speed-') && (
+        <p style={{ color: C.violet }} className="mt-1 text-center text-xs font-bold">
+          Speed scoring · {autoRunClock.label.split(' · ')[1]}
+        </p>
       )}
     </header>
   )
@@ -1810,7 +1837,7 @@ async function handleJoin() {
       try {
         const { data: game } = await supabase
           .from('games')
-          .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
+          .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key, settings')
           .eq('id', gameId)
           .maybeSingle()
         const nextScreen = game ? await resolveLivePlayerScreen(gameId, request.team_id, game as RemoteGameState) : null
@@ -2388,7 +2415,7 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
     // Restore an unsubmitted local draft before falling back to the server response.
     setAnswer(readPlayerDraft<string>(localStorage, draftKey) ?? storedAnswer)
   }, [draftKey, storedAnswer])
-  useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit)
+  useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2438,7 +2465,7 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
     // Restore an unsubmitted local draft before falling back to the server response.
     setAnswer(readPlayerDraft<string>(localStorage, draftKey) ?? storedAnswer)
   }, [draftKey, storedAnswer])
-  useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit)
+  useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2495,7 +2522,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
     // Restore the team's previous response when the host reopens answers.
     setSelected((readPlayerDraft<string>(localStorage, draftKey) ?? storedSelection) || null)
   }, [draftKey, question?.question_key, storedSelection])
-  useAutoSubmitPlayerDraft(selected ?? '', Boolean(selected) && Boolean(question?.question_key) && !submitting, submit)
+  useAutoSubmitPlayerDraft(selected ?? '', Boolean(selected) && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2562,7 +2589,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
     setAnswers(current => { const next = current.map((answer, index) => index === i ? value : answer); writePlayerDraft(localStorage, draftKey, next); return next })
   }
   const anyFilled = answers.some(answer => answer.trim())
-  useAutoSubmitPlayerDraft(answers, anyFilled && Boolean(question?.question_key) && !submitting, submit)
+  useAutoSubmitPlayerDraft(answers, anyFilled && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2570,7 +2597,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · 1 point per correct answer`} />
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · ${snapshot.speedScoring ? 'Up to 100 points · partial credit' : '1 point per correct answer'}`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {answers.map((answer, i) => <div key={i}>
             <input ref={element => { inputRefs.current[i] = element }} value={answer} onChange={e => setA(i, e.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); inputRefs.current[i + 1]?.focus() } }} placeholder="Type an answer…"
@@ -2622,7 +2649,7 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
     setAnswers(Array.from({ length: count }, (_, i) => localDraft[i] ?? ''))
   }, [count, draftKey, question?.question_key, storedAnswersKey])
   const anyFilled = answers.some(answer => answer.trim())
-  useAutoSubmitPlayerDraft(answers, anyFilled && Boolean(question?.question_key) && !submitting, submit)
+  useAutoSubmitPlayerDraft(answers, anyFilled && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2630,7 +2657,7 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-5">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · 1 point per part`} />
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · ${snapshot.speedScoring ? 'Up to 100 points · partial credit' : '1 point per part'}`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {parts.map((part, i) => <div key={part.label ?? i}>
             <p style={{ color: C.violet, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', marginBottom: 8 }}>PART {part.label ?? String.fromCharCode(65 + i)}</p>
@@ -2676,7 +2703,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (next.length) setItems(next)
   }, [question?.question_key, optionItemsKey, correctItemsKey, draftKey, storedItemsKey])
-  useAutoSubmitPlayerDraft(items, items.length > 0 && Boolean(question?.question_key) && !submitting, submit)
+  useAutoSubmitPlayerDraft(items, items.length > 0 && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
   function move(i: number, dir: -1 | 1) {
     const j = i + dir
@@ -2875,7 +2902,7 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
     }
     setAnswer(readPlayerDraft<string>(localStorage, draftKey) ?? storedBonusAnswer)
   }, [draftKey, storedBonusAnswer])
-  useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit)
+  useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit, question?.question_key, 'bonus')
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2890,7 +2917,7 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         )}
         <PlayerQuestionCard
           prompt={bonus?.prompt ?? 'Loading bonus…'}
-          eyebrow={`Bonus · ${bonus?.points ?? 1} ${(bonus?.points ?? 1) === 1 ? 'point' : 'points'}`}
+          eyebrow={`Bonus · ${snapshot.bonusPointsMax || bonus?.points || 1} ${(snapshot.bonusPointsMax || bonus?.points || 1) === 1 ? 'point' : 'points'}`}
           tone="bonus"
         />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your bonus answer</label>
@@ -3187,7 +3214,7 @@ function ShowGame() {
     const stale = () => loadVersion !== showGameLoadVersionRef.current
     let nextShowGameKey = requestedShowGameKey
     if (nextShowGameKey === undefined) {
-      const { data: game } = await supabase.from('games').select('current_show_game_key').eq('id', gameId).maybeSingle()
+      const { data: game } = await supabase.from('games').select('current_show_game_key, settings').eq('id', gameId).maybeSingle()
       if (stale()) return
       nextShowGameKey = game?.current_show_game_key ?? null
     }
@@ -3953,14 +3980,14 @@ function DelayedReveal() {
   const snapshot = usePlayerSnapshot()
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   if (!snapshot.loaded) return <PlayerSnapshotLoading />
-  const fullyCorrect = snapshot.pointsAwarded > 0 && snapshot.pointsAwarded >= snapshot.pointsMax
-  const partiallyCorrect = snapshot.pointsAwarded > 0 && snapshot.pointsAwarded < snapshot.pointsMax
+  const fullyCorrect = snapshot.isCorrect === true
+  const partiallyCorrect = snapshot.pointsAwarded > 0 && !fullyCorrect
   const resultTitle = !snapshot.answer
     ? 'No answer submitted'
     : fullyCorrect
       ? 'Correct!'
       : partiallyCorrect
-        ? `${snapshot.pointsAwarded} of ${snapshot.pointsMax} correct`
+        ? `${snapshot.reviewItems.filter(item => item.status === 'correct').length} of ${snapshot.reviewItems.length + snapshot.missingAnswers.length} correct`
         : 'Not quite'
 
   return (
@@ -4558,7 +4585,7 @@ export function PlayerFlow() {
       const [{ data: game, error: gameError }, { data: team, error: teamError }] = await Promise.all([
         supabase
           .from('games')
-          .select('status, current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key')
+          .select('status, current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key, settings')
           .eq('id', gameId)
           .maybeSingle(),
         teamId && !securelyRestoredTeam

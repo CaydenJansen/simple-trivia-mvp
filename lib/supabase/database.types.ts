@@ -969,6 +969,7 @@ export type Database = {
       }
       submissions: {
         Row: {
+          speed_points_max: number | null
           id: string
           game_id: string
           team_id: string
@@ -1023,6 +1024,7 @@ export type Database = {
       }
       bonus_submissions: {
         Row: {
+          speed_points_max: number | null
           id: string
           game_id: string
           team_id: string

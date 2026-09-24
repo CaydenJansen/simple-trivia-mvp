@@ -12,6 +12,7 @@ export function playerQuestionStageScreen(input: {
   bonusSubmission: ScoredSubmission
   corePointsMax: number
   bonusPointsMax: number
+  speedScoring?: boolean
 }) {
   const {
     answerPhase,
@@ -30,6 +31,7 @@ export function playerQuestionStageScreen(input: {
     const points = (coreSubmission?.points_awarded ?? 0) + (bonusSubmission?.points_awarded ?? 0)
     const max = Math.max(1, corePointsMax) + Math.max(0, bonusPointsMax)
     if (points <= 0) return 'incorrect'
+    if (input.speedScoring) return coreSubmission?.is_correct === true && (bonusPointsMax === 0 || bonusSubmission?.is_correct === true) ? 'correct' : 'partial-correct'
     if (points < max) return 'partial-correct'
     return 'correct'
   }
