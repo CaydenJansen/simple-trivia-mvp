@@ -13,6 +13,7 @@ import {
 import { flushSync } from "react-dom";
 import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase/client";
+import { allocateTemplateQuestions } from '@/lib/trivia/template-allocation';
 import QuestionsArea from "@/components/host/QuestionsArea";
 import BuilderQuestionPicker, { type PickerSourceQuestion } from "@/components/host/BuilderQuestionPicker";
 import BuilderTiebreakerPicker, { type PickerSourceTiebreaker } from "@/components/host/BuilderTiebreakerPicker";
@@ -53,7 +54,7 @@ import {
   type LeaderboardVisibility,
 } from "@/lib/trivia/leaderboard-visibility";
 import { customPrizeSettings, prizeAwardsFromJson, prizeSettings, type PrizeAward } from "@/lib/trivia/prizes";
-import { correctnessSummary } from "@/lib/trivia/correctness-rate";
+import { answerCorrectnessSummaries, correctnessSummary } from "@/lib/trivia/correctness-rate";
 import { hostRecoveryScreen } from "@/lib/trivia/session-recovery";
 import { buildGameJoinUrl } from "@/lib/trivia/join-code";
 import { buildPermanentHostJoinUrl } from "@/lib/trivia/permanent-host-link";
@@ -2458,14 +2459,13 @@ async function loadTemplateStructure(template: QuizTemplateRow) {
 async function buildQuizFromTemplate(template: QuizTemplateRow, roundTopicMode: TemplateRoundTopicMode = 'none') {
   const [structure, libraryResult, tiebreakerLibraryResult] = await Promise.all([
     loadTemplateStructure(template),
-    supabase.from('source_question_catalog').select('*').eq('origin', 'platform').eq('status', 'active').eq('is_verified', true).range(0, 1999),
-    supabase.from('source_tiebreakers').select('*').eq('status', 'active').eq('is_verified', true).range(0, 1999),
+    loadAllSourceRows<PickerSourceQuestion>(async (from, to) => await supabase.from('source_question_catalog').select('*').eq('origin', 'platform').eq('status', 'active').eq('is_verified', true).order('id').range(from, to)),
+    loadAllSourceRows<AutoBuildSourceTiebreaker>(async (from, to) => await supabase.from('source_tiebreakers').select('*').eq('status', 'active').eq('is_verified', true).order('id').range(from, to)),
   ])
   if (libraryResult.error || tiebreakerLibraryResult.error) throw new Error('Could not load that template. Please try again.')
 
   const library = (libraryResult.data ?? []) as PickerSourceQuestion[]
   const used = new Set(structure.questions.map(question => question.source_question_id).filter(Boolean))
-  const chosen = new Set<string>()
   const roundTopics = new Map<number, string | null>()
   const alreadyRandomizedTopics = new Set<string>()
   for (const round of structure.rounds) {
@@ -2482,13 +2482,7 @@ async function buildQuizFromTemplate(template: QuizTemplateRow, roundTopicMode: 
     const allFeasibleTopics = TEMPLATE_ROUND_TOPICS.filter(topic => {
       if (topic === originalTopic) return false
       const matching = library.filter(candidate => !used.has(candidate.id) && templateQuestionMatchesTopic(candidate, topic))
-      const remaining = [...matching]
-      return roundQuestions.every(question => {
-        const candidateIndex = remaining.findIndex(candidate => question.question_type === 'any' || candidate.question_type === question.question_type)
-        if (candidateIndex < 0) return false
-        remaining.splice(candidateIndex, 1)
-        return true
-      })
+      return allocateTemplateQuestions(roundQuestions, matching, (question, candidate) => question.question_type === 'any' || candidate.question_type === question.question_type) !== null
     })
     const unusedFeasibleTopics = allFeasibleTopics.filter(topic => !alreadyRandomizedTopics.has(topic))
     const candidateTopics = unusedFeasibleTopics.length > 0 ? unusedFeasibleTopics : allFeasibleTopics
@@ -2499,15 +2493,13 @@ async function buildQuizFromTemplate(template: QuizTemplateRow, roundTopicMode: 
     alreadyRandomizedTopics.add(selectedTopic)
   }
   const replacements: Json[] = []
-  for (const original of structure.questions) {
+  const sources = allocateTemplateQuestions(structure.questions, library.filter(candidate => !used.has(candidate.id)),
+    (original, candidate) => (original.question_type === 'any' || candidate.question_type === original.question_type)
+      && templateQuestionMatchesTopic(candidate, roundTopics.get(original.round_number) ?? null))
+  if (!sources) throw new Error('The Question Library does not have enough unused questions matching this template’s types and round topics.')
+  for (const [index, original] of structure.questions.entries()) {
     const roundTopic = roundTopics.get(original.round_number) ?? null
-    const candidates = library.filter(candidate => (original.question_type === 'any' || candidate.question_type === original.question_type) && templateQuestionMatchesTopic(candidate, roundTopic) && !used.has(candidate.id) && !chosen.has(candidate.id))
-    const requestedType = original.question_type === 'any' ? '' : ` ${questionTypeLabel(original.question_type)}`
-    const requestedTopic = roundTopic ? ` for ${roundTopic}` : ''
-    if (candidates.length === 0) throw new Error(`The Question Library does not have enough unused${requestedType} questions${requestedTopic} for this template.`)
-    const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
-    const source = candidates[randomValue % candidates.length]
-    chosen.add(source.id)
+    const source = sources[index]
     const replacement = sourceToBuilderQuestion(source)
     replacements.push({
       ...original,
@@ -6953,7 +6945,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
                     <input type="number" min={1} step={1} value={bonus.points} onChange={event => setBonus({ ...bonus, points: Number(event.target.value) })} aria-label="Bonus points"
                       style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
                   </div>
-                  <input value={bonus.aliases} onChange={event => setBonus({ ...bonus, aliases: event.target.value })} placeholder="Accepted alternatives, separated by commas"
+                  <textarea rows={2} value={bonus.aliases} onChange={event => setBonus({ ...bonus, aliases: event.target.value })} placeholder="Accepted alternatives — one per line"
                     style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
                   <input value={bonus.imageUrl} onChange={event => setBonus({ ...bonus, imageUrl: event.target.value })} placeholder="Bonus image URL (optional)"
                     style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
@@ -8866,12 +8858,8 @@ function questionItemCorrectness(
 ) {
   if (!question || !['multi-answer', 'multi-part', 'ranking'].includes(question.question_type)) return []
 
-  return asStringArray(question.correct_answer).map((_, itemIndex) => correctnessSummary(
-    totalTeams,
-    submissions.map(submission => ({
-      is_correct: storedSubmissionGrading(question, submission).items[itemIndex]?.status === 'correct',
-    })),
-  ))
+  return answerCorrectnessSummaries(question.question_type, question.correct_answer, totalTeams,
+    submissions.map(submission => storedSubmissionGrading(question, submission)))
 }
 
 function HostCorrectAnswerBreakdown({
@@ -9814,7 +9802,7 @@ function LiveQuestion({ go }: { go: Go }) {
 
 async function handleReviewItem(submissionId: string, itemIndex: number, status: 'correct' | 'incorrect') {
   if (!question) return
-  const reviewKey = `${submissionId}:${itemIndex}`
+  const reviewKey = submissionId
   if (reviewBusyRef.current.has(reviewKey)) return
 
   const submission = submissions.find(item => item.id === submissionId)
@@ -9833,7 +9821,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   reviewBusyRef.current.add(reviewKey)
   try {
     const nextPoints = gradingPoints(next, question.points_max, question.question_type === 'ranking' && question.points_max === 1)
-    const { error } = phase === 'revealed'
+    const { error } = submission.is_correct !== null
       ? await supabase.rpc('rescore_submission', { p_submission_id: submissionId, p_grading_json: next, p_points_awarded: nextPoints })
       : await supabase.from('submissions').update({ grading_json: next }).eq('id', submissionId)
     if (error) throw error
@@ -9842,8 +9830,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         .then(({ error: signalError }) => { if (signalError) console.error('Could not record answer-alternative signal:', signalError) })
     }
     setSubmissions(currentSubmissions => currentSubmissions.map(item =>
-      item.id === submissionId ? { ...item, grading_json: next, ...(phase === 'revealed' ? { points_awarded: nextPoints, is_correct: nextPoints >= question.points_max } : {}) } : item
+      item.id === submissionId ? { ...item, grading_json: next, ...(submission.is_correct !== null ? { points_awarded: nextPoints, is_correct: nextPoints >= question.points_max } : {}) } : item
     ))
+    if (submission.is_correct !== null && liveGameId) {
+      const { data, error } = await supabase.from('teams').select('id, name, score, last_seen_at').eq('game_id', liveGameId)
+      if (!error) setTeams((data ?? []) as LiveTeam[])
+    }
   } catch (error) {
     console.error('Could not update answer review:', error)
     setLiveError('Could not save that answer review. Please try again.')
@@ -9869,13 +9861,17 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     reviewBusyRef.current.add(reviewKey)
     try {
       const nextPoints = gradingPoints(next, bonus.points)
-      const { error } = phase === 'revealed'
+      const { error } = submission.is_correct !== null
         ? await supabase.rpc('rescore_bonus_submission', { p_submission_id: submissionId, p_grading_json: next, p_points_awarded: nextPoints })
         : await supabase.from('bonus_submissions').update({ grading_json: next }).eq('id', submissionId)
       if (error) throw error
       setBonusSubmissions(currentSubmissions => currentSubmissions.map(item =>
-        item.id === submissionId ? { ...item, grading_json: next, ...(phase === 'revealed' ? { points_awarded: nextPoints, is_correct: nextPoints >= bonus.points } : {}) } : item
+        item.id === submissionId ? { ...item, grading_json: next, ...(submission.is_correct !== null ? { points_awarded: nextPoints, is_correct: nextPoints >= bonus.points } : {}) } : item
       ))
+      if (submission.is_correct !== null && liveGameId) {
+        const { data, error } = await supabase.from('teams').select('id, name, score, last_seen_at').eq('game_id', liveGameId)
+        if (!error) setTeams((data ?? []) as LiveTeam[])
+      }
     } catch (error) {
       console.error('Could not update bonus review:', error)
       setLiveError('Could not save that bonus review. Please try again.')
@@ -12015,7 +12011,7 @@ function EndOfRound({ go }: { go: Go }) {
   }
 
   async function reviewRoundSubmission(submission: LiveSubmission, itemIndex: number, status: 'correct' | 'incorrect', bonus = false) {
-    const reviewKey = `${bonus ? 'bonus' : 'core'}:${submission.id}:${itemIndex}`
+    const reviewKey = `${bonus ? 'bonus' : 'core'}:${submission.id}`
     if (roundReviewBusyRef.current.has(reviewKey)) return
     const roundQuestion = roundQuestions.find(item => item.question_key === submission.question_key)
     if (!roundQuestion) return
@@ -12032,14 +12028,23 @@ function EndOfRound({ go }: { go: Go }) {
     roundReviewBusyRef.current.add(reviewKey)
     try {
       const table = bonus ? 'bonus_submissions' : 'submissions'
-      const { error: reviewError } = await supabase.from(table).update({ grading_json: next }).eq('id', submission.id)
+      const pointsMax = bonus && bonusDefinition ? bonusDefinition.points : roundQuestion.points_max
+      const nextPoints = gradingPoints(next, pointsMax, !bonus && roundQuestion.question_type === 'ranking' && pointsMax === 1)
+      const scored = submission.is_correct !== null
+      const { error: reviewError } = scored
+        ? await supabase.rpc(bonus ? 'rescore_bonus_submission' : 'rescore_submission', { p_submission_id: submission.id, p_grading_json: next, p_points_awarded: nextPoints })
+        : await supabase.from(table).update({ grading_json: next }).eq('id', submission.id)
       if (reviewError) throw reviewError
       if (!bonus && status === 'correct' && priorStatus !== 'correct') {
         void supabase.rpc('record_host_answer_override', { p_submission_id: submission.id, p_answer_slot: itemIndex })
           .then(({ error: signalError }) => { if (signalError) console.error('Could not record answer-alternative signal:', signalError) })
       }
       const setter = bonus ? setRoundBonusSubmissions : setRoundSubmissions
-      setter(rows => rows.map(row => row.id === submission.id ? { ...row, grading_json: next } : row))
+      setter(rows => rows.map(row => row.id === submission.id ? { ...row, grading_json: next, ...(scored ? { points_awarded: nextPoints, is_correct: nextPoints >= pointsMax } : {}) } : row))
+      if (scored && gameId) {
+        const { data: refreshedTeams, error: teamsError } = await supabase.from('teams').select('id, name, score').eq('game_id', gameId).order('score', { ascending: false })
+        if (!teamsError) setTeams((refreshedTeams ?? []) as LiveTeam[])
+      }
     } catch (reviewError) {
       console.error('Could not save round review decision:', reviewError)
       setError('Could not save that review decision.')

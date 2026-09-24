@@ -35,7 +35,7 @@ import { teamAdmissionTransition, teamApprovalRequiredFromSettings } from "@/lib
 import { autoRunClockColor, autoRunClockDeadlineMs, autoRunClockFromSettings, autoRunClockLabel } from "@/lib/trivia/auto-run";
 import { nextSuggestedTeamName } from "@/lib/trivia/team-name-suggestions";
 import { showGameRewardDescription, showGameRewardFromSettings, showGameWinnerDetail } from "@/lib/trivia/show-game-rewards";
-import { correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
+import { answerCorrectnessSummaries, correctAnswerIndex, correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
 import { playersSeeCorrectnessPercentage } from "@/lib/trivia/correctness-visibility";
 import BrandWordmark from "@/components/BrandWordmark";
 import TeamWheel from "@/components/TeamWheel";
@@ -709,12 +709,13 @@ function SubmitNotice({ message }: { message: string | null }) {
   return <p role="status" style={{ color: C.go, fontSize: 13, fontWeight: 800, marginTop: 10 }}>Saved: {message}</p>
 }
 
-function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey: string | undefined) {
+function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey: string | undefined, existingSubmission = false) {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [submitNotice, setSubmitNotice] = useState<string | null>(null)
   const submitBusyRef = useRef(false)
 
-  async function submit(value: string) {
+  async function submit(value: string | string[], options: PlayerSubmitOptions = {}) {
     if (submitBusyRef.current || !expectedQuestionKey) return
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
@@ -723,19 +724,24 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey
     submitBusyRef.current = true
     setSubmitting(true)
     setSubmitError(null)
+    setSubmitNotice(null)
     try {
-      const { data: game, error: gameError } = await supabase
-        .from('games')
-        .select('answer_phase, question_stage, current_question_key')
-        .eq('id', gameId)
-        .maybeSingle()
-      if (gameError) throw gameError
-      if (!game || game.answer_phase !== 'open' || game.question_stage !== 'bonus' || game.current_question_key !== expectedQuestionKey) {
-        setSubmitError('Bonus answers have closed.')
-        return
+      let answerEditingAllowed = false
+      if (!options.deadline) {
+        const { data: game, error: gameError } = await supabase
+          .from('games')
+          .select('answer_phase, answer_editing_allowed, question_stage, current_question_key')
+          .eq('id', gameId)
+          .maybeSingle()
+        if (gameError) throw gameError
+        if (!game || game.answer_phase !== 'open' || game.question_stage !== 'bonus' || game.current_question_key !== expectedQuestionKey) {
+          setSubmitError('Bonus answers have closed.')
+          return
+        }
+        answerEditingAllowed = game.answer_editing_allowed
       }
 
-      const answerText = value.trim()
+      const answerText = String(value).trim()
       const { error } = await supabase.rpc('submit_player_bonus_answer', {
         p_game_id: gameId,
         p_team_id: teamId,
@@ -743,7 +749,10 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey
         p_answer_text: answerText,
       })
       if (error) throw error
-      go('bonus-submitted')
+      setSubmitNotice(existingSubmission || submitNotice
+        ? 'Updated. Your latest bonus answer replaced the previous one.'
+        : options.deadline ? 'Time is up. Your partial bonus answer was submitted.' : 'Bonus answer submitted.')
+      if (!options.deadline && !answerEditingAllowed) go('bonus-submitted')
     } catch (error) {
       console.error('Could not submit bonus answer:', error)
       const message = readableErrorMessage(error)
@@ -758,7 +767,7 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey
     }
   }
 
-  return { submit, submitting, submitError }
+  return { submit, submitting, submitError, submitNotice }
 }
 
 type PlayerReviewStatus = 'correct' | 'incorrect' | 'review'
@@ -795,7 +804,7 @@ type PlayerSnapshot = {
   bonusPointsAwarded: number
   bonusPointsMax: number
   correctness: CorrectnessSummary | null
-  correctnessItems: CorrectnessSummary[]
+  correctnessItems: (CorrectnessSummary | null)[]
 }
 
 function playerReviewItemsFromJson(value: unknown): PlayerReviewItem[] {
@@ -1147,7 +1156,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
       let submission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
       let bonusSubmission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
       let correctness: CorrectnessSummary | null = null
-      let correctnessItems: CorrectnessSummary[] = []
+      let correctnessItems: (CorrectnessSummary | null)[] = []
 
       if (game?.current_question_key) {
         const [questionResult, submissionResult, bonusSubmissionResult] = await Promise.all([
@@ -1188,9 +1197,10 @@ function usePlayerSnapshot(): PlayerSnapshot {
             correctness = correctnessSummary(teamCount ?? 0, allSubmissions ?? [])
             if (isCompoundResultType(question?.question_type ?? null)) {
               const ownItems = playerReviewItemsFromJson(submission?.grading_json)
-              correctnessItems = ownItems.map((_, index) => correctnessSummary(teamCount ?? 0, (allSubmissions ?? []).map(row => ({
-                is_correct: playerReviewItemsFromJson(row.grading_json)[index]?.status === 'correct',
-              }))))
+              const summaries = answerCorrectnessSummaries(question!.question_type, question!.correct_answer, teamCount ?? 0,
+                (allSubmissions ?? []).map(row => ({ items: playerReviewItemsFromJson(row.grading_json) })))
+              correctnessItems = ownItems.map((item, index) => summaries[question!.question_type === 'multi-answer'
+                ? correctAnswerIndex(question!.correct_answer, item) : index] ?? null)
             }
           }
         }
@@ -2844,15 +2854,28 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
   const bonus = playerBonusFromJson(question?.bonus)
-  const { submit, submitting, submitError } = useSubmitBonusAnswer(go, question?.question_key)
+  const { submit, submitting, submitError, submitNotice } = useSubmitBonusAnswer(go, question?.question_key, snapshot.hasBonusSubmission)
 
   const storedBonusAnswer = savedAnswerForQuestion(question?.question_key, snapshot.questionKey, snapshot.bonusAnswer) ?? ''
+  const draftKey = playerDraftStorageKey(typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-game-id'), typeof window === 'undefined' ? null : localStorage.getItem('simple-trivia-team-id'), question?.question_key ? `${question.question_key}:bonus` : undefined)
+  const answerDirtyRef = useRef(false)
+  const restoredDraftKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
-    // Restore the team's previous bonus response when the host reopens answers.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAnswer(storedBonusAnswer)
-  }, [question?.question_key, storedBonusAnswer])
+    const changedQuestion = restoredDraftKeyRef.current !== draftKey
+    if (!changedQuestion && answerDirtyRef.current) return
+    if (changedQuestion) {
+      const typedWhileLoading = restoredDraftKeyRef.current === null && answerDirtyRef.current
+      restoredDraftKeyRef.current = draftKey
+      if (typedWhileLoading) {
+        setAnswer(current => { writePlayerDraft(localStorage, draftKey, current); return current })
+        return
+      }
+      answerDirtyRef.current = false
+    }
+    setAnswer(readPlayerDraft<string>(localStorage, draftKey) ?? storedBonusAnswer)
+  }, [draftKey, storedBonusAnswer])
+  useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit)
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
@@ -2871,10 +2894,11 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
           tone="bonus"
         />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your bonus answer</label>
-        <textarea rows={3} value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
+        <textarea rows={3} value={answer} onChange={event => { answerDirtyRef.current = true; setAnswer(event.target.value); writePlayerDraft(localStorage, draftKey, event.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
-        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasBonusSubmission ? 'Update Bonus Answer' : 'Submit Bonus Answer'}</Btn></div>
+        <SubmitNotice message={submitNotice} />
+        <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasBonusSubmission || submitNotice ? 'Update Bonus Answer' : 'Submit Bonus Answer'}</Btn></div>
       </div>
     </div>
   )

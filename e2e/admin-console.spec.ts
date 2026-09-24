@@ -3,6 +3,17 @@ import { expect, test, type Page } from '@playwright/test'
 const userId = '00000000-0000-4000-8000-000000000001'
 const otherId = '00000000-0000-4000-8000-000000000002'
 
+test('stale suggestions do not report that an accepted answer was added', async ({ page }) => {
+  await mockAdmin(page, 'admin')
+  let reviewed = false
+  await page.route('**/rest/v1/rpc/get_answer_suggestion_queue', route => route.fulfill({ json: reviewed ? [] : [{ suggestion_id: 's1', question_id: 'q1', question_prompt: 'Which planet?', question_type: 'single-answer', current_answer: 'Venus', answer_slot: 0, proposed_answer: 'Planet Venus', expected_answer: 'Venus', distinct_host_count: 3, signal_count: 3, status: 'pending', created_at: '2026-09-01' }] }))
+  await page.route('**/rest/v1/rpc/review_answer_suggestion', route => { reviewed = true; return route.fulfill({ json: 'stale' }) })
+  await page.reload()
+  await page.getByRole('button', { name: 'Approve alias' }).click()
+  await expect(page.getByText('This question has changed since the suggestion was collected. No accepted answer was added.')).toBeVisible()
+  await expect(page.getByText('Added “Planet Venus” as an accepted answer.', { exact: true })).toHaveCount(0)
+})
+
 async function mockAdmin(page: Page, access: 'host' | 'admin' | 'super_admin') {
   await page.addInitScript(({ userId }) => {
     const token = `${btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${btoa(JSON.stringify({ sub: userId, exp: 4102444800, role: 'authenticated' }))}.test-signature`
@@ -75,6 +86,23 @@ const question = {
   editorial_difficulty: 3, stability: 'stable', audience_suitability: 'general', audience_scope: 'global',
   audience_locale: null, content_flags: [], image_url: null, notes: null, status: 'active', revision: 7,
   is_verified: true, bonus: null, audience_fit: 'broad', adult_content: false,
+}
+
+for (const questionType of ['single-answer', 'multi-answer'] as const) {
+  test(`editing ${questionType} preserves alternatives containing commas`, async ({ page }) => {
+    await mockAdmin(page, 'admin')
+    const compound = questionType === 'multi-answer'
+    const aliases = compound ? [['Washington, D.C.'], ['London, England']] : ['Washington, D.C.', 'DC']
+    const fixture = { ...question, question_type: questionType, correct_answer: compound ? ['Washington', 'London'] : 'Washington', accepted_answers: aliases, bonus: { prompt: 'Bonus fixture', correct_answer: 'New York', accepted_answers: ['New York, NY'], points: 1 } }
+    await page.route('**/rest/v1/source_question_catalog**', route => route.fulfill({ json: [fixture], headers: { 'content-range': '0-0/1' } }))
+    await page.getByRole('button', { name: 'Question Library', exact: true }).click()
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
+    let payload: Record<string, unknown> = {}
+    await page.route('**/rest/v1/rpc/admin_save_library_question', route => { payload = route.request().postDataJSON(); return route.fulfill({ json: 'saved-question' }) })
+    await page.getByRole('button', { name: 'Save to Question Library' }).click()
+    await expect(page.getByRole('status')).toContainText('Question Library changes saved')
+    expect(payload).toMatchObject({ p_question: { accepted_answers: aliases }, p_bonus: { accepted_answers: ['New York, NY'] } })
+  })
 }
 
 test('library editing sends revision and preserves a rejected draft', async ({ page }) => {

@@ -9,6 +9,10 @@ import {
 } from './source-question-bonus'
 
 describe('source question bonus authoring', () => {
+  it('preserves commas inside accepted answers through editing', () => {
+    const draft = sourceQuestionBonusDraft({ prompt: 'Capital?', correct_answer: 'Washington', accepted_answers: ['Washington, D.C.', 'DC'] })
+    expect(sourceQuestionBonusPayload(draft)).toMatchObject({ accepted_answers: ['Washington, D.C.', 'DC'] })
+  })
   it('treats a missing bonus as disabled', () => {
     expect(sourceQuestionBonusDraft(null)).toEqual(EMPTY_SOURCE_QUESTION_BONUS)
     expect(sourceQuestionBonusPayload(EMPTY_SOURCE_QUESTION_BONUS)).toBeNull()
@@ -27,7 +31,7 @@ describe('source question bonus authoring', () => {
       enabled: true,
       prompt: '  Name the bonus city. ',
       answer: ' Brisbane ',
-      aliases: 'Brissie, BNE',
+      aliases: 'Brissie\nBNE',
       points: 2,
       imageUrl: ' https://example.com/bonus.jpg ',
       primaryCategoryId: 'category-1',

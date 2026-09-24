@@ -118,12 +118,12 @@ function aliasesForQuestion(question: SourceQuestion, count: number): string[] {
   if (!Array.isArray(acceptedAnswers)) return Array(count).fill("");
 
   if (question.question_type === "single-answer" || question.question_type === "image-question") {
-    return [acceptedAnswers.map((value) => String(value)).join(", ")];
+    return [acceptedAnswers.map((value) => String(value)).join("\n")];
   }
 
   return Array.from({ length: count }, (_, index) => {
     const aliases = acceptedAnswers[index];
-    return Array.isArray(aliases) ? aliases.map((value) => String(value)).join(", ") : "";
+    return Array.isArray(aliases) ? aliases.map((value) => String(value)).join("\n") : "";
   });
 }
 
@@ -177,7 +177,7 @@ function draftFromQuestion(question: SourceQuestion): QuestionDraft {
 }
 
 function splitAliases(value: string) {
-  return value.split(",").map((alias) => alias.trim()).filter(Boolean);
+  return value.split(/\r?\n/).map((alias) => alias.trim()).filter(Boolean);
 }
 
 function questionPayload(draft: QuestionDraft) {
@@ -828,7 +828,7 @@ function QuestionEditor({
                       <div className="flex-1 space-y-2">
                         {draft.questionType === "multi-part" ? <input value={draft.clues[index] ?? ""} onChange={(event) => setDraft({ ...draft, clues: Array.from({ length: rowCount }, (_, row) => row === index ? event.target.value : draft.clues[row] ?? "") })} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-violet-500" placeholder="Clue" /> : null}
                         <input value={answer} onChange={(event) => updateAnswer(index, event.target.value)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-violet-500" placeholder={draft.questionType === "ranking" ? "Item in correct order" : "Correct answer"} />
-                        {draft.questionType !== "ranking" ? <input value={draft.aliases[index] ?? ""} onChange={(event) => updateAlias(index, event.target.value)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-xs outline-none focus:border-violet-500" placeholder="Accepted alternatives, separated by commas" /> : null}
+                        {draft.questionType !== "ranking" ? <textarea rows={2} value={draft.aliases[index] ?? ""} onChange={(event) => updateAlias(index, event.target.value)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-xs outline-none focus:border-violet-500" placeholder="Accepted alternatives — one per line" /> : null}
                       </div>
                       {draft.answers.length > 1 ? <button type="button" onClick={() => removeAnswerRow(index)} className="mt-2 rounded-lg px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50">Remove</button> : null}
                     </div>
@@ -839,7 +839,7 @@ function QuestionEditor({
             ) : (
               <div className="space-y-3">
                 <input value={draft.answers[0] ?? ""} onChange={(event) => updateAnswer(0, event.target.value)} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-violet-500" placeholder="Correct answer" />
-                <input value={draft.aliases[0] ?? ""} onChange={(event) => updateAlias(0, event.target.value)} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-violet-500" placeholder="Accepted alternatives, separated by commas" />
+                <textarea rows={2} value={draft.aliases[0] ?? ""} onChange={(event) => updateAlias(0, event.target.value)} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-violet-500" placeholder="Accepted alternatives — one per line" />
               </div>
             )}
           </div>
@@ -870,7 +870,7 @@ function QuestionEditor({
                     <input type="number" min={1} step={1} value={bonus.points} onChange={(event) => setBonus({ ...bonus, points: Number(event.target.value) })} className="mt-2 w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" />
                   </label>
                 </div>
-                <input value={bonus.aliases} onChange={(event) => setBonus({ ...bonus, aliases: event.target.value })} className="w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="Accepted alternatives, separated by commas" />
+                <textarea rows={2} value={bonus.aliases} onChange={(event) => setBonus({ ...bonus, aliases: event.target.value })} className="w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="Accepted alternatives — one per line" />
                 <label className="block">
                   <span className="text-sm font-semibold text-zinc-700">Image (Optional)</span>
                   <input type="url" value={bonus.imageUrl} onChange={(event) => setBonus({ ...bonus, imageUrl: event.target.value })} className="mt-2 w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="https://…" />

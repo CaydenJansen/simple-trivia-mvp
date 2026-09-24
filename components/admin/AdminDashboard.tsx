@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import BrandWordmark from "@/components/BrandWordmark";
 import AdminUsers from "@/components/admin/AdminUsers";
@@ -118,6 +118,7 @@ export default function AdminDashboard() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busySuggestion, setBusySuggestion] = useState<string | null>(null);
+  const reviewBusyRef = useRef(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -161,27 +162,33 @@ export default function AdminDashboard() {
   }, [load]);
 
   async function review(suggestion: Suggestion, decision: "approved" | "rejected") {
-    if (busySuggestion) return;
+    if (reviewBusyRef.current) return;
+    reviewBusyRef.current = true;
     setBusySuggestion(suggestion.suggestion_id);
     setNotice(null);
     setError(null);
-    const { error: reviewError } = await supabase.rpc("review_answer_suggestion", {
-      p_suggestion_id: suggestion.suggestion_id,
-      p_decision: decision,
-      p_note: null,
-    });
-    if (reviewError) {
-      console.error("Could not review answer suggestion:", reviewError);
-      setError("Could not save that review decision.");
+    try {
+      const { data: result, error: reviewError } = await supabase.rpc("review_answer_suggestion", {
+        p_suggestion_id: suggestion.suggestion_id,
+        p_decision: decision,
+        p_note: null,
+      });
+      if (reviewError) throw reviewError;
+      if (!['approved', 'rejected', 'stale'].includes(String(result))) throw new Error('Unexpected review result');
+      setSuggestions(current => current.filter(item => item.suggestion_id !== suggestion.suggestion_id));
+      setNotice(result === 'stale'
+        ? 'This question has changed since the suggestion was collected. No accepted answer was added.'
+        : result === "approved"
+          ? `Added “${suggestion.proposed_answer}” as an accepted answer.`
+          : `Rejected “${suggestion.proposed_answer}”.`);
+      void load();
+    } catch (reviewError) {
+      console.error('Could not review answer suggestion:', reviewError);
+      setError('Could not save that review decision.');
+    } finally {
+      reviewBusyRef.current = false;
       setBusySuggestion(null);
-      return;
     }
-    setSuggestions(current => current.filter(item => item.suggestion_id !== suggestion.suggestion_id));
-    setNotice(decision === "approved"
-      ? `Added “${suggestion.proposed_answer}” as an accepted answer.`
-      : `Rejected “${suggestion.proposed_answer}”.`);
-    setBusySuggestion(null);
-    void load();
   }
 
   const lowSupply = useMemo(() => dashboard?.supply_by_category.filter(row => row.question_count < 25) ?? [], [dashboard]);

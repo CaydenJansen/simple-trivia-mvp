@@ -56,7 +56,7 @@ export function sourceQuestionBonusDraft(value: Json | null | undefined): Source
     enabled: true,
     prompt: String(bonus.prompt ?? ''),
     answer: String(bonus.correct_answer ?? ''),
-    aliases: stringArray(bonus.accepted_answers).join(', '),
+    aliases: stringArray(bonus.accepted_answers).join('\n'),
     points: Math.max(1, Number(bonus.points) || 1),
     imageUrl: String(bonus.image_url ?? ''),
     primaryCategoryId: String(bonus.primary_category_id ?? ''),
@@ -93,7 +93,7 @@ export function sourceQuestionBonusPayload(draft: SourceQuestionBonusDraft): Jso
   return {
     prompt: draft.prompt.trim(),
     correct_answer: draft.answer.trim(),
-    accepted_answers: draft.aliases.split(',').map(alias => alias.trim()).filter(Boolean),
+    accepted_answers: draft.aliases.split(/\r?\n/).map(alias => alias.trim()).filter(Boolean),
     points: draft.points,
     image_url: draft.imageUrl.trim() || null,
     primary_category_id: draft.primaryCategoryId || null,
