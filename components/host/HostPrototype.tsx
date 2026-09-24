@@ -75,7 +75,7 @@ import {
   type AutoBuildVibe,
 } from "@/lib/trivia/auto-build";
 import { draggedItemCentreY, insertionIndexWithHysteresis, moveKeyBetweenGroups, moveKeyToIndex, nextBuilderItemPosition, reorderKeys, type DropPlacement } from "@/lib/trivia/builder-order";
-import { isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
+import { effectiveTriviaDifficulty, isTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone, type TriviaDifficulty, type TriviaDifficultyTone } from "@/lib/trivia/difficulty";
 import { editorialDifficultyFromLegacy, SOURCE_QUESTION_CATEGORIES } from "@/lib/trivia/question-metadata";
 import { hostKeyboardNavigation, hostSpaceOverridesFocusedReviewControl, type HostKeyboardNavigation } from "@/lib/trivia/host-keyboard-navigation";
 import { competitionPlacements, ordinalPlacement } from "@/lib/trivia/leaderboard-ranking";
@@ -861,14 +861,18 @@ function IBtn({ icon, title, onClick, danger = false }: {
 
 function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
   const [profileInitials, setProfileInitials] = useState('ME')
+  const [platformAdmin, setPlatformAdmin] = useState(false)
 
   useEffect(() => {
     let mounted = true
-    void supabase.auth.getUser().then(({ data }) => {
-      if (!mounted || !data.user?.email) return
-      const localPart = data.user.email.split('@')[0].replace(/[^a-z0-9]/gi, '')
-      setProfileInitials((localPart.slice(0, 2) || 'ME').toUpperCase())
-    })
+    void Promise.all([supabase.auth.getUser(), supabase.rpc('is_platform_admin')]).then(([{ data }, adminResult]) => {
+      if (!mounted) return
+      if (data.user?.email) {
+        const localPart = data.user.email.split('@')[0].replace(/[^a-z0-9]/gi, '')
+        setProfileInitials((localPart.slice(0, 2) || 'ME').toUpperCase())
+      }
+      setPlatformAdmin(adminResult.data === true)
+    }).catch(error => { console.error('Could not check platform admin access:', error) })
     return () => { mounted = false }
   }, [])
 
@@ -899,6 +903,7 @@ function Nav({ go, active = 'My Quizzes' }: { go: Go; active?: string }) {
           </button>
         ))}
       </div>
+      {platformAdmin && <a href="/admin" className="shrink-0 rounded-lg bg-violet-pale px-2.5 py-2 text-xs font-extrabold text-violet hover:bg-violet-mist">Admin</a>}
       <button
         type="button"
         onClick={() => go('account')}
@@ -1466,6 +1471,7 @@ type QuizSummary = {
 type QuizFolder = Database['public']['Tables']['quiz_folders']['Row']
 
 const UNFILED_FOLDER_KEY = 'unfiled'
+const COLLAPSED_QUIZ_FOLDERS_KEY = 'good-trivia-collapsed-quiz-folders-v1'
 
 type QuizShareDetails = {
   token: string
@@ -1535,7 +1541,13 @@ function Dashboard({ go }: { go: Go }) {
   const [draggedQuizId, setDraggedQuizId] = useState<string | null>(null)
   const [dropFolderKey, setDropFolderKey] = useState<string | null>(null)
   const [movingQuizId, setMovingQuizId] = useState<string | null>(null)
-  const [collapsedFolderIds, setCollapsedFolderIds] = useState<Set<string>>(() => new Set())
+  const [collapsedFolderIds, setCollapsedFolderIds] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const stored = JSON.parse(localStorage.getItem(COLLAPSED_QUIZ_FOLDERS_KEY) ?? '[]')
+      return new Set(Array.isArray(stored) ? stored.filter(value => typeof value === 'string') : [])
+    } catch { return new Set() }
+  })
   const [incomingShareToken, setIncomingShareToken] = useState<string | null>(() => (
     typeof window === 'undefined' ? null : quizShareTokenFromUrl(window.location.href)
   ))
@@ -1742,6 +1754,7 @@ function Dashboard({ go }: { go: Go }) {
       const next = new Set(current)
       if (next.has(folderId)) next.delete(folderId)
       else next.add(folderId)
+      localStorage.setItem(COLLAPSED_QUIZ_FOLDERS_KEY, JSON.stringify([...next]))
       return next
     })
   }
@@ -3479,9 +3492,7 @@ function sourceToBuilderQuestion(source: PickerSourceQuestion): BuilderQuestionD
     : source.category_names.length > 1
       ? 'Mixed categories'
       : source.category ?? 'Uncategorised'
-  const normalizedDifficulty = source.editorial_difficulty
-    ? TRIVIA_DIFFICULTIES[source.editorial_difficulty - 1]
-    : source.difficulty ?? 'Unrated'
+  const normalizedDifficulty = effectiveTriviaDifficulty(source.observed_difficulty, source.editorial_difficulty, source.difficulty ?? 'Unrated')
 
   return {
     id: `source-copy-${crypto.randomUUID()}`,
@@ -3505,6 +3516,9 @@ function sourceToBuilderQuestion(source: PickerSourceQuestion): BuilderQuestionD
       audience_locale: source.audience_locale,
       content_flags: source.content_flags,
       editorial_difficulty: source.editorial_difficulty,
+      observed_difficulty: source.observed_difficulty,
+      observed_sample_size: source.observed_sample_size,
+      observed_correct_rate: source.observed_correct_rate,
       stability: source.stability,
       category_ids: source.category_ids,
       tag_ids: source.tag_ids,
@@ -3519,9 +3533,7 @@ function sourceToBuilderQuestion(source: PickerSourceQuestion): BuilderQuestionD
 }
 
 function libraryReplacementFit(question: BuilderQuestionData, candidate: PickerSourceQuestion) {
-  const candidateDifficulty = candidate.editorial_difficulty
-    ? TRIVIA_DIFFICULTIES[candidate.editorial_difficulty - 1]
-    : candidate.difficulty ?? 'Unrated'
+  const candidateDifficulty = effectiveTriviaDifficulty(candidate.observed_difficulty, candidate.editorial_difficulty, candidate.difficulty ?? 'Unrated')
   let score = 0
 
   if (candidate.category_names.some(category => category.toLocaleLowerCase() === question.cat.toLocaleLowerCase())) score += 4
@@ -7213,7 +7225,10 @@ function AutoBuild({ go }: { go: Go }) {
         console.error('Could not load Auto-Build sources:', questionResult.error ?? tiebreakerResult.error)
         setSourcesError('Could not check the Question Library. Refresh the page to try again.')
       } else {
-        setSourceQuestions(questionResult.data ?? [])
+        setSourceQuestions((questionResult.data ?? []).map(source => ({
+          ...source,
+          difficulty: effectiveTriviaDifficulty(source.observed_difficulty, source.editorial_difficulty, source.difficulty ?? 'Unrated'),
+        })))
         setSourceTiebreakers(tiebreakerResult.data ?? [])
       }
     }).catch(error => {
@@ -9806,6 +9821,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   if (!submission) return
 
   const current = storedSubmissionGrading(question, submission)
+  const priorStatus = current.items[itemIndex]?.status
   const next: SubmissionGrading = {
     items: current.items.map((item, index) => index === itemIndex ? { ...item, status } : item),
   }
@@ -9821,6 +9837,10 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       ? await supabase.rpc('rescore_submission', { p_submission_id: submissionId, p_grading_json: next, p_points_awarded: nextPoints })
       : await supabase.from('submissions').update({ grading_json: next }).eq('id', submissionId)
     if (error) throw error
+    if (status === 'correct' && priorStatus !== 'correct') {
+      void supabase.rpc('record_host_answer_override', { p_submission_id: submissionId, p_answer_slot: itemIndex })
+        .then(({ error: signalError }) => { if (signalError) console.error('Could not record answer-alternative signal:', signalError) })
+    }
     setSubmissions(currentSubmissions => currentSubmissions.map(item =>
       item.id === submissionId ? { ...item, grading_json: next, ...(phase === 'revealed' ? { points_awarded: nextPoints, is_correct: nextPoints >= question.points_max } : {}) } : item
     ))
@@ -12003,6 +12023,7 @@ function EndOfRound({ go }: { go: Go }) {
     const current = bonus && bonusDefinition
       ? storedBonusGrading(bonusDefinition, submission)
       : storedSubmissionGrading(roundQuestion, submission)
+    const priorStatus = current.items[itemIndex]?.status
     const next: SubmissionGrading = {
       items: current.items.map((item, index) => index === itemIndex ? { ...item, status } : item),
     }
@@ -12013,6 +12034,10 @@ function EndOfRound({ go }: { go: Go }) {
       const table = bonus ? 'bonus_submissions' : 'submissions'
       const { error: reviewError } = await supabase.from(table).update({ grading_json: next }).eq('id', submission.id)
       if (reviewError) throw reviewError
+      if (!bonus && status === 'correct' && priorStatus !== 'correct') {
+        void supabase.rpc('record_host_answer_override', { p_submission_id: submission.id, p_answer_slot: itemIndex })
+          .then(({ error: signalError }) => { if (signalError) console.error('Could not record answer-alternative signal:', signalError) })
+      }
       const setter = bonus ? setRoundBonusSubmissions : setRoundSubmissions
       setter(rows => rows.map(row => row.id === submission.id ? { ...row, grading_json: next } : row))
     } catch (reviewError) {

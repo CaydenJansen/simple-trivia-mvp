@@ -16,3 +16,15 @@ export function triviaDifficultyTone(value: string): TriviaDifficultyTone | 'unr
   if (value === 'Very Hard') return 'very-hard'
   return 'unrated'
 }
+
+export function effectiveTriviaDifficulty(
+  observedDifficulty: number | null | undefined,
+  editorialDifficulty: number | null | undefined,
+  fallback = 'Unrated',
+): TriviaDifficulty | string {
+  const level = observedDifficulty ?? editorialDifficulty
+  if (Number.isInteger(level) && level !== null && level !== undefined && level >= 1 && level <= 5) {
+    return TRIVIA_DIFFICULTIES[level - 1]
+  }
+  return fallback
+}

@@ -222,6 +222,10 @@ export type Database = {
           category: string | null
           difficulty: string | null
           editorial_difficulty: number | null
+          observed_difficulty: number | null
+          observed_sample_size: number
+          observed_correct_rate: number | null
+          observed_updated_at: string | null
           scoring_mode: ScoringMode
           prompt_pattern_id: string | null
           answer_type_id: string | null
@@ -267,6 +271,10 @@ export type Database = {
           category?: string | null
           difficulty?: string | null
           editorial_difficulty?: number | null
+          observed_difficulty?: number | null
+          observed_sample_size?: number
+          observed_correct_rate?: number | null
+          observed_updated_at?: string | null
           scoring_mode?: ScoringMode
           prompt_pattern_id?: string | null
           answer_type_id?: string | null
@@ -312,6 +320,10 @@ export type Database = {
           category?: string | null
           difficulty?: string | null
           editorial_difficulty?: number | null
+          observed_difficulty?: number | null
+          observed_sample_size?: number
+          observed_correct_rate?: number | null
+          observed_updated_at?: string | null
           scoring_mode?: ScoringMode
           prompt_pattern_id?: string | null
           answer_type_id?: string | null
@@ -624,9 +636,9 @@ export type Database = {
         Relationships: []
       }
       game_questions: {
-        Row: QuestionRow & { game_id: string }
-        Insert: QuestionInsert & { game_id: string }
-        Update: QuestionUpdate & { game_id?: string }
+        Row: QuestionRow & { game_id: string; source_question_id: string | null; source_revision: number | null }
+        Insert: QuestionInsert & { game_id: string; source_question_id?: string | null; source_revision?: number | null }
+        Update: QuestionUpdate & { game_id?: string; source_question_id?: string | null; source_revision?: number | null }
         Relationships: [{
           foreignKeyName: 'game_questions_game_id_fkey'
           columns: ['game_id']
@@ -1086,6 +1098,39 @@ export type Database = {
       }
     }
     Functions: {
+      is_platform_admin: {
+        Args: Record<PropertyKey, never>
+        Returns: boolean
+      }
+      get_platform_admin_dashboard: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      get_answer_suggestion_queue: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          suggestion_id: string
+          question_id: string
+          question_prompt: string
+          question_type: string
+          current_answer: Json
+          answer_slot: number
+          proposed_answer: string
+          expected_answer: string | null
+          distinct_host_count: number
+          signal_count: number
+          status: 'collecting' | 'pending'
+          created_at: string
+        }[]
+      }
+      record_host_answer_override: {
+        Args: { p_submission_id: string; p_answer_slot?: number }
+        Returns: string | null
+      }
+      review_answer_suggestion: {
+        Args: { p_suggestion_id: string; p_decision: 'approved' | 'rejected'; p_note?: string | null }
+        Returns: string
+      }
       ensure_host_join_link: {
         Args: Record<PropertyKey, never>
         Returns: string
@@ -1744,6 +1789,10 @@ type SourceQuestionCatalogRow = {
   category: string | null
   difficulty: string | null
   editorial_difficulty: number | null
+  observed_difficulty: number | null
+  observed_sample_size: number
+  observed_correct_rate: number | null
+  observed_updated_at: string | null
   scoring_mode: ScoringMode
   prompt_pattern_id: string | null
   answer_type_id: string | null
