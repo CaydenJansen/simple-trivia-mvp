@@ -25,6 +25,15 @@ test('signed-out hosts see a usable authentication form', async ({ page }) => {
   await expectNoHorizontalOverflow(page)
 })
 
+test('platform admin console rejects signed-out visitors', async ({ page }) => {
+  await page.goto('/admin')
+
+  await expect(page.getByRole('heading', { name: 'Admin access required' })).toBeVisible()
+  await expect(page.getByText('restricted to approved Good Trivia Company administrators')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Return to host dashboard' })).toHaveAttribute('href', '/host')
+  await expectNoHorizontalOverflow(page)
+})
+
 test('player join codes accept digits only and show a useful invalid-code state', async ({ page }) => {
   await page.route('**/rest/v1/games**', route => route.fulfill({
     status: 200,
