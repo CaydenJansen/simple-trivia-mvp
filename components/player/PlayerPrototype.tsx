@@ -2423,7 +2423,7 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'}${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points` : ''}`} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
         <textarea rows={3} value={answer} onChange={e => { answerDirtyRef.current = true; setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
@@ -2479,7 +2479,7 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
             <img src={question.image_url} alt="Question image" style={{ maxHeight: 140, maxWidth: '80%', objectFit: 'contain' }} />
           </> : <span style={{ color: C.sub }}>Loading image…</span>}
         </div>
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'}${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points` : ''}`} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
         <textarea rows={3} value={answer} onChange={e => { answerDirtyRef.current = true; setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
@@ -2530,7 +2530,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={question?.category ?? 'Question'} />
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'}${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points` : ''}`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {choices.map((choice, i) => {
             const key = choice.key ?? String.fromCharCode(65 + i)
@@ -2769,7 +2769,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
       />
 
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow="Put these in order" />
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`Put these in order${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points${question?.points_max === 1 ? ' · all positions correct' : ''}` : ''}`} />
         <p style={{ color: C.sub, fontSize: 14, marginBottom: 16 }}>Tap the arrows to change the order.</p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
