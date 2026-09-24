@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import BrandWordmark from "@/components/BrandWordmark";
+import AdminUsers from "@/components/admin/AdminUsers";
+import QuestionsArea from "@/components/host/QuestionsArea";
 import { supabase } from "@/lib/supabase/client";
 import type { Json } from "@/lib/supabase/database.types";
 
@@ -108,6 +110,8 @@ function StatCard({ label, value, note }: { label: string; value: string | numbe
 }
 
 export default function AdminDashboard() {
+  const [tab, setTab] = useState<"overview" | "library" | "users">("overview");
+  const [superAdmin, setSuperAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
@@ -135,6 +139,8 @@ export default function AdminDashboard() {
     }
 
     setAllowed(true);
+    const superAccess = await supabase.rpc("is_platform_super_admin");
+    setSuperAdmin(superAccess.data === true);
     const [dashboardResult, suggestionsResult] = await Promise.all([
       supabase.rpc("get_platform_admin_dashboard"),
       supabase.rpc("get_answer_suggestion_queue"),
@@ -221,7 +227,12 @@ export default function AdminDashboard() {
         {error ? <p role="alert" className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p> : null}
         {notice ? <p role="status" className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">{notice}</p> : null}
 
-        {dashboard ? (
+        <div className="mt-6 flex flex-wrap gap-2" aria-label="Admin sections">
+          {(["overview", "library", ...(superAdmin ? ["users"] : [])] as const).map(section => <button key={section} aria-pressed={tab === section} onClick={() => setTab(section as typeof tab)} className={`rounded-xl px-4 py-2.5 text-sm font-bold ${tab === section ? "bg-violet-600 text-white" : "bg-white text-violet-700"}`}>{section === "overview" ? "Overview" : section === "library" ? "Question Library" : "Users & access"}</button>)}
+        </div>
+        {tab === "library" && <QuestionsArea adminMode />}
+        {tab === "users" && superAdmin && <AdminUsers />}
+        {tab === "overview" && dashboard ? (
           <>
             <section className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard label="Quizzes run" value={dashboard.games_total} note={`${dashboard.games_last_7_days} this week · ${dashboard.games_last_30_days} this month`} />

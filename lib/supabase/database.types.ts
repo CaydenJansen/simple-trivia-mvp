@@ -1098,6 +1098,31 @@ export type Database = {
       }
     }
     Functions: {
+      is_platform_super_admin: {
+        Args: Record<PropertyKey, never>
+        Returns: boolean
+      }
+      admin_list_users: {
+        Args: { p_search?: string; p_offset?: number }
+        Returns: { user_id: string; email: string; display_name: string | null; role: string; created_at: string; quiz_count: number; total_count: number; is_self: boolean }[]
+      }
+      admin_set_user_role: {
+        Args: { p_user_id: string; p_role: string; p_expected_role: string }
+        Returns: undefined
+      }
+      admin_save_library_question: {
+        Args: {
+          p_question_id: string | null
+          p_question: Json
+          p_primary_category_id?: string | null
+          p_secondary_category_ids?: string[]
+          p_tag_ids?: string[]
+          p_bonus?: Json | null
+          p_expected_revision?: number | null
+          p_verified?: boolean
+        }
+        Returns: string
+      }
       is_platform_admin: {
         Args: Record<PropertyKey, never>
         Returns: boolean

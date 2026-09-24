@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
 import type {
   AudienceScope,
+  AudienceFit,
   AudienceSuitability,
   ContentFlag,
   Database,
@@ -31,7 +32,7 @@ import {
   validateSourceQuestionBonus,
 } from "@/lib/trivia/source-question-bonus";
 
-type SourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"];
+type SourceQuestion = Database["public"]["Views"]["source_question_catalog"]["Row"] & { editor_part_ids?: (string | null)[] };
 type Category = Database["public"]["Tables"]["categories"]["Row"];
 type Tag = Database["public"]["Tables"]["tags"]["Row"];
 type TagAlias = Database["public"]["Tables"]["tag_aliases"]["Row"];
@@ -66,6 +67,10 @@ type QuestionDraft = {
   options: string[];
   clues: string[];
   correctOption: number;
+  partIds: (string | null)[];
+  audienceFit: AudienceFit;
+  adultContent: boolean;
+  scoringMode: "fixed" | "per-item" | "all-or-nothing";
 };
 
 const QUESTION_TYPES: { value: EditableQuestionType; label: string }[] = [
@@ -98,6 +103,10 @@ const EMPTY_DRAFT: QuestionDraft = {
   options: ["", "", "", ""],
   clues: [""],
   correctOption: 0,
+  partIds: [],
+  audienceFit: "broad",
+  adultContent: false,
+  scoringMode: "fixed",
 };
 
 function strings(value: Json | null): string[] {
@@ -160,6 +169,10 @@ function draftFromQuestion(question: SourceQuestion): QuestionDraft {
     options: choiceOptions.length > 0 ? choiceOptions : ["", "", "", ""],
     clues: clues.length > 0 ? clues : Array(answers.length).fill(""),
     correctOption: Math.max(0, correctKey.charCodeAt(0) - 65),
+    partIds: question.editor_part_ids ?? [],
+    audienceFit: question.audience_fit ?? "broad",
+    adultContent: question.adult_content ?? false,
+    scoringMode: question.scoring_mode,
   };
 }
 
@@ -207,7 +220,7 @@ function questionPayload(draft: QuestionDraft) {
     editorial_difficulty: draft.editorialDifficulty || null,
     prompt_pattern_id: draft.promptPatternId || null,
     answer_type_id: draft.answerTypeId || null,
-    scoring_mode: draft.questionType === "multi-answer" || draft.questionType === "multi-part" || draft.questionType === "ranking" ? "per-item" : "fixed",
+    scoring_mode: draft.scoringMode,
     stability: draft.stability,
     audience_suitability: draft.audienceSuitability,
     audience_scope: draft.audienceScope,
@@ -216,6 +229,9 @@ function questionPayload(draft: QuestionDraft) {
     image_url: draft.imageUrl.trim() || null,
     notes: draft.notes.trim() || null,
     status: draft.status,
+    part_ids: draft.partIds,
+    audience_fit: draft.audienceFit,
+    adult_content: draft.adultContent,
   };
 }
 
@@ -249,7 +265,9 @@ function difficultyLabel(value: number | null) {
   return value ? TRIVIA_DIFFICULTIES[value - 1] : null;
 }
 
-export default function QuestionsArea() {
+export default function QuestionsArea({ adminMode = false }: { adminMode?: boolean }) {
+  const [page, setPage] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
   const [tab, setTab] = useState<QuestionTab>("library");
   const [questions, setQuestions] = useState<SourceQuestion[]>([]);
   const [usageByQuestion, setUsageByQuestion] = useState<Record<string, QuestionQuizUsage[]> | null>(null);
@@ -302,7 +320,7 @@ export default function QuestionsArea() {
           .select("*", { count: "exact" })
           .eq("origin", tab === "mine" ? "user" : "platform")
           .order("updated_at", { ascending: false })
-          .range(0, 49);
+          .range(page * 50, page * 50 + 49);
 
         const searchFilter = sourceQuestionSearchOrFilter(search, taxonomy.categories, taxonomy.tags, taxonomy.tagAliases);
         if (searchFilter) query = query.or(searchFilter);
@@ -310,7 +328,7 @@ export default function QuestionsArea() {
         if (difficulty) query = query.eq("editorial_difficulty", Number(difficulty));
         if (categoryId) query = query.contains("category_ids", [categoryId]);
         if (tagId) query = query.contains("tag_ids", [tagId]);
-        if (tab === "mine" && status !== "all") query = query.eq("status", status);
+        if ((adminMode || tab === "mine") && status !== "all") query = query.eq("status", status);
 
         const { data, error, count: total } = await query;
         if (!active) return;
@@ -356,9 +374,10 @@ export default function QuestionsArea() {
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [tab, search, questionType, difficulty, categoryId, tagId, status, taxonomy.categories, taxonomy.tags, taxonomy.tagAliases, refresh]);
+  }, [tab, search, questionType, difficulty, categoryId, tagId, status, taxonomy.categories, taxonomy.tags, taxonomy.tagAliases, refresh, adminMode, page]);
 
   function changeTab(nextTab: QuestionTab) {
+    setPage(0);
     setTab(nextTab);
     setSearch("");
     setQuestionType("all");
@@ -368,14 +387,25 @@ export default function QuestionsArea() {
     setStatus("all");
   }
 
+  async function openEditor(question: SourceQuestion) {
+    if (adminMode && question.mechanic === "multi-part") {
+      const result = await supabase.from("source_question_parts").select("id, position").eq("source_question_id", question.id).order("position");
+      if (result.error) { setLoadError("Could not load question parts. Please retry."); return; }
+      const count = Array.isArray(question.correct_answer) ? question.correct_answer.length : 0;
+      setEditing({ ...question, editor_part_ids: Array.from({ length: count }, (_, i) => result.data.find(part => part.position === i + 1)?.id ?? null) });
+    } else setEditing(question);
+  }
+
   const title = tab === "mine" ? "My Questions" : "Question Library";
-  const description = tab === "mine"
+  const description = adminMode
+    ? "Manage platform questions. Active, verified questions can be used in new shows. Existing quizzes and live games keep their own independent copies."
+    : tab === "mine"
     ? "Create and manage reusable questions you own. Quiz copies will remain independent."
     : "Browse platform-provided questions. Library records are read-only for hosts.";
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-9">
-      <div className="mb-7 inline-flex rounded-xl border border-zinc-200 bg-white p-1">
+    <section className={`mx-auto max-w-6xl py-9 ${adminMode ? "" : "px-6"}`}>
+      {!adminMode && <div className="mb-7 inline-flex rounded-xl border border-zinc-200 bg-white p-1">
         {(["library", "mine"] as const).map((value) => (
           <button
             key={value}
@@ -388,7 +418,7 @@ export default function QuestionsArea() {
             {value === "mine" ? "My Questions" : "Question Library"}
           </button>
         ))}
-      </div>
+      </div>}
 
       <div className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
@@ -396,7 +426,7 @@ export default function QuestionsArea() {
           <h1 className="text-3xl font-extrabold text-zinc-900">{title}</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">{description}</p>
         </div>
-        {tab === "mine" ? (
+        {adminMode || tab === "mine" ? (
           <button
             type="button"
             onClick={() => setEditing("new")}
@@ -411,13 +441,13 @@ export default function QuestionsArea() {
         <input
           type="search"
           value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => { setSearch(event.target.value); setPage(0); }}
           placeholder="Search question, answer, category, or topic…"
           className="rounded-xl border border-zinc-200 px-3.5 py-2.5 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100 lg:col-span-2"
         />
         <select
           value={categoryId}
-          onChange={(event) => setCategoryId(event.target.value)}
+          onChange={(event) => { setCategoryId(event.target.value); setPage(0); }}
           className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-600 outline-none focus:border-violet-500"
         >
           <option value="">All categories</option>
@@ -425,7 +455,7 @@ export default function QuestionsArea() {
         </select>
         <select
           value={questionType}
-          onChange={(event) => setQuestionType(event.target.value as QuestionMechanic | "all")}
+          onChange={(event) => { setQuestionType(event.target.value as QuestionMechanic | "all"); setPage(0); }}
           className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-600 outline-none focus:border-violet-500"
         >
           <option value="all">All types</option>
@@ -433,7 +463,7 @@ export default function QuestionsArea() {
         </select>
         <select
           value={difficulty}
-          onChange={(event) => setDifficulty(event.target.value)}
+          onChange={(event) => { setDifficulty(event.target.value); setPage(0); }}
           className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-600 outline-none focus:border-violet-500"
         >
           <option value="">All difficulties</option>
@@ -441,16 +471,16 @@ export default function QuestionsArea() {
         </select>
         <select
           value={tagId}
-          onChange={(event) => setTagId(event.target.value)}
+          onChange={(event) => { setTagId(event.target.value); setPage(0); }}
           className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-600 outline-none focus:border-violet-500"
         >
           <option value="">All topics</option>
           {taxonomy.tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
         </select>
-        {tab === "mine" ? (
+        {adminMode || tab === "mine" ? (
           <select
             value={status}
-            onChange={(event) => setStatus(event.target.value as QuestionStatus | "all")}
+            onChange={(event) => { setStatus(event.target.value as QuestionStatus | "all"); setPage(0); }}
             className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-600 outline-none focus:border-violet-500"
           >
             <option value="all">All statuses</option>
@@ -464,9 +494,10 @@ export default function QuestionsArea() {
 
       <div className="mb-3 flex items-center justify-between text-xs text-zinc-500">
         <span>{loading ? "Loading…" : `${count} question${count === 1 ? "" : "s"}`}</span>
-        {count > 50 ? <span>Showing the newest 50</span> : null}
+        {count > 50 ? <span>Showing {page * 50 + 1}–{Math.min((page + 1) * 50, count)}</span> : null}
       </div>
 
+      {notice && <p role="status" className="mb-4 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">{notice}</p>}
       {loadError ? (
         <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-medium text-red-700">{loadError}</div>
       ) : loading ? (
@@ -482,7 +513,7 @@ export default function QuestionsArea() {
           <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-zinc-500">
             {tab === "mine" ? "Write a reusable question here. Adding it to a quiz will create an independent copy later." : "Platform questions will appear here once active library content has been added."}
           </p>
-          {tab === "mine" ? (
+          {adminMode || tab === "mine" ? (
             <button type="button" onClick={() => setEditing("new")} className="mt-5 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-700">Write New</button>
           ) : null}
         </div>
@@ -492,27 +523,30 @@ export default function QuestionsArea() {
             <QuestionCard
               key={question.id}
               question={question}
-              editable={tab === "mine"}
+              editable={adminMode || tab === "mine"}
               usages={usageByQuestion ? usageByQuestion[question.id] ?? [] : null}
-              onEdit={() => setEditing(question)}
+              onEdit={() => void openEditor(question)}
               onChanged={() => setRefresh((value) => value + 1)}
             />
           ))}
         </div>
       )}
 
+      {count > 50 && <div className="mt-5 flex items-center gap-4"><button disabled={loading || page === 0} onClick={() => setPage(value => value - 1)} className="rounded-lg border px-3 py-2 disabled:opacity-40">Previous page</button><span className="text-sm">Page {page + 1}</span><button disabled={loading || (page + 1) * 50 >= count} onClick={() => setPage(value => value + 1)} className="rounded-lg border px-3 py-2 disabled:opacity-40">Next page</button></div>}
       {editing ? (
         <QuestionEditor
+          adminMode={adminMode}
           question={editing === "new" ? null : editing}
           taxonomy={taxonomy}
           onClose={() => setEditing(null)}
           onSaved={() => {
+            setNotice(adminMode ? "Question Library changes saved. Existing quiz copies are unchanged." : "Question saved.");
             setEditing(null);
             setRefresh((value) => value + 1);
           }}
         />
       ) : null}
-    </main>
+    </section>
   );
 }
 
@@ -573,7 +607,7 @@ function QuestionCard({
         {editable ? (
           <div className="flex shrink-0 gap-2">
             <button type="button" onClick={onEdit} className="rounded-lg px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-50">Edit</button>
-            <button type="button" disabled={deleting} onClick={() => void removeQuestion()} className="rounded-lg px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">{deleting ? "Deleting…" : "Delete"}</button>
+            {question.origin === "user" && <button type="button" disabled={deleting} onClick={() => void removeQuestion()} className="rounded-lg px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">{deleting ? "Deleting…" : "Delete"}</button>}
           </div>
         ) : null}
       </div>
@@ -635,19 +669,23 @@ function OptionalEditorField({
 }
 
 function QuestionEditor({
+  adminMode = false,
   question,
   taxonomy,
   onClose,
   onSaved,
 }: {
+  adminMode?: boolean;
   question: SourceQuestion | null;
   taxonomy: QuestionTaxonomy;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [draft, setDraft] = useState<QuestionDraft>(() => question ? draftFromQuestion(question) : { ...EMPTY_DRAFT });
+  const [draft, setDraft] = useState<QuestionDraft>(() => question ? draftFromQuestion(question) : { ...EMPTY_DRAFT, status: adminMode ? "draft" : "active" });
   const [bonus, setBonus] = useState(() => sourceQuestionBonusDraft(question?.bonus));
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [verified, setVerified] = useState(question?.is_verified ?? false);
   const [error, setError] = useState<string | null>(null);
   const [showCategory, setShowCategory] = useState(() => Boolean(question?.primary_category_id));
   const [showDifficulty, setShowDifficulty] = useState(() => Boolean(question?.editorial_difficulty));
@@ -689,7 +727,7 @@ function QuestionEditor({
   }
 
   function addAnswerRow() {
-    setDraft((current) => ({ ...current, answers: [...current.answers, ""], aliases: [...current.aliases, ""], clues: [...current.clues, ""] }));
+    setDraft((current) => ({ ...current, answers: [...current.answers, ""], aliases: [...current.aliases, ""], clues: [...current.clues, ""], partIds: [...current.partIds, null] }));
   }
 
   function removeAnswerRow(index: number) {
@@ -698,35 +736,42 @@ function QuestionEditor({
       answers: current.answers.filter((_, row) => row !== index),
       aliases: current.aliases.filter((_, row) => row !== index),
       clues: current.clues.filter((_, row) => row !== index),
+      partIds: current.partIds.filter((_, row) => row !== index),
     }));
   }
 
   async function saveQuestion() {
+    if (savingRef.current) return;
     const validationError = validateDraft(draft) ?? validateSourceQuestionBonus(bonus);
     if (validationError) {
       setError(validationError);
       return;
     }
 
+    savingRef.current = true;
     setSaving(true);
     setError(null);
     const payload = questionPayload(draft);
-    const result = await supabase.rpc("save_my_question_with_inherited_metadata", {
+    const args = {
       p_question_id: question?.id ?? null,
       p_question: payload,
       p_primary_category_id: draft.primaryCategoryId || null,
       p_secondary_category_ids: draft.secondaryCategoryIds,
       p_tag_ids: draft.tagIds,
       p_bonus: sourceQuestionBonusPayload(bonus),
-    });
-
-    setSaving(false);
-    if (result.error) {
-      console.error("Could not save source question:", result.error);
-      setError("Could not save this question. Check the fields and try again.");
-      return;
-    }
-    onSaved();
+    };
+    try {
+      const result = await (adminMode
+        ? supabase.rpc("admin_save_library_question", { ...args, p_expected_revision: question?.revision ?? null, p_verified: verified })
+        : supabase.rpc("save_my_question_with_inherited_metadata", args));
+      if (result.error) {
+        console.error("Could not save source question:", result.error);
+        setError(adminMode ? result.error.message : "Could not save this question. Check the fields and try again.");
+        return;
+      }
+      onSaved();
+    } catch { setError("Could not save this question. Please retry."); }
+    finally { savingRef.current = false; setSaving(false); }
   }
 
   return (
@@ -734,13 +779,13 @@ function QuestionEditor({
       <div className="w-full max-w-3xl rounded-3xl bg-white shadow-2xl">
         <header className="flex items-start justify-between border-b border-zinc-200 px-6 py-5">
           <div>
-            <h2 className="text-xl font-bold text-zinc-900">{question ? "Edit My Question" : "Write New Question"}</h2>
+            <h2 className="text-xl font-bold text-zinc-900">{adminMode ? (question ? "Edit Library Question" : "Write Library Question") : question ? "Edit My Question" : "Write New Question"}</h2>
             <p className="mt-1 text-sm text-zinc-500">This reusable source remains separate from every quiz copy.</p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-semibold text-zinc-500 hover:bg-zinc-100">Close</button>
+          <button type="button" disabled={saving} onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-semibold text-zinc-500 hover:bg-zinc-100 disabled:opacity-40">Close</button>
         </header>
 
-        <div className="space-y-6 px-6 py-6">
+        <fieldset disabled={saving} className="space-y-6 px-6 py-6">
           <label className="block">
             <span className="text-sm font-semibold text-zinc-700">Question text</span>
             <textarea value={draft.prompt} onChange={(event) => setDraft({ ...draft, prompt: event.target.value })} rows={3} className="mt-2 w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100" placeholder="What would you like to ask?" />
@@ -749,7 +794,7 @@ function QuestionEditor({
           <div className="max-w-sm">
             <label className="block">
               <span className="text-sm font-semibold text-zinc-700">Question type</span>
-              <select value={draft.questionType} onChange={(event) => setDraft({ ...draft, questionType: event.target.value as EditableQuestionType, answers: [""], aliases: [""], options: ["", "", "", ""], clues: [""], correctOption: 0 })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
+              <select value={draft.questionType} onChange={(event) => setDraft({ ...draft, questionType: event.target.value as EditableQuestionType, answers: [""], aliases: [""], options: ["", "", "", ""], clues: [""], correctOption: 0, partIds: [], scoringMode: event.target.value === "ranking" ? "all-or-nothing" : ["multi-answer", "multi-part"].includes(event.target.value) ? "per-item" : "fixed" })} className="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
                 {QUESTION_TYPES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
@@ -858,6 +903,13 @@ function QuestionEditor({
           </div>
 
           <div className="space-y-5 rounded-2xl border border-zinc-200 bg-zinc-50/70 p-5">
+            {adminMode && <div className="space-y-3">
+              <label className="block text-sm font-semibold">Library status<select className="mt-2 block w-full rounded-xl border bg-white p-3" value={draft.status} onChange={event => setDraft({ ...draft, status: event.target.value as QuestionStatus })}><option value="draft">Draft</option><option value="needs_review">Needs review</option><option value="active">Active</option><option value="archived">Archived</option></select></label>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={verified} onChange={event => setVerified(event.target.checked)} />Verified — checked for accuracy</label>
+              <label className="block text-sm font-semibold">Audience fit<select className="mt-2 block w-full rounded-xl border bg-white p-3" value={draft.audienceFit} onChange={event => setDraft({ ...draft, audienceFit: event.target.value as AudienceFit })}><option value="broad">Broad</option><option value="kids">Kids</option><option value="young_adults">Young adults</option><option value="older_adults">Older adults</option></select></label>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.adultContent} onChange={event => setDraft({ ...draft, adultContent: event.target.checked })} />Adult content — exclude from family-safe selection</label>
+              <p className="text-xs text-zinc-500">Auto-Build uses active, verified questions. Archive a question to stop new selection without deleting history.</p>
+            </div>}
             <OptionalEditorField label="Category (Optional)" shown={showCategory} summary={categorySummary} onToggle={() => setShowCategory((value) => !value)}>
               <select value={draft.primaryCategoryId} onChange={(event) => setDraft({ ...draft, primaryCategoryId: event.target.value, secondaryCategoryIds: draft.secondaryCategoryIds.filter((id) => id !== event.target.value) })} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500">
                 <option value="">Not set</option>
@@ -881,11 +933,11 @@ function QuestionEditor({
           </div>
 
           {error ? <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</p> : null}
-        </div>
+        </fieldset>
 
         <footer className="flex justify-end gap-3 border-t border-zinc-200 px-6 py-5">
-          <button type="button" onClick={onClose} className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-600 hover:bg-zinc-50">Cancel</button>
-          <button type="button" disabled={saving} onClick={() => void saveQuestion()} className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50">{saving ? "Saving…" : "Save to My Questions"}</button>
+          <button type="button" disabled={saving} onClick={onClose} className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-600 hover:bg-zinc-50 disabled:opacity-40">Cancel</button>
+          <button type="button" disabled={saving} onClick={() => void saveQuestion()} className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50">{saving ? "Saving…" : adminMode ? "Save to Question Library" : "Save to My Questions"}</button>
         </footer>
       </div>
     </div>
