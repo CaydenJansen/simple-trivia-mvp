@@ -2296,7 +2296,7 @@ function QuizCard({ q, go, folders, duplicating, moving, onDragStart, onDragEnd,
         border: `1px solid ${C.line}`,
         borderLeft: `3px solid ${ready ? C.go : C.caution}`,
       }}
-      className={`rounded-2xl p-5 flex flex-col group hover:shadow-lg transition-all duration-200 ${moving ? 'opacity-60' : 'cursor-grab active:cursor-grabbing'}`}
+      className={`min-h-[210px] rounded-2xl p-5 flex flex-col group hover:shadow-lg transition-all duration-200 ${moving ? 'opacity-60' : 'cursor-grab active:cursor-grabbing'}`}
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex min-w-0 items-start gap-1">
