@@ -7,10 +7,10 @@ const question = {
   correct_answer: ['Mercury', 'Venus'], accepted_answers: [[], []], has_bonus: false, bonus: null,
 }
 
-async function playerFixture(page: Page, seconds = 45, revealed = false) {
+async function playerFixture(page: Page, seconds = 45, revealed = false, pointCount = 2) {
   const deadline = Date.now() + seconds * 1000
   const requests: string[] = []
-  let saved: { id: string; answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: null } | null = revealed ? { id: 's1', answer_text: '["Mercury","Venus"]', is_correct: true, points_awarded: 75, grading_json: null } : null
+  let saved: { id: string; answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: null } | null = revealed ? { id: 's1', answer_text: '["Mercury","Venus"]', is_correct: true, points_awarded: 150, grading_json: null } : null
   await page.addInitScript(() => {
     localStorage.setItem('simple-trivia-game-id', 'speed-game')
     localStorage.setItem('simple-trivia-team-id', 'speed-team')
@@ -19,8 +19,8 @@ async function playerFixture(page: Page, seconds = 45, revealed = false) {
     const name = new URL(route.request().url()).pathname.split('/').pop()
     if (name === 'games') return route.fulfill({ json: { id: 'speed-game', status: 'live', current_screen: 'multi-answer', current_question_key: 'q1', answer_phase: revealed ? 'revealed' : 'open', question_stage: 'core', answer_editing_allowed: true,
       settings: { scoring_mode: 'speed', auto_run_mode: 'off', answer_reveal: 'each', speed_clock: revealed ? null : { key: 'speed-q1-core', deadline_ms: deadline, duration_seconds: 45 } } } })
-    if (name === 'get_player_game_question') return route.fulfill({ json: question })
-    if (name === 'teams') return route.fulfill({ json: { id: 'speed-team', game_id: 'speed-game', name: 'Test team', score: revealed ? 75 : 0 } })
+    if (name === 'get_player_game_question') return route.fulfill({ json: { ...question, points_max: pointCount } })
+    if (name === 'teams') return route.fulfill({ json: { id: 'speed-team', game_id: 'speed-game', name: 'Test team', score: revealed ? 150 : 0 } })
     if (name === 'submissions') return route.fulfill({ json: saved })
     if (name === 'submit_player_answer') {
       requests.push(route.request().postDataJSON().p_answer_text)
@@ -37,7 +37,8 @@ test('manual speed game shows a countdown without changing the number of answer 
   await page.goto('/play')
   await expect(page.getByLabel(/^Answer \d+$/)).toHaveCount(2)
   await expect(page.getByRole('timer')).toBeVisible()
-  await expect(page.getByText(/Speed scoring · up to \d+ points/)).toBeVisible()
+  await expect(page.getByText(/Speed scoring · up to \d+ per point/)).toBeVisible()
+  await expect(page.getByText(/Up to 200 points · partial credit/)).toBeVisible()
   await page.getByLabel('Answer 1').fill('Mercury')
   await expect(page.getByRole('button', { name: 'Submit Answers', exact: true })).toBeEnabled()
   await page.screenshot({ path: testInfo.outputPath('speed-question.png'), fullPage: true })
@@ -56,11 +57,18 @@ test('speed timer submits a partially completed answer without Auto-Run', async 
   await expect.poll(() => requests, { timeout: 12000 }).toEqual(['["Merc",""]'])
 })
 
-test('a fully correct 75-point answer is still shown as correct', async ({ page }) => {
+test('a fully correct two-pointer earning 150 is still shown as correct', async ({ page }) => {
   await playerFixture(page, 45, true)
   await page.goto('/play')
   await expect(page.getByRole('heading', { name: 'Correct!', exact: true })).toBeVisible()
-  await expect(page.getByText('75 points', { exact: true })).toBeVisible()
+  await expect(page.getByText('150 points', { exact: true })).toBeVisible()
+})
+
+test('a seven-point question shows a 700-point maximum and seven answer fields', async ({ page }) => {
+  await playerFixture(page, 120, false, 7)
+  await page.goto('/play')
+  await expect(page.getByLabel(/^Answer \d+$/)).toHaveCount(7)
+  await expect(page.getByText(/Up to 700 points · partial credit/)).toBeVisible()
 })
 
 async function hostFixture(page: Page) {

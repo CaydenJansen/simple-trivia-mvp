@@ -8126,7 +8126,7 @@ function HostSetup({ go }: { go: Go }) {
                 className="rounded-xl px-3 py-2.5 text-left text-sm font-semibold">{mode === 'classic' ? 'Classic points' : 'Speed-based points'}</button>)}
             </div>
             <p style={{ color: C.sub }} className="mt-3 text-xs leading-5">{scoringMode === 'speed'
-              ? 'Correct answers earn up to 100 points, falling to 50 as the timer runs down. Partial answers earn partial points. Bonus questions also earn up to 100; points games award 100. Answer updates use the latest submission time. Timers run even with Auto-Run off.'
+              ? 'Each original point is worth up to 100 speed points, falling to 50 as the timer runs down. A seven-point question can earn up to 700. Bonuses scale the same way; game prizes are multiplied by 100. Answer updates use the latest submission time. Timers run even with Auto-Run off.'
               : 'Use the points set for each question and game.'}</p>
             <p style={{ color: C.violet }} className="mt-2 text-xs font-bold">Scoring mode is fixed for the entire game.</p>
           </SCard>
@@ -10768,7 +10768,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     <div role="timer" className="rounded-xl border border-violet-400/40 bg-violet-500/10 px-4 py-3 text-center" style={{ color: C.liveText }}>
       <p className="text-xs font-bold">Speed points · Answers close in</p>
       <p className="text-2xl font-black tabular-nums">{autoRunClockLabel(speedRemaining)}</p>
-      <p className="text-xs">Up to 100 points · timer cannot be paused or extended</p>
+      <p className="text-xs">Up to {(questionStage === 'bonus' ? activeBonus?.points ?? 1 : question?.points_max ?? 1) * 100} points · timer cannot be paused or extended</p>
     </div>
   ) : autoRunMode === 'round' ? (
     <section style={{ background: C.livePanel, borderBottom: `1px solid ${C.liveLine}` }} className="sticky top-[52px] z-30 flex flex-wrap items-center justify-center gap-3 px-5 py-2.5 shadow-lg">
@@ -11188,7 +11188,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 On player screens
               </p>
               <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest">
-                {(question?.category ?? 'General')} · {question?.difficulty ?? '—'} · {isSpeedGame ? 100 : question?.points_max ?? 1} pts max
+                {(question?.category ?? 'General')} · {question?.difficulty ?? '—'} · {(question?.points_max ?? 1) * (isSpeedGame ? 100 : 1)} pts max
               </p>
             </div>
 
@@ -11288,7 +11288,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               >
                 <div className="flex items-center justify-between gap-4">
                   <p style={{ color: '#C4B5FD' }} className="text-[10px] font-extrabold uppercase tracking-widest">
-                    Bonus · {isSpeedGame ? 'up to 100 points' : `${activeBonus.points} ${activeBonus.points === 1 ? 'point' : 'points'}`}
+                    Bonus · {isSpeedGame ? `up to ${activeBonus.points * 100} points` : `${activeBonus.points} ${activeBonus.points === 1 ? 'point' : 'points'}`}
                   </p>
                   <span style={{ color: C.liveDim }} className="text-[10px] font-bold uppercase tracking-widest">
                     {questionStage === 'core' && phase !== 'revealed' ? 'Host only · Up next' : 'Shown to players'}
@@ -11517,7 +11517,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           const score = isSpeedGame
             ? speedAward(coreBase, question?.points_max ?? 1, submission?.speed_points_max ?? 100) + speedAward(bonusBase, activeBonus?.points ?? 1, bonusRow?.submission?.speed_points_max ?? 100)
             : coreBase + bonusBase
-          const max = isSpeedGame ? 100 + (showBonusInAnswers ? 100 : 0) : (question?.points_max ?? Math.max(1, items.length)) + (showBonusInAnswers ? activeBonus?.points ?? 1 : 0)
+          const max = ((question?.points_max ?? Math.max(1, items.length)) + (showBonusInAnswers ? activeBonus?.points ?? 1 : 0)) * (isSpeedGame ? 100 : 1)
 
           return (
             <div

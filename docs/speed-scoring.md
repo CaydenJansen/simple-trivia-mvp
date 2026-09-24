@@ -6,14 +6,16 @@ the lobby is created; starting another game is required to change them.
 
 ## Rules
 
-- A fully correct ordinary question earns `round(100 - 50 × elapsed / duration)`,
-  clamped to 50–100. Incorrect answers earn zero.
-- Partial credit is proportional to the question's original grading maximum,
-  rounded once to a whole speed score. An attached bonus has its own timer and
-  maximum of 100. Ranking keeps its existing all-or-nothing or per-position rule.
+- Each original earned point is multiplied by
+  `round(100 - 50 × elapsed / duration)`, clamped to 50–100. Incorrect answers earn
+  zero. A seven-point question has a maximum of 700; three correct points at a
+  speed factor of 80 earn 240.
+- An attached bonus has its own timer and its original maximum multiplied by 100.
+  Ranking keeps its existing all-or-nothing or per-position rule and point value.
 - Changing a submitted answer uses the new server arrival time. Retrying an
   unchanged answer and correcting its grading do not change its speed factor.
-- Point-awarding show games award 100 per winner. Custom prizes and score-neutral
+- Point-awarding show games multiply the original prize by 100 per winner, without
+  a speed reduction (a five-point prize becomes 500). Custom prizes and score-neutral
   tiebreakers are unchanged. Host-entered manual bonus points retain their entered
   value.
 - Timers use the existing Auto-Run workload rules: 30 seconds plus 15 per

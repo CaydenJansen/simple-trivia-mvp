@@ -26,6 +26,13 @@ describe('show-game rewards', () => {
     expect(showGameWinnerDetail(reward)).toBe('2 bonus points have been added to your score.')
   })
 
+  it('preserves multiplied speed-game prizes without changing Classic limits', () => {
+    const reward = showGameRewardFromSettings({ reward_type: 'points', reward_points: 500, speed_reward_base_points: 5 })
+    expect(reward.points).toBe(500)
+    expect(showGameWinnerDetail(reward)).toBe('500 bonus points have been added to your score.')
+    expect(showGameRewardFromSettings({ reward_type: 'points', reward_points: 10000, speed_reward_base_points: 100 }).points).toBe(10000)
+  })
+
   it('uses custom prize and winner copy', () => {
     const reward = showGameRewardFromSettings({
       reward_type: 'custom',

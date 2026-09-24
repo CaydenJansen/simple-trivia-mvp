@@ -8,10 +8,14 @@ describe('speed scoring', () => {
     expect([-1, 0, 15, 30, 45].map(time => speedPointsAvailable(time, 30))).toEqual([100, 100, 75, 50, 50])
   })
   it('awards proportional partial credit, zero for incorrect answers', () => {
-    expect(speedAward(2, 3, 75)).toBe(50)
+    expect(speedAward(2, 3, 75)).toBe(150)
     expect(speedAward(1, 1, 75)).toBe(75)
     expect(speedAward(0, 5, 100)).toBe(0)
-    expect(speedAward(1, 2, 50)).toBe(25)
+    expect(speedAward(1, 2, 50)).toBe(50)
+    expect(speedAward(7, 7, 100)).toBe(700)
+    expect(speedAward(7, 7, 50)).toBe(350)
+    expect(speedAward(3, 7, 80)).toBe(240)
+    expect(speedAward(2, 2, 75)).toBe(150)
   })
   it('does not treat a slower correct response as partially correct', () => {
     const result = { answerPhase: 'revealed', questionStage: 'core', baseScreen: 'multi-answer', corePointsMax: 3, bonusPointsMax: 0, bonusSubmission: null, speedScoring: true }

@@ -11,7 +11,7 @@ export function speedPointsAvailable(elapsedSeconds: number, durationSeconds: nu
 }
 
 export function speedAward(basePoints: number, baseMaximum: number, available: number): number {
-  return Math.round(Math.min(1, Math.max(0, basePoints / Math.max(1, baseMaximum))) * Math.max(50, Math.min(100, available)))
+  return Math.round(Math.min(Math.max(1, baseMaximum), Math.max(0, basePoints)) * Math.max(50, Math.min(100, available)))
 }
 
 export function speedClock(settings: unknown): { key: string; deadline_ms: number; duration_seconds: number } | null {

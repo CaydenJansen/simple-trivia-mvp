@@ -28,7 +28,7 @@ export function showGameRewardFromSettings(settings: Json | undefined): ShowGame
 
   return {
     type: record.reward_type === 'custom' ? 'custom' : 'points',
-    points: Number.isInteger(rawPoints) ? Math.max(1, Math.min(100, rawPoints)) : 1,
+    points: Number.isInteger(rawPoints) ? Math.max(1, Math.min(record.speed_reward_base_points ? 10000 : 100, rawPoints)) : 1,
     description: typeof record.reward_description === 'string' ? record.reward_description.trim() : '',
     winnerMessage: typeof record.winner_message === 'string' ? record.winner_message.trim() : '',
   }

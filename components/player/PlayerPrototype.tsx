@@ -457,7 +457,7 @@ function usePlayerAutoRunClock() {
   if (speed) {
     const remaining = Math.max(0, Math.ceil((speed.deadline_ms - now) / 1000))
     const points = speedPointsAvailable(speed.duration_seconds - remaining, speed.duration_seconds)
-    return { key: speed.key, label: `Answers close in · up to ${points} points`, remaining, paused: false, deadlineMs: speed.deadline_ms }
+    return { key: speed.key, label: `Answers close in · up to ${points} per point`, remaining, paused: false, deadlineMs: speed.deadline_ms }
   }
   const clock = autoRunClockFromSettings(settings, now)
   return clock ? { ...clock, deadlineMs: autoRunClockDeadlineMs(settings) } : null
@@ -1246,7 +1246,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
         hasSubmission: Boolean(submission),
         isCorrect: submission?.is_correct ?? null,
         pointsAwarded: submission?.points_awarded ?? 0,
-        pointsMax: speedScoringEnabled(game?.settings) ? 100 : question?.points_max ?? 1,
+        pointsMax: (question?.points_max ?? 1) * (speedScoringEnabled(game?.settings) ? 100 : 1),
         speedScoring: speedScoringEnabled(game?.settings),
         prompt: question?.prompt ?? '',
         correctAnswer: correctAnswerLabel(question),
@@ -1260,7 +1260,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
         hasBonusSubmission: Boolean(bonusSubmission),
         bonusCorrectAnswer: revealedBonus?.correctAnswer ?? '',
         bonusPointsAwarded: bonusSubmission?.points_awarded ?? 0,
-        bonusPointsMax: speedScoringEnabled(game?.settings) && question?.bonus ? 100 : revealedBonus?.points ?? playerBonusFromJson(question?.bonus)?.points ?? 0,
+        bonusPointsMax: (revealedBonus?.points ?? playerBonusFromJson(question?.bonus)?.points ?? 0) * (speedScoringEnabled(game?.settings) ? 100 : 1),
         correctness,
         correctnessItems,
       })
@@ -2597,7 +2597,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · ${snapshot.speedScoring ? 'Up to 100 points · partial credit' : '1 point per correct answer'}`} />
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · ${snapshot.speedScoring ? `Up to ${snapshot.pointsMax} points · partial credit` : '1 point per correct answer'}`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {answers.map((answer, i) => <div key={i}>
             <input ref={element => { inputRefs.current[i] = element }} value={answer} onChange={e => setA(i, e.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); inputRefs.current[i + 1]?.focus() } }} placeholder="Type an answer…"
@@ -2657,7 +2657,7 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-5">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · ${snapshot.speedScoring ? 'Up to 100 points · partial credit' : '1 point per part'}`} />
+        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · ${snapshot.speedScoring ? `Up to ${snapshot.pointsMax} points · partial credit` : '1 point per part'}`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {parts.map((part, i) => <div key={part.label ?? i}>
             <p style={{ color: C.violet, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', marginBottom: 8 }}>PART {part.label ?? String.fromCharCode(65 + i)}</p>
