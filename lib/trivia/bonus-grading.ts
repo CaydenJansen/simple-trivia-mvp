@@ -82,6 +82,11 @@ export function storedBonusGrading(bonus: RuntimeBonus, submission: BonusSubmiss
   }
 }
 
+// A bonus has one answer but may be worth several original points.
+export function bonusGradingPoints(grading: SubmissionGrading, points: number) {
+  return grading.items[0]?.status === 'correct' ? points : 0
+}
+
 export function buildBonusRevealResults(bonus: RuntimeBonus | null, submissions: BonusSubmissionForScoring[]) {
   if (!bonus) return []
 
@@ -93,7 +98,7 @@ export function buildBonusRevealResults(bonus: RuntimeBonus | null, submissions:
       return {
         submission_id: submission.id,
         is_correct: correct,
-        points_awarded: correct ? bonus.points : 0,
+        points_awarded: bonusGradingPoints(grading, bonus.points),
         grading_json: grading,
       }
     })

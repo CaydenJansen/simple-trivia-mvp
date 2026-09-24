@@ -38,6 +38,7 @@ import {
 } from "@/lib/trivia/grading";
 import { buildConfidentRevealResults, buildRevealResults } from "@/lib/trivia/reveal";
 import {
+  bonusGradingPoints,
   buildBonusRevealResults,
   buildConfidentBonusRevealResults,
   runtimeBonusFromJson,
@@ -9884,7 +9885,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
     reviewBusyRef.current.add(reviewKey)
     try {
-      const nextPoints = gradingPoints(next, bonus.points)
+      const nextPoints = bonusGradingPoints(next, bonus.points)
       const { error } = submission.is_correct !== null
         ? await supabase.rpc('rescore_bonus_submission', { p_submission_id: submissionId, p_grading_json: next, p_points_awarded: nextPoints })
         : await supabase.from('bonus_submissions').update({ grading_json: next }).eq('id', submissionId)
@@ -11513,7 +11514,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           const bonusItem = bonusRow?.grading?.items[0] ?? null
           const hasReview = items.some(item => item.status === 'review') || (showBonusInAnswers && bonusItem?.status === 'review')
           const coreBase = grading ? gradingPoints(grading, question?.points_max ?? 1, question?.question_type === 'ranking' && (question?.points_max ?? 1) === 1) : 0
-          const bonusBase = showBonusInAnswers && bonusRow?.grading ? gradingPoints(bonusRow.grading, activeBonus?.points ?? 1) : 0
+          const bonusBase = showBonusInAnswers && bonusRow?.grading ? bonusGradingPoints(bonusRow.grading, activeBonus?.points ?? 1) : 0
           const score = isSpeedGame
             ? speedAward(coreBase, question?.points_max ?? 1, submission?.speed_points_max ?? 100) + speedAward(bonusBase, activeBonus?.points ?? 1, bonusRow?.submission?.speed_points_max ?? 100)
             : coreBase + bonusBase
@@ -12098,7 +12099,9 @@ function EndOfRound({ go }: { go: Go }) {
     try {
       const table = bonus ? 'bonus_submissions' : 'submissions'
       const pointsMax = bonus && bonusDefinition ? bonusDefinition.points : roundQuestion.points_max
-      const nextPoints = gradingPoints(next, pointsMax, !bonus && roundQuestion.question_type === 'ranking' && pointsMax === 1)
+      const nextPoints = bonus
+        ? bonusGradingPoints(next, pointsMax)
+        : gradingPoints(next, pointsMax, roundQuestion.question_type === 'ranking' && pointsMax === 1)
       const scored = submission.is_correct !== null
       const { error: reviewError } = scored
         ? await supabase.rpc(bonus ? 'rescore_bonus_submission' : 'rescore_submission', { p_submission_id: submission.id, p_grading_json: next, p_points_awarded: nextPoints })

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  bonusGradingPoints,
   buildBonusGrading,
   buildConfidentBonusRevealResults,
   buildBonusRevealResults,
@@ -15,6 +16,15 @@ const bonus = {
 }
 
 describe('bonus grading', () => {
+  it('uses the full bonus value for host previews and corrections', () => {
+    for (const points of [1, 2, 3, 7]) {
+      for (const status of ['correct', 'incorrect', 'review'] as const) {
+        expect(bonusGradingPoints({ items: [{ submitted: 'Ottawa', status }] }, points))
+          .toBe(status === 'correct' ? points : 0)
+      }
+      expect(bonusGradingPoints({ items: [] }, points)).toBe(0)
+    }
+  })
   it('hydrates a valid frozen bonus snapshot', () => {
     expect(runtimeBonusFromJson(bonus)).toEqual({
       prompt: bonus.prompt,

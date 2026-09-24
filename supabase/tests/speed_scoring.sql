@@ -72,6 +72,13 @@ begin
   assert (select score=300 from public.teams where id=team_a), 'Bonus score conversion failed';
   perform public.rescore_bonus_submission(bonus_id,'{"items":[{"status":"incorrect"}]}',0);
   assert (select score=200 from public.teams where id=team_a), 'Bonus correction failed';
+  update public.game_questions set bonus=jsonb_set(bonus,'{points}','3') where game_id=game and question_key='q1';
+  perform public.rescore_bonus_submission(bonus_id,'{"items":[{"status":"correct"}]}',3);
+  perform public.rescore_bonus_submission(bonus_id,'{"items":[{"status":"correct"}]}',3);
+  assert (select points_awarded=300 and is_correct from public.bonus_submissions where id=bonus_id), 'Weighted bonus correction lost value or correctness';
+  assert (select score=500 from public.teams where id=team_a), 'Weighted bonus correction duplicated or lost team points';
+  perform public.rescore_bonus_submission(bonus_id,'{"items":[{"status":"incorrect"}]}',0);
+  assert (select score=200 from public.teams where id=team_a), 'Weighted bonus reversal left points behind';
   assert public.finalize_question_scoring(game,'q1',jsonb_build_array(jsonb_build_object('submission_id',s1)),true)=0, 'Duplicate reveal was not idempotent';
   assert (select score=200 from public.teams where id=team_a), 'Duplicate reveal inflated points';
   assert not has_function_privilege('authenticated','public.convert_speed_awards(uuid,jsonb,boolean)','execute'), 'Private score conversion exposed';
