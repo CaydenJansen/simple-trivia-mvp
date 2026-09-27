@@ -1542,6 +1542,8 @@ function Dashboard({ go }: { go: Go }) {
   const [pendingFolderRename, setPendingFolderRename] = useState<QuizFolder | null>(null)
   const [pendingFolderDelete, setPendingFolderDelete] = useState<QuizFolder | null>(null)
   const [draggedQuizId, setDraggedQuizId] = useState<string | null>(null)
+  const [draggedFolderId, setDraggedFolderId] = useState<string | null>(null)
+  const folderOrderBusyRef = useRef(false)
   const [dropFolderKey, setDropFolderKey] = useState<string | null>(null)
   const [movingQuizId, setMovingQuizId] = useState<string | null>(null)
   const [collapsedFolderIds, setCollapsedFolderIds] = useState<Set<string>>(() => {
@@ -1689,7 +1691,7 @@ function Dashboard({ go }: { go: Go }) {
     } else {
       const { data, error } = await supabase
         .from('quiz_folders')
-        .insert({ name: nextName, sort_position: folders.length })
+        .insert({ name: nextName, sort_position: Math.max(-1, ...folders.map(folder => folder.sort_position)) + 1 })
         .select('id, owner_id, name, sort_position, created_at, updated_at')
         .single()
 
@@ -1744,8 +1746,43 @@ function Dashboard({ go }: { go: Go }) {
     setMovingQuizId(null)
   }
 
+  async function reorderFolder(folderId: string, targetId: string | null) {
+    if (folderBusy || folderOrderBusyRef.current || folderId === targetId) return
+    const from = folders.findIndex(folder => folder.id === folderId)
+    const to = targetId === null ? folders.length - 1 : folders.findIndex(folder => folder.id === targetId)
+    if (from < 0 || to < 0 || from === to) return
+    const previous = folders
+    const next = [...folders]
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    folderOrderBusyRef.current = true
+    setFolderBusy(true)
+    setLoadError(null)
+    setActionNotice(null)
+    setFolders(next.map((folder, index) => ({ ...folder, sort_position: index })))
+    try {
+      const { error } = await supabase.rpc('reorder_quiz_folders', { p_folder_ids: next.map(folder => folder.id) })
+      if (error) throw error
+      setActionNotice('Folder order saved.')
+    } catch (error) {
+      console.error('Could not reorder folders:', error)
+      setFolders(previous)
+      setLoadError('Could not save the folder order. Please try again. If you changed folders in another tab, refresh first.')
+    } finally {
+      folderOrderBusyRef.current = false
+      setFolderBusy(false)
+    }
+  }
+
   function dropQuiz(event: ReactDragEvent<HTMLElement>, folderId: string | null) {
     event.preventDefault()
+    const sourceFolderId = draggedFolderId ?? event.dataTransfer.getData('text/quiz-folder-id')
+    if (sourceFolderId) {
+      setDraggedFolderId(null)
+      setDropFolderKey(null)
+      void reorderFolder(sourceFolderId, folderId)
+      return
+    }
     const quizId = draggedQuizId ?? event.dataTransfer.getData('text/quiz-id')
     setDropFolderKey(null)
     setDraggedQuizId(null)
@@ -2042,7 +2079,7 @@ function Dashboard({ go }: { go: Go }) {
 
         {loading ? (
           <div style={{ color: C.sub }} className="py-24 text-center text-sm">Loading quizzes…</div>
-        ) : quizzes.length === 0 ? (
+        ) : quizzes.length === 0 && folders.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-28 text-center">
             <div style={{ background: C.violetPale }} className="w-16 h-16 rounded-2xl flex items-center justify-center mb-5">
               <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
@@ -2069,13 +2106,29 @@ function Dashboard({ go }: { go: Go }) {
               return (
                 <section
                   key={sectionKey}
-                  onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropFolderKey(sectionKey) }}
+                  aria-label={`${section.name} folder`}
+                  onDragOver={event => {
+                    if (!draggedQuizId && !draggedFolderId) return
+                    event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropFolderKey(sectionKey)
+                  }}
                   onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropFolderKey(null) }}
                   onDrop={event => dropQuiz(event, section.id)}
                   style={{ background: activeDrop ? C.violetPale : C.panel, border: `1px solid ${activeDrop ? C.violet : C.line}` }}
                   className="rounded-3xl p-4 transition-colors sm:p-5"
                 >
                   <div className="mb-4 flex min-h-9 items-center gap-3">
+                    {section.id && <button type="button" draggable={!folderBusy} disabled={folderBusy}
+                      aria-label={`Reorder ${section.name}`} title="Drag to reorder folders, or use the up and down arrow keys"
+                      onDragStart={event => { setDraggedFolderId(section.id); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/quiz-folder-id', section.id!) }}
+                      onDragEnd={() => { setDraggedFolderId(null); setDropFolderKey(null) }}
+                      onKeyDown={event => {
+                        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+                        event.preventDefault()
+                        const index = folders.findIndex(folder => folder.id === section.id)
+                        const target = folders[index + (event.key === 'ArrowUp' ? -1 : 1)]
+                        if (target) void reorderFolder(section.id!, target.id)
+                      }}
+                      style={{ color: C.sub }} className="cursor-grab rounded-lg p-2 hover:bg-violet-mist active:cursor-grabbing disabled:opacity-40"><I.grip /></button>}
                     <button
                       type="button"
                       onClick={() => section.id && toggleFolder(section.id)}
@@ -2118,7 +2171,7 @@ function Dashboard({ go }: { go: Go }) {
                       ))}
                       {sectionQuizzes.length === 0 && (
                         <div style={{ border: `2px dashed ${activeDrop ? C.violet : C.line}`, color: C.sub }} className="col-span-full flex min-h-28 items-center justify-center rounded-2xl px-5 text-center text-sm font-semibold">
-                          {activeDrop ? `Drop to move quiz into ${section.name}` : section.id ? 'Drag quizzes here, or use Move to folder from a quiz menu.' : 'Drag quizzes here to remove them from a folder.'}
+                          {activeDrop && draggedFolderId ? 'Drop to reorder folders' : activeDrop ? `Drop to move quiz into ${section.name}` : section.id ? 'Drag quizzes here, or use Move to folder from a quiz menu.' : 'Drag quizzes here to remove them from a folder.'}
                         </div>
                       )}
                       {!section.id && (
@@ -4482,13 +4535,13 @@ function QuizBuilder({ go }: { go: Go }) {
             {loading ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : needsStatusSync ? 'Save to enable hosting' : persisted ? 'Saved' : 'New quiz'}
           </span>
           <Btn v="secondary" sz="sm" onClick={() => setPreviewOpen(true)}>Preview Quiz</Btn>
-          <div className="relative">
+          {quizId && <div className="relative">
             <button type="button" aria-label="More quiz actions" aria-expanded={builderActionsOpen} onClick={() => setBuilderActionsOpen(open => !open)} style={{ border: `1px solid ${C.line}`, color: C.sub }} className="rounded-lg px-3 py-2 text-xs font-black hover:bg-zinc-50">•••</button>
             {builderActionsOpen && <div className="absolute right-0 top-10 z-50 w-48 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl">
               {quizId && <button type="button" onClick={() => { setBuilderActionsOpen(false); void saveCurrentQuizAsTemplate() }} disabled={savingTemplate || saving} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50">{savingTemplate ? 'Saving template…' : 'Save as Template'}</button>}
               {quizId && <button type="button" onClick={() => { setBuilderActionsOpen(false); void deleteCurrentQuiz() }} disabled={deletingQuiz || saving} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">{deletingQuiz ? 'Deleting…' : 'Delete Show'}</button>}
             </div>}
-          </div>
+          </div>}
           <Btn
             v="secondary"
             sz="sm"

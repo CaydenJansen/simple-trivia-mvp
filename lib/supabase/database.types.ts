@@ -1654,6 +1654,10 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: number
       }
+      reorder_quiz_folders: {
+        Args: { p_folder_ids: string[] }
+        Returns: undefined
+      }
       resolve_question_library_proposed_tag: {
         Args: {
           p_proposed_tag_id: string
