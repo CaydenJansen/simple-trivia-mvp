@@ -1,6 +1,4 @@
-function normalized(value: string) {
-  return value.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
-}
+import { normalizeAnswerText as normalized } from './answer-normalization'
 
 function unique(values: string[]) {
   const seen = new Set<string>()
@@ -56,11 +54,14 @@ export function answerVariants(value: string): AnswerVariants {
   const outsideWithoutNotes = original.replace(/\s*\([^()]*\)\s*/gu, ' ').replace(/\s+/gu, ' ').trim()
   const prefixBeforeNote = original.match(/^(.*?)\s*\(/u)?.[1].trim() ?? ''
   const outside = prefixBeforeNote || outsideWithoutNotes || original
-  const alternatives = splitAlternatives(outside)
+  // Only spaced slash notation is a legacy list. AC/DC, fractions, and titles
+  // such as Truth or Dare are literal answers, not independently valid pieces.
+  const legacyAlternatives = (text: string) => text.split(/\s+\/\s*|\s*\/\s+/u).map(part => part.trim()).filter(Boolean)
+  const alternatives = legacyAlternatives(outside)
   const primary = alternatives[0] ?? outside
   const accepted = unique([
     ...alternatives.slice(1),
-    ...splitAlternatives(outsideWithoutNotes),
+    ...legacyAlternatives(outsideWithoutNotes),
     ...parentheticalNotes.flatMap(parentheticalAliases),
     original,
   ]).filter(candidate => normalized(candidate) !== normalized(primary))

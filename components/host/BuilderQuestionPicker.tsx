@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
 import QuestionUsageIndicator from "@/components/host/QuestionUsageIndicator";
 import SourceQuestionAnswerPreview from "@/components/host/SourceQuestionAnswerPreview";
 import type { Database, QuestionMechanic } from "@/lib/supabase/database.types";
-import { TRIVIA_DIFFICULTIES } from "@/lib/trivia/difficulty";
+import { TRIVIA_DIFFICULTIES, effectiveTriviaDifficulty, effectiveDifficultyFilter } from "@/lib/trivia/difficulty";
 import {
   groupQuestionQuizUsage,
   questionQuizUsageRowsFromDatabase,
@@ -48,6 +48,8 @@ export default function BuilderQuestionPicker({
     origin === "platform" && mode === "add" ? "choose" : "search",
   );
   const [randomLoading, setRandomLoading] = useState(false);
+  const activeRef = useRef(true);
+  useEffect(() => { activeRef.current = true; return () => { activeRef.current = false; }; }, []);
 
   async function selectRandomQuestion() {
     if (randomLoading) return;
@@ -58,7 +60,10 @@ export default function BuilderQuestionPicker({
       .from("source_question_catalog")
       .select("id", { count: "exact", head: true })
       .eq("origin", "platform")
-      .eq("status", "active");
+      .eq("status", "active")
+      .eq("is_verified", true);
+
+    if (!activeRef.current) return;
 
     if (countResult.error || !countResult.count) {
       setError("Could not find an active library question.");
@@ -72,9 +77,12 @@ export default function BuilderQuestionPicker({
       .select("*")
       .eq("origin", "platform")
       .eq("status", "active")
+      .eq("is_verified", true)
       .order("id")
       .range(offset, offset)
       .single();
+
+    if (!activeRef.current) return;
 
     if (questionResult.error || !questionResult.data) {
       setError("Could not select a random question. Try again.");
@@ -120,10 +128,11 @@ export default function BuilderQuestionPicker({
           .range(0, 49);
 
         const searchFilter = sourceQuestionSearchOrFilter(search, categories, tags, tagAliases);
+        if (origin === "platform") query = query.eq("is_verified", true);
         if (searchFilter) query = query.or(searchFilter);
         if (type !== "all") query = query.eq("mechanic", type);
         if (categoryId) query = query.contains("category_ids", [categoryId]);
-        if (difficulty) query = query.eq("editorial_difficulty", Number(difficulty));
+        if (difficulty) query = query.or(effectiveDifficultyFilter(Number(difficulty)));
         if (tagId) query = query.contains("tag_ids", [tagId]);
 
         const { data, error: queryError, count } = await query;
@@ -254,7 +263,7 @@ export default function BuilderQuestionPicker({
                     <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                       <span className="rounded-full bg-violet-50 px-2 py-1 font-semibold text-violet-700">{question.question_type.replaceAll("-", " ")}</span>
                       {question.category_names.length > 0 ? <span>{question.category_names.join(" · ")}</span> : null}
-                      {question.editorial_difficulty ? <span>· {TRIVIA_DIFFICULTIES[question.editorial_difficulty - 1]}</span> : null}
+                      {effectiveTriviaDifficulty(question.observed_difficulty, question.editorial_difficulty, "") ? <span>· {effectiveTriviaDifficulty(question.observed_difficulty, question.editorial_difficulty)}</span> : null}
                     </div>
                     <h3 className="text-sm font-bold leading-6 text-zinc-900">{question.prompt}</h3>
                     <SourceQuestionAnswerPreview question={question} />

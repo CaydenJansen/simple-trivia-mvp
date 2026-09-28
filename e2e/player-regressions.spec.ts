@@ -22,7 +22,10 @@ const fiveAnswerQuestion = {
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('simple-trivia-game-id', 'browser-test-game')
+    localStorage.setItem('simple-trivia-join-request-id', 'request-a')
+    localStorage.setItem('simple-trivia-join-request-token', 'token-a')
   })
+  await page.route('**/rest/v1/rpc/get_server_epoch_ms', route => route.fulfill({ json: Date.now() }))
   await page.route('**/rest/v1/games**', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -110,7 +113,7 @@ test('rapid answer actions submit once and bind the response to the visible ques
   }))
 
   const requests: Array<Record<string, unknown>> = []
-  await page.route('**/rest/v1/rpc/submit_player_answer', async route => {
+  await page.route('**/rest/v1/rpc/submit_owned_player_answer', async route => {
     requests.push(route.request().postDataJSON() as Record<string, unknown>)
     await new Promise(resolve => setTimeout(resolve, 100))
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify('submission-id') })
@@ -152,7 +155,7 @@ test('a failed answer request releases the submit control for a retry', async ({
   }))
 
   let attempts = 0
-  await page.route('**/rest/v1/rpc/submit_player_answer', route => {
+  await page.route('**/rest/v1/rpc/submit_owned_player_answer', route => {
     attempts += 1
     if (attempts === 1) return route.fulfill({
       status: 503,
@@ -206,7 +209,7 @@ test('time expiry submits every partially completed multi-answer field', async (
   }))
 
   const requests: Array<Record<string, unknown>> = []
-  await page.route('**/rest/v1/rpc/submit_player_answer', route => {
+  await page.route('**/rest/v1/rpc/submit_owned_player_answer', route => {
     requests.push(route.request().postDataJSON() as Record<string, unknown>)
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify('submission-id') })
   })
@@ -247,7 +250,7 @@ test('updating an editable answer confirms that the previous response was replac
     contentType: 'application/json',
     body: JSON.stringify({ name: 'Browser Team', score: 0, prize_awards: [] }),
   }))
-  await page.route('**/rest/v1/submissions**', route => route.fulfill({
+  await page.route('**/rest/v1/rpc/get_owned_player_submission', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
@@ -257,12 +260,7 @@ test('updating an editable answer confirms that the previous response was replac
       grading_json: null,
     }),
   }))
-  await page.route('**/rest/v1/rpc/get_player_bonus_submission', route => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: 'null',
-  }))
-  await page.route('**/rest/v1/rpc/submit_player_answer', route => route.fulfill({
+  await page.route('**/rest/v1/rpc/submit_owned_player_answer', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify('submission-id'),

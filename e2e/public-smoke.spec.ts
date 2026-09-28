@@ -77,6 +77,7 @@ test('a new QR code clears a stale player session before joining', async ({ page
 
 test('refreshing a same-game QR link restores the existing approved team', async ({ page }) => {
   const qrGameLookups: string[] = []
+  await page.route('**/rest/v1/teams**', route => route.fulfill({ json: { id: 'existing-team', game_id: 'live-game', name: 'The Blim Blams' } }))
 
   await page.addInitScript(() => {
     localStorage.setItem('simple-trivia-game-id', 'live-game')
@@ -187,7 +188,7 @@ test('players can create an optional team PIN when joining', async ({ page }) =>
     contentType: 'application/json',
     body: '[]',
   }))
-  await page.route('**/rest/v1/rpc/join_live_game', async route => {
+  await page.route('**/rest/v1/rpc/join_live_game_once', async route => {
     joinRequest = route.request().postDataJSON() as Record<string, unknown>
     await route.fulfill({
       status: 200,
@@ -229,7 +230,7 @@ test('an unmatched existing team PIN gives useful guidance', async ({ page }) =>
       current_content_screen_key: null,
     }),
   }))
-  await page.route('**/rest/v1/rpc/join_live_game', route => route.fulfill({
+  await page.route('**/rest/v1/rpc/join_live_game_once', route => route.fulfill({
     status: 400,
     contentType: 'application/json',
     body: JSON.stringify({ code: 'P0001', message: 'TEAM_PIN_NOT_FOUND', details: null, hint: null }),

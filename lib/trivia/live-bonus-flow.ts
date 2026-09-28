@@ -1,7 +1,14 @@
 export type LiveAnswerPhase = 'open' | 'closed' | 'revealed'
 export type LiveQuestionStage = 'core' | 'bonus'
 
-type ScoredSubmission = { points_awarded?: number | null; is_correct?: boolean | null } | null
+type ScoredSubmission = { points_awarded?: number | null; is_correct?: boolean | null; grading_json?: unknown } | null
+
+function hasCorrectPart(submission: ScoredSubmission, maximum: number) {
+  if (submission?.is_correct === true) return true
+  if (maximum <= 1 || !submission?.grading_json || typeof submission.grading_json !== 'object') return false
+  const items = (submission.grading_json as { items?: unknown }).items
+  return Array.isArray(items) && items.some(item => item && typeof item === 'object' && item.status === 'correct')
+}
 
 export function playerQuestionStageScreen(input: {
   answerPhase: string | null
@@ -13,6 +20,7 @@ export function playerQuestionStageScreen(input: {
   corePointsMax: number
   bonusPointsMax: number
   speedScoring?: boolean
+  scoresHidden?: boolean
 }) {
   const {
     answerPhase,
@@ -28,6 +36,10 @@ export function playerQuestionStageScreen(input: {
   if (answerPhase === 'revealed') {
     if (!coreSubmission && !bonusSubmission) return 'no-answer'
     if (coreSubmission?.is_correct === null || bonusSubmission?.is_correct === null) return 'pending-review'
+    if (input.scoresHidden) {
+      if (coreSubmission?.is_correct === true && (bonusPointsMax === 0 || bonusSubmission?.is_correct === true)) return 'correct'
+      return hasCorrectPart(coreSubmission, corePointsMax) || hasCorrectPart(bonusSubmission, bonusPointsMax) ? 'partial-correct' : 'incorrect'
+    }
     const points = (coreSubmission?.points_awarded ?? 0) + (bonusSubmission?.points_awarded ?? 0)
     const max = Math.max(1, corePointsMax) + Math.max(0, bonusPointsMax)
     if (points <= 0) return 'incorrect'

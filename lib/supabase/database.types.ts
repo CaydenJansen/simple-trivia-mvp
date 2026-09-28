@@ -725,6 +725,18 @@ export type Database = {
         Update: Partial<{ points: number; reason: string }>
         Relationships: []
       }
+      host_bonus_award_requests: {
+        Row: { operation_id: string; host_id: string; team_id: string; points: number; created_at: string }
+        Insert: { operation_id: string; host_id: string; team_id: string; points: number; created_at?: string }
+        Update: never
+        Relationships: []
+      }
+      personal_question_create_requests: {
+        Row: { owner_id: string; operation_id: string; source_question_id: string; payload_hash: string }
+        Insert: { owner_id: string; operation_id: string; source_question_id: string; payload_hash: string }
+        Update: never
+        Relationships: []
+      }
       game_tiebreakers: {
         Row: TiebreakerRow & { game_id: string }
         Insert: TiebreakerInsert & { game_id: string }
@@ -738,9 +750,9 @@ export type Database = {
         }]
       }
       quiz_templates: {
-        Row: { id: string; owner_id: string; name: string; source_quiz_id: string; structure: Json | null; created_at: string; updated_at: string }
-        Insert: { id?: string; owner_id?: string; name: string; source_quiz_id: string; structure?: Json | null; created_at?: string; updated_at?: string }
-        Update: Partial<{ name: string; source_quiz_id: string; structure: Json | null; updated_at: string }>
+        Row: { id: string; owner_id: string; name: string; source_quiz_id: string | null; structure: Json | null; created_at: string; updated_at: string }
+        Insert: { id?: string; owner_id?: string; name: string; source_quiz_id: string | null; structure?: Json | null; created_at?: string; updated_at?: string }
+        Update: Partial<{ name: string; source_quiz_id: string | null; structure: Json | null; updated_at: string }>
         Relationships: []
       }
       game_tie_resolutions: {
@@ -1100,6 +1112,41 @@ export type Database = {
       }
     }
     Functions: {
+      get_server_epoch_ms: { Args: Record<PropertyKey, never>; Returns: number }
+      submit_owned_player_answer: {
+        Args: { p_game_id: string; p_team_id: string; p_question_key: string; p_answer_text: string; p_request_id: string; p_request_token: string; p_bonus?: boolean }
+        Returns: string
+      }
+      get_owned_player_submission: {
+        Args: { p_game_id: string; p_team_id: string; p_question_key: string; p_request_id: string; p_request_token: string; p_bonus?: boolean }
+        Returns: { id: string; answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: Json | null }[]
+      }
+      submit_owned_player_tiebreaker: {
+        Args: { p_game_id: string; p_team_id: string; p_attempt_id: string; p_numeric_answer: number; p_request_id: string; p_request_token: string }
+        Returns: string
+      }
+      get_owned_player_tiebreaker_state: {
+        Args: { p_game_id: string; p_team_id: string; p_request_id: string; p_request_token: string }
+        Returns: Database['public']['Functions']['get_player_tiebreaker_state']['Returns']
+      }
+      get_player_question_accuracy: {
+        Args: { p_game_id: string; p_team_id: string; p_question_key: string; p_request_id: string; p_request_token: string }
+        Returns: Json
+      }
+      get_owned_player_show_game: {
+        Args: { p_game_id: string; p_team_id: string; p_show_game_key: string; p_request_id: string; p_request_token: string }
+        Returns: LiveShowGameRow[]
+      }
+      get_owned_player_choices: {
+        Args: { p_game_id: string; p_team_id: string; p_show_game_id: string; p_round_number: number; p_request_id: string; p_request_token: string }
+        Returns: { team_id: string; choice: string }[]
+      }
+      join_live_game_once: {
+        Args: { p_operation_id: string; p_game_id: string; p_team_name: string; p_team_pin?: string | null; p_pin_mode?: string }
+        Returns: Database['public']['Functions']['join_live_game']['Returns']
+      }
+      duplicate_owned_quiz: { Args: { p_quiz_id: string; p_title: string }; Returns: Database['public']['Tables']['quizzes']['Row'] }
+      patch_host_game_settings: { Args: { p_game_id: string; p_patch: Json }; Returns: Json }
       is_platform_super_admin: {
         Args: Record<PropertyKey, never>
         Returns: boolean
@@ -1156,6 +1203,10 @@ export type Database = {
       }
       review_answer_suggestion: {
         Args: { p_suggestion_id: string; p_decision: 'approved' | 'rejected'; p_note?: string | null }
+        Returns: string
+      }
+      review_answer_suggestion_with_slot: {
+        Args: { p_suggestion_id: string; p_decision: 'approved' | 'rejected'; p_note?: string | null; p_answer_slot?: number | null }
         Returns: string
       }
       ensure_host_join_link: {
@@ -1430,6 +1481,7 @@ export type Database = {
       pull_shared_cursor: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: LiveShowGameRow }
       advance_shared_cursor: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
       award_host_bonus_points: { Args: { p_team_id: string; p_points: number }; Returns: Database['public']['Tables']['teams']['Row'] }
+      award_host_bonus_points_once: { Args: { p_team_id: string; p_points: number; p_operation_id: string }; Returns: Database['public']['Tables']['teams']['Row'] }
       start_spin_the_wheel: {
         Args: { p_game_show_game_id: string }
         Returns: LiveShowGameRow

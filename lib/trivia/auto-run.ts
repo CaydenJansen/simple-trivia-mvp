@@ -77,6 +77,18 @@ export type AutoRunSharedClock = {
   paused_remaining: number | null
 }
 
+// Restore even an expired clock: refreshing must not grant a new full timer.
+export function restoreAutoRunClock(settings: unknown, key: string, now = Date.now()) {
+  const raw = settingsRecord(settingsRecord(settings)?.auto_run_clock)
+  if (!raw || raw.key !== key) return null
+  const paused = typeof raw.paused_remaining === 'number' && Number.isFinite(raw.paused_remaining)
+    ? Math.max(0, raw.paused_remaining) : null
+  const deadline = typeof raw.deadline_ms === 'number' && Number.isFinite(raw.deadline_ms)
+    ? raw.deadline_ms : null
+  if (paused === null && deadline === null) return null
+  return { paused: paused !== null, deadline, remaining: paused ?? Math.max(0, Math.ceil((deadline! - now) / 1000)) }
+}
+
 export function autoRunClockFromSettings(settings: unknown, now = Date.now()) {
   const raw = settingsRecord(settings)?.auto_run_clock
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null

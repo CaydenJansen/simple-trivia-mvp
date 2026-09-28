@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { effectiveTriviaDifficulty, TRIVIA_DIFFICULTIES, triviaDifficultyTone } from './difficulty'
+import { effectiveTriviaDifficulty, effectiveDifficultyFilter, TRIVIA_DIFFICULTIES, triviaDifficultyTone } from './difficulty'
 
 describe('difficulty presentation', () => {
+  it('F15 filters by observed difficulty, using editorial difficulty only when unobserved', () => {
+    expect(effectiveDifficultyFilter(4)).toBe('observed_difficulty.eq.4,and(observed_difficulty.is.null,editorial_difficulty.eq.4)')
+    expect(() => effectiveDifficultyFilter(0)).toThrow('Invalid difficulty')
+  })
   it('maps the five difficulty levels from green through red in order', () => {
     expect(TRIVIA_DIFFICULTIES.map(triviaDifficultyTone)).toEqual([
       'very-easy',

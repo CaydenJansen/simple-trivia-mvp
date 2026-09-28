@@ -7,22 +7,26 @@ const question = {
   correct_answer: ['Mercury', 'Venus'], accepted_answers: [[], []], has_bonus: false, bonus: null,
 }
 
-async function playerFixture(page: Page, seconds = 45, revealed = false, pointCount = 2) {
+async function playerFixture(page: Page, seconds = 45, revealed = false, pointCount = 2, hidden = false) {
   const deadline = Date.now() + seconds * 1000
   const requests: string[] = []
-  let saved: { id: string; answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: null } | null = revealed ? { id: 's1', answer_text: '["Mercury","Venus"]', is_correct: true, points_awarded: 150, grading_json: null } : null
+  let saved: { id: string; answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: null } | null = revealed ? { id: 's1', answer_text: '["Mercury","Venus"]', is_correct: true, points_awarded: hidden ? 0 : 150, grading_json: null } : null
   await page.addInitScript(() => {
     localStorage.setItem('simple-trivia-game-id', 'speed-game')
+    localStorage.setItem('simple-trivia-join-request-id', 'request-a')
+    localStorage.setItem('simple-trivia-join-request-token', 'token-a')
     localStorage.setItem('simple-trivia-team-id', 'speed-team')
   })
   await page.route('**/rest/v1/**', route => {
     const name = new URL(route.request().url()).pathname.split('/').pop()
+    if (name === 'get_team_join_request') return route.fulfill({ json: { admission_status: 'approved', team_id: 'speed-team', name: 'Test team', game_status: 'live' } })
+    if (name === 'get_server_epoch_ms') return route.fulfill({ json: Date.now() })
     if (name === 'games') return route.fulfill({ json: { id: 'speed-game', status: 'live', current_screen: 'multi-answer', current_question_key: 'q1', answer_phase: revealed ? 'revealed' : 'open', question_stage: 'core', answer_editing_allowed: true,
-      settings: { scoring_mode: 'speed', auto_run_mode: 'off', answer_reveal: 'each', speed_clock: revealed ? null : { key: 'speed-q1-core', deadline_ms: deadline, duration_seconds: 45 } } } })
+      settings: { scoring_mode: 'speed', player_score_visibility: hidden ? 'hidden' : 'live', auto_run_mode: 'off', answer_reveal: 'each', speed_clock: revealed ? null : { key: 'speed-q1-core', deadline_ms: deadline, duration_seconds: 45 } } } })
     if (name === 'get_player_game_question') return route.fulfill({ json: { ...question, points_max: pointCount } })
     if (name === 'teams') return route.fulfill({ json: { id: 'speed-team', game_id: 'speed-game', name: 'Test team', score: revealed ? 150 : 0 } })
-    if (name === 'submissions') return route.fulfill({ json: saved })
-    if (name === 'submit_player_answer') {
+    if (name === 'get_owned_player_submission') return route.fulfill({ json: saved })
+    if (name === 'submit_owned_player_answer') {
       requests.push(route.request().postDataJSON().p_answer_text)
       saved = { id: 's1', answer_text: requests.at(-1)!, is_correct: null, points_awarded: 0, grading_json: null }
       return route.fulfill({ json: 's1' })
@@ -57,11 +61,51 @@ test('speed timer submits a partially completed answer without Auto-Run', async 
   await expect.poll(() => requests, { timeout: 12000 }).toEqual(['["Merc",""]'])
 })
 
+test('a clock set one hour ahead does not submit early', async ({ page }) => {
+  const { requests } = await playerFixture(page, 6)
+  await page.addInitScript(() => { const realNow = Date.now; Date.now = () => realNow() + 3600000 })
+  await page.goto('/play')
+  await page.getByLabel('Answer 1').fill('Mercury')
+  await expect(page.getByRole('timer')).toBeVisible()
+  await page.waitForTimeout(1500)
+  expect(requests).toEqual([])
+  await expect.poll(() => requests, { timeout: 10000 }).toEqual(['["Mercury",""]'])
+})
+
+test('an untouched ranker is not automatically submitted', async ({ page }) => {
+  const { requests } = await playerFixture(page, 4)
+  await page.route('**/rest/v1/rpc/get_player_game_question', route => route.fulfill({ json: { ...question, question_type: 'ranking', options: ['Earth', 'Mars', 'Venus'], correct_answer: null, points_max: 1 } }))
+  await page.route('**/rest/v1/games**', route => route.fulfill({ json: { status: 'live', current_screen: 'ranking', current_question_key: 'q1', question_stage: 'core', answer_phase: 'open', settings: { scoring_mode: 'speed', speed_clock: { key: 'speed-q1-core', deadline_ms: Date.now() - 1, duration_seconds: 30 } } } }))
+  await page.goto('/play')
+  await expect(page.getByRole('button', { name: 'Lock In Order', exact: true })).toBeVisible()
+  await page.waitForTimeout(1500)
+  expect(requests).toEqual([])
+})
+
 test('a fully correct two-pointer earning 150 is still shown as correct', async ({ page }) => {
   await playerFixture(page, 45, true)
   await page.goto('/play')
   await expect(page.getByRole('heading', { name: 'Correct!', exact: true })).toBeVisible()
   await expect(page.getByText('150 points', { exact: true })).toBeVisible()
+})
+
+test('hidden points do not turn a correct answer into an incorrect one', async ({ page }) => {
+  await playerFixture(page, 45, true, 2, true)
+  await page.goto('/play')
+  await expect(page.getByRole('heading', { name: 'Correct!', exact: true })).toBeVisible()
+  await expect(page.getByText('150 points', { exact: true })).toHaveCount(0)
+})
+
+test('editable core answers switch to Update without private-table Realtime', async ({ page }) => {
+  const { requests } = await playerFixture(page)
+  await page.goto('/play')
+  await page.getByLabel('Answer 1').fill('Mercury')
+  await page.getByRole('button', { name: 'Submit Answers', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Update Answers', exact: true })).toBeVisible()
+  await page.getByLabel('Answer 2').fill('Venus')
+  await page.getByRole('button', { name: 'Update Answers', exact: true }).click()
+  await expect.poll(() => requests).toEqual(['["Mercury",""]', '["Mercury","Venus"]'])
+  await expect(page.getByRole('status')).toContainText('replaced the previous one')
 })
 
 test('a seven-point question shows a 700-point maximum and seven answer fields', async ({ page }) => {
@@ -82,6 +126,7 @@ async function hostFixture(page: Page) {
   await page.route('**/rest/v1/**', route => {
     const url = new URL(route.request().url())
     const name = url.pathname.split('/').pop()
+    if (name === 'get_server_epoch_ms') return route.fulfill({ json: Date.now() })
     if (name === 'quizzes') {
       const quiz = { id: 'speed-quiz', owner_id: userId, folder_id: null, title: 'Speed fixture', status: 'ready', round_count: 1, question_count: 1, updated_at: '2026-09-24' }
       return route.fulfill({ json: url.searchParams.has('id') ? quiz : [quiz] })
@@ -108,6 +153,26 @@ test('host can choose fixed speed points independently of Auto-Run', async ({ pa
   await page.getByRole('button', { name: 'Open Fresh Lobby →', exact: true }).click()
   await expect.poll(() => bodies.length).toBe(1)
   expect(bodies[0]).toMatchObject({ p_settings: { scoring_mode: 'speed', auto_run_mode: 'off', auto_run_speed: 'medium' } })
+})
+
+test('host refresh restores a paused Auto-Run clock without publishing a new countdown', async ({ page }) => {
+  await hostFixture(page)
+  await page.addInitScript(() => { localStorage.setItem('simple-trivia-host-game-id', 'speed-game') })
+  const clockWrites: unknown[] = []
+  await page.route('**/rest/v1/rpc/patch_host_game_settings', route => { clockWrites.push(route.request().postDataJSON()); return route.fulfill({ json: {} }) })
+  await page.route('**/rest/v1/games**', route => route.fulfill({ json: { id: 'speed-game', quiz_id: 'speed-quiz', code: '123456', status: 'live', current_screen: 'multi-answer', current_question_key: 'q1', question_stage: 'core', answer_phase: 'open', settings: { auto_run_mode: 'round', auto_run_clock: { key: 'open-q1-core', label: 'Answers close in', deadline_ms: null, paused_remaining: 12 } } } }))
+  await page.route('**/rest/v1/game_questions**', async route => {
+    await new Promise(resolve => setTimeout(resolve, 250))
+    return route.fulfill({ json: [question] })
+  })
+  await page.goto('/host')
+  await expect(page.getByText('Auto-Run paused', { exact: true })).toBeVisible()
+  await expect(page.getByText('Answers close in: 00:12', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(page.getByText('Auto-Run paused', { exact: true })).toBeVisible()
+  await page.waitForTimeout(1000)
+  await expect(page.getByText('Answers close in: 00:12', { exact: true })).toBeVisible()
+  expect(clockWrites).toEqual([])
 })
 
 test('host closes timed answers without Auto-Run and opens a fresh bonus clock without Realtime', async ({ page }) => {

@@ -14,12 +14,12 @@ export function speedAward(basePoints: number, baseMaximum: number, available: n
   return Math.round(Math.min(Math.max(1, baseMaximum), Math.max(0, basePoints)) * Math.max(50, Math.min(100, available)))
 }
 
-export function speedClock(settings: unknown): { key: string; deadline_ms: number; duration_seconds: number } | null {
+export function speedClock(settings: unknown): { key: string; deadline_ms: number; opened_at_ms: number; duration_seconds: number } | null {
   if (!speedScoringEnabled(settings)) return null
   const value = (settings as Record<string, unknown>).speed_clock
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const clock = value as Record<string, unknown>
   return typeof clock.key === 'string' && typeof clock.deadline_ms === 'number' && Number.isFinite(clock.deadline_ms)
     && typeof clock.duration_seconds === 'number' && clock.duration_seconds > 0
-    ? { key: clock.key, deadline_ms: clock.deadline_ms, duration_seconds: clock.duration_seconds } : null
+    ? { key: clock.key, deadline_ms: clock.deadline_ms, opened_at_ms: typeof clock.opened_at_ms === 'number' && Number.isFinite(clock.opened_at_ms) ? clock.opened_at_ms : clock.deadline_ms - clock.duration_seconds * 1000, duration_seconds: clock.duration_seconds } : null
 }

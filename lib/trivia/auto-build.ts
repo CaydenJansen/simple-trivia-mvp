@@ -229,21 +229,25 @@ export function getAutoBuildAvailability({
     requirements.set(key, { topic, required: (current?.required ?? 0) + needed })
   })
 
-  let matchingQuestionCount = 0
+  const matchingIds = new Set<string>()
   const shortages: AutoBuildShortage[] = []
   requirements.forEach(({ topic, required }) => {
-    const available = eligibleQuestions.filter(question => (
+    const matching = eligibleQuestions.filter(question => (
       topic === null
       || topic.toLocaleLowerCase() === 'general knowledge'
       || question.category?.toLocaleLowerCase() === topic.toLocaleLowerCase()
-    )).length
-    matchingQuestionCount += available
+    ))
+    const available = matching.length
+    matching.forEach(question => matchingIds.add(question.id))
     if (available < required) shortages.push({ topic, available, required })
   })
+  if (matchingIds.size < questionCount && shortages.length === 0) {
+    shortages.push({ topic: null, available: matchingIds.size, required: questionCount })
+  }
 
   return {
     canBuild: shortages.length === 0,
-    matchingQuestionCount,
+    matchingQuestionCount: matchingIds.size,
     shortages,
   }
 }
@@ -298,7 +302,11 @@ export function buildAutoQuizPlan<
   const counts = distributeQuestionCount(questionCount, roundTopics.length)
   const usedIds = new Set<string>()
 
-  const rounds = roundTopics.map((topic, roundIndex) => {
+  // Reserve constrained categories before mixed rounds, retaining display order.
+  const allocationOrder = roundTopics.map((topic, roundIndex) => ({ topic, roundIndex }))
+    .sort((a, b) => Number(a.topic === null || a.topic.toLocaleLowerCase() === 'general knowledge')
+      - Number(b.topic === null || b.topic.toLocaleLowerCase() === 'general knowledge'))
+  const allocated = allocationOrder.map(({ topic, roundIndex }) => {
     const needed = counts[roundIndex]
     const candidates = eligibleQuestions.filter(question => (
       !usedIds.has(question.id)
@@ -317,10 +325,13 @@ export function buildAutoQuizPlan<
     const selected = candidates.slice(0, needed)
     selected.forEach(question => usedIds.add(question.id))
     return {
+      roundIndex,
       title: topic ?? `Round ${roundIndex + 1}`,
       questions: selected,
     }
   })
+  const rounds = allocated.sort((a, b) => a.roundIndex - b.roundIndex)
+    .map(({ title, questions }) => ({ title, questions }))
 
   return {
     rounds,

@@ -12,8 +12,9 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import QRCode from "qrcode";
+import { serverNow, useServerClock } from '@/lib/trivia/use-server-clock';
 import { supabase } from "@/lib/supabase/client";
-import { allocateTemplateQuestions } from '@/lib/trivia/template-allocation';
+import { allocateTemplateQuestions, allocateTemplateRoundTopics } from '@/lib/trivia/template-allocation';
 import { speedScoringEnabled, speedClock, speedAward, type ScoringMode } from '@/lib/trivia/speed-scoring';
 import QuestionsArea from "@/components/host/QuestionsArea";
 import BuilderQuestionPicker, { type PickerSourceQuestion } from "@/components/host/BuilderQuestionPicker";
@@ -28,6 +29,7 @@ import type { Database, Json, QuestionType } from "@/lib/supabase/database.types
 import {
   asStringArray,
   gradingPoints,
+  markPendingGradingIncorrect,
   multiAnswerMissing,
   parseStoredAnswer,
   questionOptions,
@@ -114,6 +116,7 @@ import {
   autoRunAnswerSeconds,
   autoRunClockColor,
   autoRunClockLabel,
+  restoreAutoRunClock,
   autoRunModeFromSettings,
   autoRunScaledSeconds,
   autoRunSpeedFromSettings,
@@ -375,9 +378,12 @@ function useHostKeyboardShortcuts(enabled: boolean) {
         : null
       const mayAdvanceFromReviewControl = focusedReviewControl
         && hostSpaceOverridesFocusedReviewControl(event.key, event.code)
+      const mayNavigateFromNavigationControl = eventTarget instanceof Element
+        && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
+        && eventTarget.closest('[data-host-navigation]')
       if (eventTarget instanceof Element
         && eventTarget.closest('input, textarea, select, button, a, [contenteditable="true"], [role="button"]')
-        && !mayAdvanceFromReviewControl) return
+        && !mayAdvanceFromReviewControl && !mayNavigateFromNavigationControl) return
       if (document.querySelector('[data-host-shortcuts="blocked"]')) return
 
       const action = document.querySelector<HTMLButtonElement>(`button[data-host-navigation="${navigation}"]:not(:disabled)`)
@@ -1712,38 +1718,37 @@ function Dashboard({ go }: { go: Go }) {
   }
 
   async function deleteFolder(folder: QuizFolder) {
-    if (folderBusy) return
+    if (folderBusy || folderOrderBusyRef.current) return
+    folderOrderBusyRef.current = true
     setFolderBusy(true)
     setLoadError(null)
-    const { error } = await supabase.from('quiz_folders').delete().eq('id', folder.id)
-    if (error) {
+    try {
+      const { error } = await supabase.from('quiz_folders').delete().eq('id', folder.id)
+      if (error) throw error
+      setFolders(current => current.filter(item => item.id !== folder.id))
+      setQuizzes(current => current.map(quiz => quiz.folder_id === folder.id ? { ...quiz, folder_id: null } : quiz))
+      setPendingFolderDelete(null)
+      setActionNotice(`Deleted “${folder.name}”. Its quizzes are now Unfiled.`)
+    } catch (error) {
       console.error('Could not delete quiz folder:', error)
       setLoadError('Could not delete that folder. Please try again.')
-      setFolderBusy(false)
-      return
-    }
-
-    setFolders(current => current.filter(item => item.id !== folder.id))
-    setQuizzes(current => current.map(quiz => quiz.folder_id === folder.id ? { ...quiz, folder_id: null } : quiz))
-    setPendingFolderDelete(null)
-    setFolderBusy(false)
-    setActionNotice(`Deleted “${folder.name}”. Its quizzes are now Unfiled.`)
+    } finally { folderOrderBusyRef.current = false; setFolderBusy(false) }
   }
 
   async function moveQuizToFolder(quizId: string, folderId: string | null) {
     const quiz = quizzes.find(item => item.id === quizId)
-    if (!quiz || quiz.folder_id === folderId || movingQuizId) return
+    if (!quiz || quiz.folder_id === folderId || movingQuizId || folderOrderBusyRef.current || folderBusy) return
+    folderOrderBusyRef.current = true
     setMovingQuizId(quizId)
     setLoadError(null)
-    const { error } = await supabase.from('quizzes').update({ folder_id: folderId }).eq('id', quizId)
-    if (error) {
+    try {
+      const { data, error } = await supabase.from('quizzes').update({ folder_id: folderId }).eq('id', quizId).select('folder_id').single()
+      if (error || !data) throw error ?? new Error('Quiz no longer exists')
+      setQuizzes(current => current.map(item => item.id === quizId ? { ...item, folder_id: data.folder_id } : item))
+    } catch (error) {
       console.error('Could not move quiz:', error)
-      setLoadError('Could not move that quiz. Please try again.')
-      setMovingQuizId(null)
-      return
-    }
-    setQuizzes(current => current.map(item => item.id === quizId ? { ...item, folder_id: folderId } : item))
-    setMovingQuizId(null)
+      setLoadError('Could not move that quiz. Its destination may have been removed. Please refresh and try again.')
+    } finally { folderOrderBusyRef.current = false; setMovingQuizId(null) }
   }
 
   async function reorderFolder(folderId: string, targetId: string | null) {
@@ -1794,7 +1799,8 @@ function Dashboard({ go }: { go: Go }) {
       const next = new Set(current)
       if (next.has(folderId)) next.delete(folderId)
       else next.add(folderId)
-      localStorage.setItem(COLLAPSED_QUIZ_FOLDERS_KEY, JSON.stringify([...next]))
+      try { localStorage.setItem(COLLAPSED_QUIZ_FOLDERS_KEY, JSON.stringify([...next])) }
+      catch { /* Collapsing folders must work even when persistence is unavailable. */ }
       return next
     })
   }
@@ -1864,73 +1870,18 @@ function Dashboard({ go }: { go: Go }) {
     setDuplicatingQuizId(quiz.id)
     setLoadError(null)
     setActionNotice(null)
-
-    const [questionResult, contentScreenResult, tiebreakerResult, showGameResult] = await Promise.all([
-      supabase
-        .from('quiz_questions')
-        .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, tags, image_url, points_max, bonus, metadata_snapshot, notes, source_question_id, source_revision')
-        .eq('quiz_id', quiz.id)
-        .order('position', { ascending: true }),
-      supabase
-        .from('quiz_content_screens')
-        .select('screen_key, item_position, round_number, round_title, title, body, image_url')
-        .eq('quiz_id', quiz.id)
-        .order('item_position', { ascending: true }),
-      supabase
-        .from('quiz_tiebreakers')
-        .select('tiebreaker_key, position, prompt, correct_value, answer_unit, notes')
-        .eq('quiz_id', quiz.id)
-        .order('position', { ascending: true }),
-      supabase
-        .from('quiz_show_games')
-        .select('show_game_key, item_position, round_number, round_title, game_type, title, settings')
-        .eq('quiz_id', quiz.id)
-        .order('item_position', { ascending: true }),
-    ])
-
-    const snapshotError = questionResult.error || contentScreenResult.error || tiebreakerResult.error || showGameResult.error
-    if (snapshotError) {
-      console.error('Could not load quiz snapshots for duplication:', snapshotError)
+    try {
+      const copyTitle = nextQuizCopyTitle(quiz.title, quizzes.map(item => item.title))
+      const { data, error } = await supabase.rpc('duplicate_owned_quiz', { p_quiz_id: quiz.id, p_title: copyTitle })
+      if (error || !data) throw error ?? new Error('No copied quiz returned')
+      setQuizzes(current => [data as QuizSummary, ...current.filter(item => item.id !== data.id)])
+      setActionNotice(quiz.folder_id && !data.folder_id
+        ? `Created “${copyTitle}” in Unfiled because its folder was removed.`
+        : `Created “${copyTitle}”.`)
+    } catch (error) {
+      console.error('Could not duplicate quiz:', error)
       setLoadError('Could not copy that quiz. Please try again.')
-      setDuplicatingQuizId(null)
-      return
-    }
-
-    const copyTitle = nextQuizCopyTitle(quiz.title, quizzes.map(item => item.title))
-    const { data: copiedQuizId, error: copyError } = await supabase.rpc('save_quiz_with_show_games', {
-      p_quiz_id: null,
-      p_title: copyTitle,
-      p_status: quiz.status,
-      p_estimated_minutes: quiz.estimated_minutes,
-      p_questions: (questionResult.data ?? []) as Json,
-      p_content_screens: (contentScreenResult.data ?? []) as Json,
-      p_tiebreakers: (tiebreakerResult.data ?? []) as Json,
-      p_show_games: (showGameResult.data ?? []) as Json,
-    })
-
-    if (copyError || !copiedQuizId) {
-      console.error('Could not duplicate quiz:', copyError)
-      setLoadError('Could not copy that quiz. Please try again.')
-      setDuplicatingQuizId(null)
-      return
-    }
-
-    if (quiz.folder_id) {
-      const { error: folderError } = await supabase.from('quizzes').update({ folder_id: quiz.folder_id }).eq('id', copiedQuizId)
-      if (folderError) {
-        console.error('Could not preserve copied quiz folder:', folderError)
-      }
-    }
-
-    const createdAt = new Date().toISOString()
-    setQuizzes(current => [{
-      ...quiz,
-      id: copiedQuizId,
-      title: copyTitle,
-      updated_at: createdAt,
-    }, ...current])
-    setDuplicatingQuizId(null)
-    setActionNotice(`Created “${copyTitle}”.`)
+    } finally { setDuplicatingQuizId(null) }
   }
 
   async function openQuizShare(quiz: QuizSummary) {
@@ -2025,7 +1976,10 @@ function Dashboard({ go }: { go: Go }) {
         .eq('id', copiedQuizId)
         .maybeSingle()
 
-      if (copiedQuizError) console.error('Could not immediately load claimed quiz:', copiedQuizError)
+      if (copiedQuizError || !copiedQuiz) {
+        setIncomingShareError('Your copy was saved, but could not be loaded yet. Try again to retrieve the same copy—this will not create a duplicate.')
+        return
+      }
       if (copiedQuiz) {
         setQuizzes(current => [copiedQuiz as QuizSummary, ...current.filter(quiz => quiz.id !== copiedQuiz.id)])
       }
@@ -2508,10 +2462,13 @@ async function templateStructureFromSource(sourceQuizId: string): Promise<Templa
 }
 
 async function loadTemplateStructure(template: QuizTemplateRow) {
-  return templateStructureFromJson(template.structure) ?? templateStructureFromSource(template.source_quiz_id)
+  const structure = templateStructureFromJson(template.structure)
+  if (structure) return structure
+  if (!template.source_quiz_id) throw new Error('This template has no saved structure or source quiz.')
+  return templateStructureFromSource(template.source_quiz_id)
 }
 
-async function buildQuizFromTemplate(template: QuizTemplateRow, roundTopicMode: TemplateRoundTopicMode = 'none') {
+async function buildQuizFromTemplate(template: QuizTemplateRow, roundTopicMode: TemplateRoundTopicMode = 'keep') {
   const [structure, libraryResult, tiebreakerLibraryResult] = await Promise.all([
     loadTemplateStructure(template),
     loadAllSourceRows<PickerSourceQuestion>(async (from, to) => await supabase.from('source_question_catalog').select('*').eq('origin', 'platform').eq('status', 'active').eq('is_verified', true).order('id').range(from, to)),
@@ -2522,30 +2479,17 @@ async function buildQuizFromTemplate(template: QuizTemplateRow, roundTopicMode: 
   const library = (libraryResult.data ?? []) as PickerSourceQuestion[]
   const used = new Set(structure.questions.map(question => question.source_question_id).filter(Boolean))
   const roundTopics = new Map<number, string | null>()
-  const alreadyRandomizedTopics = new Set<string>()
-  for (const round of structure.rounds) {
-    if (roundTopicMode === 'keep') {
-      roundTopics.set(round.number, recognizedTemplateRoundTopic(round.title))
-      continue
-    }
-    if (roundTopicMode !== 'random') {
-      roundTopics.set(round.number, null)
-      continue
-    }
-    const originalTopic = recognizedTemplateRoundTopic(round.title)
-    const roundQuestions = structure.questions.filter(question => question.round_number === round.number)
-    const allFeasibleTopics = TEMPLATE_ROUND_TOPICS.filter(topic => {
-      if (topic === originalTopic) return false
-      const matching = library.filter(candidate => !used.has(candidate.id) && templateQuestionMatchesTopic(candidate, topic))
-      return allocateTemplateQuestions(roundQuestions, matching, (question, candidate) => question.question_type === 'any' || candidate.question_type === question.question_type) !== null
-    })
-    const unusedFeasibleTopics = allFeasibleTopics.filter(topic => !alreadyRandomizedTopics.has(topic))
-    const candidateTopics = unusedFeasibleTopics.length > 0 ? unusedFeasibleTopics : allFeasibleTopics
-    if (candidateTopics.length === 0) throw new Error(`The Question Library does not have another viable topic for ${round.title}.`)
-    const randomValue = crypto.getRandomValues(new Uint32Array(1))[0]
-    const selectedTopic = candidateTopics[randomValue % candidateTopics.length]
-    roundTopics.set(round.number, selectedTopic)
-    alreadyRandomizedTopics.add(selectedTopic)
+  if (roundTopicMode === 'random') {
+    const topics = allocateTemplateRoundTopics(
+      structure.rounds.map(round => ({ number: round.number, topics: TEMPLATE_ROUND_TOPICS.filter(topic => topic !== recognizedTemplateRoundTopic(round.title)) })),
+      structure.questions, library.filter(candidate => !used.has(candidate.id)),
+      (slot, candidate) => slot.question_type === 'any' || candidate.question_type === slot.question_type,
+      templateQuestionMatchesTopic,
+    )
+    if (!topics) throw new Error('The Question Library cannot fill all rounds with different topics. Try keeping the existing topics or relaxing the question types.')
+    for (const [round, topic] of topics) roundTopics.set(round, topic)
+  } else {
+    for (const round of structure.rounds) roundTopics.set(round.number, roundTopicMode === 'keep' ? recognizedTemplateRoundTopic(round.title) : null)
   }
   const replacements: Json[] = []
   const sources = allocateTemplateQuestions(structure.questions, library.filter(candidate => !used.has(candidate.id)),
@@ -2640,10 +2584,22 @@ async function buildQuizFromTemplate(template: QuizTemplateRow, roundTopicMode: 
   }))
 
   const nextTitle = `${template.name} · ${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}`
+  const readiness = checkQuizReadiness({
+    title: nextTitle,
+    rounds: structure.rounds.map(round => ({
+      questionCount: structure.questions.filter(item => item.round_number === round.number).length,
+      contentScreenTitles: replacementContentScreens.filter(item => item.round_number === round.number).map(item => item.title),
+      pointGameCount: replacementShowGames.filter(item => {
+        const reward = showGameRewardFromSettings(item.settings)
+        return item.round_number === round.number && item.game_type !== 'in-show-tiebreaker' && reward.type === 'points' && reward.points > 0
+      }).length,
+    })),
+    tiebreakers: replacementTiebreakers.map(item => ({ prompt: item.prompt, correctValue: String(item.correct_value) })),
+  })
   const { data: quizId, error: saveError } = await supabase.rpc('save_quiz_with_show_games', {
     p_quiz_id: null,
     p_title: nextTitle,
-    p_status: structure.status,
+    p_status: quizStatusFromReadiness(readiness),
     p_estimated_minutes: structure.estimatedMinutes,
     p_questions: replacements,
     p_content_screens: replacementContentScreens as unknown as Json,
@@ -2693,7 +2649,7 @@ function TemplatesScreen({ go }: { go: Go }) {
       const rows = templateResult.data ?? []
       setTemplates(rows)
       if (rows.length > 0) {
-        const quizResult = await supabase.from('quizzes').select('id,title,round_count,question_count,estimated_minutes').in('id', rows.map(row => row.source_quiz_id))
+        const quizResult = await supabase.from('quizzes').select('id,title,round_count,question_count,estimated_minutes').in('id', rows.map(row => row.source_quiz_id).filter((id): id is string => Boolean(id)))
         if (!active) return
         if (!quizResult.error) setQuizDetails(Object.fromEntries((quizResult.data ?? []).map(quiz => [quiz.id, quiz])))
       }
@@ -2881,12 +2837,12 @@ function TemplatesScreen({ go }: { go: Go }) {
     }
     const { data, error: saveError } = await supabase
       .from('quiz_templates')
-      .upsert({ name, source_quiz_id: quiz.id, structure: structure as unknown as Json, updated_at: new Date().toISOString() }, { onConflict: 'owner_id,name' })
+      .insert({ name, source_quiz_id: quiz.id, structure: structure as unknown as Json, updated_at: new Date().toISOString() })
       .select('*')
       .single()
     if (saveError || !data) {
       console.error('Could not save quiz as template:', saveError)
-      setError('Could not save that quiz as a template. Please try again.')
+      setError(saveError?.code === '23505' ? 'A template with that name already exists. Choose a different name.' : 'Could not save that quiz as a template. Please try again.')
     } else {
       setTemplates(current => [data, ...current.filter(item => item.id !== data.id)])
       setQuizDetails(current => ({ ...current, [quiz.id]: quiz }))
@@ -2917,7 +2873,7 @@ function TemplatesScreen({ go }: { go: Go }) {
           <Btn cls="mt-6" onClick={() => void openQuizPicker()}>Choose a Quiz</Btn>
         </div>
       ) : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{templates.map(template => {
-        const quiz = quizDetails[template.source_quiz_id]
+        const quiz = template.source_quiz_id ? quizDetails[template.source_quiz_id] : undefined
         const savedStructure = templateStructureFromJson(template.structure)
         const roundCount = savedStructure?.rounds.length ?? quiz?.round_count
         const questionCount = savedStructure?.questions.length ?? quiz?.question_count
@@ -2992,6 +2948,7 @@ function TemplatesScreen({ go }: { go: Go }) {
       structure={templateDraft}
       loading={templateEditorLoading}
       saving={busyId === editingTemplate.id}
+      error={error}
       onClose={() => { setEditingTemplate(null); setTemplateDraft(null) }}
       onSave={structure => void saveTemplateDraft(structure)}
     />}
@@ -3005,11 +2962,12 @@ function templateQuestionTypeLabel(type: string) {
   return type === 'any' ? 'Any question type' : questionTypeLabel(type)
 }
 
-function TemplateStructureEditor({ template, structure, loading, saving, onClose, onSave }: {
+function TemplateStructureEditor({ template, structure, loading, saving, error, onClose, onSave }: {
   template: QuizTemplateRow
   structure: TemplateStructure | null
   loading: boolean
   saving: boolean
+  error: string | null
   onClose: () => void
   onSave: (structure: TemplateStructure) => void
 }) {
@@ -3027,27 +2985,29 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
     return [...current.questions.map(item => item.item_position), ...current.contentScreens.map(item => item.item_position), ...current.showGames.map(item => item.item_position)]
   }
 
-  function moveItemBefore(roundNumber: number, key: string, targetKey: string) {
+  function moveItemBefore(roundNumber: number, key: string, targetKey: string | null) {
     setDraft(current => {
       if (!current) return current
       const items = [
-        ...current.questions.filter(item => item.round_number === roundNumber).map(item => ({ kind: 'question' as const, key: item.question_key, position: item.item_position })),
-        ...current.contentScreens.filter(item => item.round_number === roundNumber).map(item => ({ kind: 'content' as const, key: item.screen_key, position: item.item_position })),
-        ...current.showGames.filter(item => item.round_number === roundNumber).map(item => ({ kind: 'game' as const, key: item.show_game_key, position: item.item_position })),
-      ].sort((left, right) => left.position - right.position)
-      const keys = items.map(item => `${item.kind}:${item.key}`)
-      const fromIndex = keys.indexOf(key)
-      const targetIndex = keys.indexOf(targetKey)
-      if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex) return current
-      const reordered = [...keys]
-      const [moved] = reordered.splice(fromIndex, 1)
-      reordered.splice(targetIndex, 0, moved)
-      const positionByKey = new Map(reordered.map((itemKey, index) => [itemKey, items[index]?.position ?? index + 1]))
+        ...current.questions.map(item => ({ key: `question:${item.question_key}`, round: item.round_number, position: item.item_position })),
+        ...current.contentScreens.map(item => ({ key: `content:${item.screen_key}`, round: item.round_number, position: item.item_position })),
+        ...current.showGames.map(item => ({ key: `game:${item.show_game_key}`, round: item.round_number, position: item.item_position })),
+      ].sort((left, right) => left.round - right.round || left.position - right.position)
+      const destination = current.rounds.find(round => round.number === roundNumber)
+      const moved = items.find(item => item.key === key)
+      if (!moved || !destination || key === targetKey) return current
+      const reordered = items.filter(item => item.key !== key)
+      let index = targetKey === null ? reordered.findIndex(item => item.round > roundNumber) : reordered.findIndex(item => item.key === targetKey && item.round === roundNumber)
+      if (targetKey !== null && index < 0) return current
+      if (index < 0) index = reordered.length
+      reordered.splice(index, 0, { ...moved, round: roundNumber })
+      const positionByKey = new Map(reordered.map((item, index) => [item.key, index + 1]))
+      const movedFields = (itemKey: string) => itemKey === key ? { round_number: roundNumber, round_title: destination.title } : {}
       return {
         ...current,
-        questions: current.questions.map(item => item.round_number === roundNumber ? { ...item, item_position: positionByKey.get(`question:${item.question_key}`) ?? item.item_position } : item),
-        contentScreens: current.contentScreens.map(item => item.round_number === roundNumber ? { ...item, item_position: positionByKey.get(`content:${item.screen_key}`) ?? item.item_position } : item),
-        showGames: current.showGames.map(item => item.round_number === roundNumber ? { ...item, item_position: positionByKey.get(`game:${item.show_game_key}`) ?? item.item_position } : item),
+        questions: current.questions.map(item => ({ ...item, ...movedFields(`question:${item.question_key}`), item_position: positionByKey.get(`question:${item.question_key}`)! })),
+        contentScreens: current.contentScreens.map(item => ({ ...item, ...movedFields(`content:${item.screen_key}`), item_position: positionByKey.get(`content:${item.screen_key}`)! })),
+        showGames: current.showGames.map(item => ({ ...item, ...movedFields(`game:${item.show_game_key}`), item_position: positionByKey.get(`game:${item.show_game_key}`)! })),
       }
     })
   }
@@ -3160,7 +3120,11 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
   }
 
   function addRound() {
-    setDraft(current => current ? { ...current, rounds: [...current.rounds, { number: current.rounds.length + 1, title: `Round ${current.rounds.length + 1}` }] } : current)
+    setDraft(current => {
+      if (!current) return current
+      const number = Math.max(0, ...current.rounds.map(round => round.number)) + 1
+      return { ...current, rounds: [...current.rounds, { number, title: `Round ${number}` }] }
+    })
   }
 
   function deleteRound(roundNumber: number) {
@@ -3176,13 +3140,17 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
 
   if (!draft || loading) return <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 p-4"><div className="rounded-2xl bg-white px-8 py-7 text-sm font-semibold text-zinc-500">Loading template editor…</div></div>
 
-  return <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-3" onMouseDown={event => { if (event.currentTarget === event.target && !saving) onClose() }}>
+  const requestClose = () => {
+    if (!saving && (JSON.stringify(draft) === JSON.stringify(structure) || window.confirm('Discard your unsaved template changes?'))) onClose()
+  }
+  return <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-3" onMouseDown={event => { if (event.currentTarget === event.target) requestClose() }}>
     <section className="flex max-h-[94dvh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
       <header style={{ borderBottom: `1px solid ${C.line}` }} className="flex shrink-0 items-center gap-4 px-6 py-4">
         <div className="min-w-0 flex-1"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Template editor</p><h2 style={{ color: C.ink }} className="truncate text-2xl font-extrabold">{template.name}</h2><p style={{ color: C.sub }} className="mt-1 text-xs">Question slots receive fresh random library questions when this template is used.</p></div>
-        <Btn v="secondary" sz="sm" disabled={saving} onClick={onClose}>Cancel</Btn>
+        <Btn v="secondary" sz="sm" disabled={saving} onClick={requestClose}>Cancel</Btn>
         <Btn sz="sm" disabled={saving || draft.rounds.length === 0} onClick={() => onSave(draft)}>{saving ? 'Saving…' : 'Save Template'}</Btn>
       </header>
+      {error && <p role="alert" className="shrink-0 border-b border-red-200 bg-red-50 px-6 py-3 text-sm text-red-700">{error}</p>}
       <div style={{ background: C.ground }} className="flex-1 overflow-y-auto px-5 py-5">
         <div className="mx-auto max-w-5xl space-y-4">
           {draft.rounds.map(round => {
@@ -3191,12 +3159,12 @@ function TemplateStructureEditor({ template, structure, loading, saving, onClose
               ...draft.contentScreens.filter(item => item.round_number === round.number).map(item => ({ kind: 'content' as const, key: `content:${item.screen_key}`, position: item.item_position, item })),
               ...draft.showGames.filter(item => item.round_number === round.number).map(item => ({ kind: 'game' as const, key: `game:${item.show_game_key}`, position: item.item_position, item })),
             ].sort((left, right) => left.position - right.position)
-            return <section key={round.number} onDragOver={event => { if (draggedRound !== null && draggedRound !== round.number) event.preventDefault() }} onDrop={event => { event.preventDefault(); if (draggedRound !== null) moveRoundBefore(draggedRound, round.number); setDraggedRound(null) }} style={{ borderColor: C.line, background: C.panel }} className={`overflow-hidden rounded-2xl border shadow-sm transition-opacity ${draggedRound === round.number ? 'opacity-60' : ''}`}>
+            return <section key={round.number} onDragOver={event => { if (draggedItem || (draggedRound !== null && draggedRound !== round.number)) event.preventDefault() }} onDrop={event => { event.preventDefault(); if (draggedItem) moveItemBefore(round.number, draggedItem.key, null); else if (draggedRound !== null) moveRoundBefore(draggedRound, round.number); setDraggedItem(null); setDraggedRound(null) }} style={{ borderColor: C.line, background: C.panel }} className={`overflow-hidden rounded-2xl border shadow-sm transition-opacity ${draggedRound === round.number ? 'opacity-60' : ''}`}>
               <div style={{ borderBottom: `1px solid ${C.line}`, background: C.ground }} className="flex items-center gap-3 px-4 py-3"><button type="button" draggable onDragStart={event => { setDraggedRound(round.number); event.dataTransfer.effectAllowed = 'move' }} onDragEnd={() => setDraggedRound(null)} aria-label={`Drag Round ${round.number}`} title="Drag to reorder round" className="cursor-grab touch-none text-zinc-400 active:cursor-grabbing"><I.grip /></button><span style={{ color: C.sub }} className="shrink-0 text-[10px] font-black uppercase tracking-widest">Round {round.number}</span><input aria-label={`Round ${round.number} title`} value={round.title} onChange={event => setDraft(current => current ? { ...current, rounds: current.rounds.map(item => item.number === round.number ? { ...item, title: event.target.value } : item) } : current)} className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-bold text-zinc-900" /><button type="button" disabled={draft.rounds.length <= 1} onClick={() => deleteRound(round.number)} className="rounded-lg px-2 py-1 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-30">Delete round</button></div>
               <div className="space-y-2 p-4">{items.map(entry => {
                 const isTiebreakerSlot = entry.kind === 'game' && isTiebreakerLibraryShowGame(entry.item.game_type)
                 const isLibrarySlot = entry.kind === 'question' || isTiebreakerSlot
-                return <div key={entry.key} onDragOver={event => { if (draggedItem?.roundNumber === round.number && draggedItem.key !== entry.key) { event.preventDefault(); event.stopPropagation() } }} onDrop={event => { if (draggedItem?.roundNumber !== round.number) return; event.preventDefault(); event.stopPropagation(); moveItemBefore(round.number, draggedItem.key, entry.key); setDraggedItem(null) }} style={isLibrarySlot ? { borderColor: '#C4A7FF', borderLeftWidth: 4, background: C.panel } : { borderColor: C.line, background: C.panel }} className={`flex items-start gap-3 rounded-xl border px-3 py-3 transition-opacity ${draggedItem?.key === entry.key ? 'opacity-60' : ''}`}>
+                return <div key={entry.key} onDragOver={event => { if (draggedItem && draggedItem.key !== entry.key) { event.preventDefault(); event.stopPropagation() } }} onDrop={event => { if (!draggedItem) return; event.preventDefault(); event.stopPropagation(); moveItemBefore(round.number, draggedItem.key, entry.key); setDraggedItem(null) }} style={isLibrarySlot ? { borderColor: '#C4A7FF', borderLeftWidth: 4, background: C.panel } : { borderColor: C.line, background: C.panel }} className={`flex items-start gap-3 rounded-xl border px-3 py-3 transition-opacity ${draggedItem?.key === entry.key ? 'opacity-60' : ''}`}>
                 <button type="button" draggable onDragStart={event => { event.stopPropagation(); setDraggedItem({ roundNumber: round.number, key: entry.key }); event.dataTransfer.effectAllowed = 'move' }} onDragEnd={() => setDraggedItem(null)} aria-label="Drag template item" title="Drag to reorder" className="mt-1 shrink-0 cursor-grab touch-none text-zinc-400 active:cursor-grabbing"><I.grip /></button>
                 <div className="min-w-0 flex-1">{entry.kind === 'question' ? <div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">Question Library</span><span style={{ color: C.violet }} className="font-extrabold">Question will be here</span><select aria-label="Replacement question type" value={entry.item.question_type} onChange={event => setDraft(current => current ? { ...current, questions: current.questions.map(item => item.question_key === entry.item.question_key ? { ...item, question_type: event.target.value, source_question_id: null } : item) } : current)} className="rounded-lg border border-violet-200 bg-white px-2 py-1 text-xs font-semibold text-violet-800">{TEMPLATE_QUESTION_TYPES.map(type => <option key={type} value={type}>{templateQuestionTypeLabel(type)}</option>)}</select><span style={{ color: C.sub }} className="text-xs">Fresh random replacement</span></div> : entry.kind === 'content' ? <div className="space-y-2"><p style={{ color: C.violet }} className="text-[10px] font-black uppercase tracking-widest">Content screen</p><input value={entry.item.title} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, title: event.target.value } : item) } : current)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-bold text-zinc-900" /><textarea value={entry.item.body} onChange={event => setDraft(current => current ? { ...current, contentScreens: current.contentScreens.map(item => item.screen_key === entry.item.screen_key ? { ...item, body: event.target.value } : item) } : current)} placeholder="Content shown to players" rows={2} className="w-full resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-700" /></div> : isTiebreakerSlot ? <div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">Tiebreaker Library</span><span style={{ color: C.violet }} className="font-extrabold">Tiebreaker will be here</span><span style={{ color: C.sub }} className="text-xs">Fresh random replacement · {showGameLabel(entry.item.game_type as ShowGameType)}</span></div> : <div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">Game</span><select value={entry.item.game_type} disabled={!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType)} onChange={event => { const type = event.target.value as ShowGameType; setDraft(current => current ? { ...current, showGames: current.showGames.map(item => item.show_game_key === entry.item.show_game_key ? { ...item, game_type: type, title: showGameLabel(type) } : item) } : current) }} className="rounded-lg border border-zinc-200 px-2 py-1 text-sm font-bold text-zinc-800">{TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) ? TEMPLATE_EDITOR_GAME_TYPES.map(type => <option key={type} value={type}>{showGameLabel(type)}</option>) : <option value={entry.item.game_type}>{entry.item.title}</option>}</select>{!TEMPLATE_EDITOR_GAME_TYPES.includes(entry.item.game_type as ShowGameType) && <span style={{ color: C.sub }} className="text-xs">Configure this special game in a quiz before saving it as a template.</span>}</div>}</div>
                 <button type="button" aria-label="Delete template item" onClick={() => deleteItem(entry.key)} className="shrink-0 rounded-lg px-2 py-1 text-sm font-bold text-red-600 hover:bg-red-50">Delete</button>
@@ -3555,7 +3523,7 @@ function sourceToBuilderQuestion(source: PickerSourceQuestion): BuilderQuestionD
     options: source.options,
     tags: [...source.tag_names],
     imageUrl: source.image_url,
-    pointsMax: source.question_type === 'ranking' ? 1 : Array.isArray(source.correct_answer) ? Math.max(1, source.correct_answer.length) : 1,
+    pointsMax: source.scoring_mode === 'all-or-nothing' || (source.question_type === 'ranking' && source.origin !== 'user') ? 1 : Array.isArray(source.correct_answer) ? Math.max(1, source.correct_answer.length) : 1,
     bonus: source.bonus,
     metadataSnapshot: {
       audience_suitability: source.audience_suitability,
@@ -3618,10 +3586,16 @@ function QuizBuilder({ go }: { go: Go }) {
   const [discarding, setDiscarding] = useState(false)
   const [deletingQuiz, setDeletingQuiz] = useState(false)
   const [savingTemplate, setSavingTemplate] = useState(false)
-  const [dirty, setDirty] = useState(false)
+  const [dirty, setDirtyState] = useState(false)
+  const editRevisionRef = useRef(0)
+  function setDirty(value: boolean) {
+    if (value) editRevisionRef.current += 1
+    setDirtyState(value)
+  }
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
   const [editingTiebreakerId, setEditingTiebreakerId] = useState<string | null>(null)
   const [newQuestionTarget, setNewQuestionTarget] = useState<{ roundId: number; itemPosition: number } | null>(null)
+  const newSourceOperationRef = useRef<{ target: typeof newQuestionTarget; id: string } | null>(null)
   const [addMenuTarget, setAddMenuTarget] = useState<{ roundId: number; itemPosition: number } | null>(null)
   const [picker, setPicker] = useState<{ roundId: number; itemPosition: number; origin: 'user' | 'platform' } | null>(null)
   const [addTiebreakerTarget, setAddTiebreakerTarget] = useState<{ mode: 'in-show'; roundId: number; itemPosition: number } | { mode: 'backup' } | null>(null)
@@ -3854,8 +3828,8 @@ function QuizBuilder({ go }: { go: Go }) {
           audienceQuestionCorrectNumber: audienceQuestion.correctNumber === null ? '' : String(audienceQuestion.correctNumber),
           audienceQuestionAllowMultipleWinners: audienceQuestion.allowMultipleWinners,
           audienceQuestionShareResponses: audienceQuestion.shareResponses,
-          tiebreakerAnswerUnit: typeof showGameSettings.tiebreaker_answer_unit === 'string' ? showGameSettings.tiebreaker_answer_unit : '',
-          tiebreakerNotes: typeof showGameSettings.tiebreaker_notes === 'string' ? showGameSettings.tiebreaker_notes : '',
+          tiebreakerAnswerUnit: String(showGameSettings.tiebreaker_answer_unit ?? showGameSettings.answer_unit ?? ''),
+          tiebreakerNotes: String(showGameSettings.tiebreaker_notes ?? showGameSettings.notes ?? ''),
           sourceTiebreakerId: typeof showGameSettings.source_tiebreaker_id === 'string' ? showGameSettings.source_tiebreaker_id : null,
         })
         groupedRounds.set(row.round_number, round)
@@ -3923,6 +3897,7 @@ function QuizBuilder({ go }: { go: Go }) {
       ?.questions.find(question => question.id === questionId)
 
     if (!currentQuestion || currentQuestion.sourceOrigin !== 'platform' || !currentQuestion.sourceQuestionId) return
+    const currentSourceId = currentQuestion.sourceQuestionId
 
     setReplacingLibraryQuestionId(questionId)
     setReplacementError(null)
@@ -3930,14 +3905,15 @@ function QuizBuilder({ go }: { go: Go }) {
     const mechanic = currentQuestion.questionType === 'image-question'
       ? 'single-answer'
       : currentQuestion.questionType
-    const { data, error } = await supabase
+    const { data, error } = await loadAllSourceRows<PickerSourceQuestion>(async (from, to) => await supabase
       .from('source_question_catalog')
       .select('*')
       .eq('origin', 'platform')
       .eq('status', 'active')
+      .eq('is_verified', true)
       .eq('mechanic', mechanic)
-      .neq('id', currentQuestion.sourceQuestionId)
-      .range(0, 199)
+      .neq('id', currentSourceId)
+      .order('id').range(from, to))
 
     if (error) {
       console.error('Could not replace library question:', error)
@@ -4012,16 +3988,23 @@ function QuizBuilder({ go }: { go: Go }) {
   async function replaceRoundTopic(roundId: number, topic: string) {
     const currentRound = rounds.find(round => round.id === roundId)
     if (!currentRound || currentRound.questions.length === 0 || roundTopicBusyId !== null) return
+    const editRevision = editRevisionRef.current
     setRoundTopicBusyId(roundId)
     setRoundTopicError(null)
 
-    const { data, error } = await supabase
+    const { data, error } = await loadAllSourceRows<PickerSourceQuestion>(async (from, to) => await supabase
       .from('source_question_catalog')
       .select('*')
       .eq('origin', 'platform')
       .eq('status', 'active')
       .eq('is_verified', true)
-      .range(0, 1999)
+      .order('id').range(from, to))
+
+    if (editRevision !== editRevisionRef.current) {
+      setRoundTopicError('The quiz changed while questions were loading. Please choose the topic again.')
+      setRoundTopicBusyId(null)
+      return
+    }
 
     if (error) {
       console.error('Could not change the round topic:', error)
@@ -4041,6 +4024,7 @@ function QuizBuilder({ go }: { go: Go }) {
     const replacements: BuilderQuestionData[] = []
 
     for (const question of currentRound.questions) {
+      if (question.sourceOrigin !== 'platform') { replacements.push(question); continue }
       const mechanic = question.questionType === 'image-question' ? 'single-answer' : question.questionType
       const candidates = pool.filter(candidate => {
         const candidateMechanic = candidate.question_type === 'image-question' ? 'single-answer' : candidate.question_type
@@ -4061,7 +4045,7 @@ function QuizBuilder({ go }: { go: Go }) {
       const selected = bestCandidates[randomValue % bestCandidates.length]
       selectedIds.add(selected.id)
       const snapshot = sourceToBuilderQuestion(selected)
-      replacements.push({ ...snapshot, id: question.id, questionKey: question.questionKey, itemPosition: question.itemPosition })
+      replacements.push({ ...snapshot, id: question.id, questionKey: question.questionKey, itemPosition: question.itemPosition, pointsMax: question.pointsMax })
     }
 
     setRounds(current => current.map(round => round.id === roundId ? { ...round, title: topic, questions: replacements } : round))
@@ -4077,12 +4061,12 @@ function QuizBuilder({ go }: { go: Go }) {
     setReplacingLibraryTiebreakerId(tiebreakerId)
     setTiebreakerReplacementError(null)
 
-    const { data, error } = await supabase
+    const { data, error } = await loadAllSourceRows<AutoBuildSourceTiebreaker>(async (from, to) => await supabase
       .from('source_tiebreakers')
-      .select('id, prompt, correct_value, answer_unit, notes, primary_category_id, editorial_difficulty')
+      .select('*')
       .eq('status', 'active')
       .eq('is_verified', true)
-      .range(0, 199)
+      .order('id').range(from, to))
 
     if (error) {
       console.error('Could not replace prepared tiebreaker:', error)
@@ -4091,9 +4075,10 @@ function QuizBuilder({ go }: { go: Go }) {
       return
     }
 
-    const usedSourceIds = new Set(tiebreakers
-      .map(tiebreaker => tiebreaker.sourceTiebreakerId)
-      .filter((id): id is string => Boolean(id)))
+    const usedSourceIds = new Set([
+      ...tiebreakers.map(tiebreaker => tiebreaker.sourceTiebreakerId),
+      ...rounds.flatMap(round => round.showGames.map(showGame => showGame.sourceTiebreakerId)),
+    ].filter((id): id is string => Boolean(id)))
     const candidates = availableTiebreakerReplacements(
       data ?? [],
       currentTiebreaker.sourceTiebreakerId,
@@ -4136,12 +4121,12 @@ function QuizBuilder({ go }: { go: Go }) {
 
     setReplacingLibraryTiebreakerId(showGameId)
     setTiebreakerReplacementError(null)
-    const { data, error } = await supabase
+    const { data, error } = await loadAllSourceRows<AutoBuildSourceTiebreaker>(async (from, to) => await supabase
       .from('source_tiebreakers')
-      .select('id, prompt, correct_value, answer_unit, notes, primary_category_id, editorial_difficulty')
+      .select('*')
       .eq('status', 'active')
       .eq('is_verified', true)
-      .range(0, 199)
+      .order('id').range(from, to))
 
     if (error) {
       console.error('Could not replace in-show tiebreaker:', error)
@@ -4235,6 +4220,7 @@ function QuizBuilder({ go }: { go: Go }) {
 
   async function saveQuiz() {
     if (savingRef.current || loading) return null
+    const savedRevision = editRevisionRef.current
     const statusToSave = expectedQuizStatus
     if (!title.trim()) {
       setSaveError('Add a quiz title before saving.')
@@ -4394,14 +4380,17 @@ function QuizBuilder({ go }: { go: Go }) {
       setPersisted(true)
       setNewQuiz(false)
       setQuizStatus(statusToSave)
-      setDirty(false)
-      setSaveNotice(statusToSave === 'ready'
+      const newerEdits = editRevisionRef.current !== savedRevision
+      setDirty(newerEdits)
+      setSaveNotice(newerEdits ? 'Saved the previous version. Your newer changes still need saving.' : statusToSave === 'ready'
         ? 'Saved — this quiz is ready to host.'
         : `Saved as a draft. ${readiness.blockers[0] ?? 'Finish the required quiz content before hosting.'}`)
-      localStorage.setItem('simple-trivia-selected-quiz-id', data)
-      localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
-      localStorage.removeItem('simple-trivia-new-quiz-id')
-      return data
+      try {
+        localStorage.setItem('simple-trivia-selected-quiz-id', data)
+        localStorage.setItem('simple-trivia-selected-quiz-title', title.trim())
+        localStorage.removeItem('simple-trivia-new-quiz-id')
+      } catch { /* The database save succeeded even if browser storage is unavailable. */ }
+      return newerEdits ? null : data
     } catch (error) {
       console.error('Could not save quiz:', error)
       setSaveError('Could not save this quiz. Nothing was partially saved; try again.')
@@ -4504,10 +4493,10 @@ function QuizBuilder({ go }: { go: Go }) {
       setSavingTemplate(false)
       return
     }
-    const { error } = await supabase.from('quiz_templates').upsert({ name, source_quiz_id: quizId, structure: structure as unknown as Json, updated_at: new Date().toISOString() }, { onConflict: 'owner_id,name' })
+    const { error } = await supabase.from('quiz_templates').insert({ name, source_quiz_id: quizId, structure: structure as unknown as Json, updated_at: new Date().toISOString() })
     if (error) {
       console.error('Could not save quiz template:', error)
-      setSaveError('Could not save this template. Please try again.')
+      setSaveError(error.code === '23505' ? 'A template with that name already exists. Choose a different name.' : 'Could not save this template. Please try again.')
     } else setSaveNotice(`Saved “${name}” as a reusable template.`)
     setSavingTemplate(false)
   }
@@ -5098,6 +5087,10 @@ function QuizBuilder({ go }: { go: Go }) {
             const { data: sourceId, error: saveSourceError } = await supabase.rpc('save_my_question_with_inherited_metadata', {
               p_question_id: null,
               p_question: {
+                _operation_id: (() => {
+                  if (newSourceOperationRef.current?.target !== newQuestionTarget) newSourceOperationRef.current = { target: newQuestionTarget, id: crypto.randomUUID() }
+                  return newSourceOperationRef.current!.id
+                })(),
                 question_type: question.questionType,
                 prompt: question.text,
                 correct_answer: question.correctAnswer as Json,
@@ -5109,7 +5102,7 @@ function QuizBuilder({ go }: { go: Go }) {
                 status: 'active',
                 stability: 'stable',
                 scoring_mode: question.questionType === 'multi-answer' || question.questionType === 'multi-part' || question.questionType === 'ranking'
-                  ? 'per-item'
+                  ? question.pointsMax === 1 ? 'all-or-nothing' : 'per-item'
                   : 'fixed',
               },
               p_primary_category_id: primaryCategoryId,
@@ -5759,9 +5752,10 @@ function QuizPreview({ title, rounds, onClose }: {
                   : <div className="text-8xl" aria-hidden="true">{showGameEmoji(active.showGame.gameType)}</div>}
                 <h3 className="mt-5 text-4xl font-black">{active.showGame.title}</h3>
                 <p className="mx-auto mt-4 max-w-lg text-lg text-zinc-300">{showGameInstructions(active.showGame.gameType)}</p>
-                {active.showGame.gameType === 'audience-question' && <div className="mx-auto mt-6 max-w-lg rounded-2xl border border-violet-300/20 bg-white/5 px-5 py-5 text-left">
+                {(active.showGame.gameType === 'audience-question' || isTiebreakerLibraryShowGame(active.showGame.gameType)) && <div className="mx-auto mt-6 max-w-lg rounded-2xl border border-violet-300/20 bg-white/5 px-5 py-5 text-left">
                   <p className="text-xs font-black uppercase tracking-widest text-violet-300">{active.showGame.audienceQuestionMode === 'favourite' ? 'Favourite Answer' : 'Closest Guess'}</p>
                   <p className="mt-3 text-xl font-black">{active.showGame.audienceQuestionPrompt || 'Add your audience prompt'}</p>
+                  {isTiebreakerLibraryShowGame(active.showGame.gameType) && <p className="mt-3 text-sm text-emerald-300">Answer: {active.showGame.audienceQuestionCorrectNumber || 'Not set'} {active.showGame.tiebreakerAnswerUnit}</p>}
                 </div>}
                 {active.showGame.gameType === 'beat-the-bomb' && <><div className="mx-auto mt-7 max-w-xs rounded-2xl bg-violet-600 px-8 py-4 text-xl font-black">CUT THE WIRE</div><p className="mt-4 text-sm text-zinc-400">20-second arming · up to 60-second danger window</p></>}
                 <p className="mx-auto mt-3 max-w-lg rounded-xl border border-violet-300/20 bg-violet-300/10 px-4 py-3 text-sm font-bold text-violet-100">
@@ -5775,8 +5769,14 @@ function QuizPreview({ title, rounds, onClose }: {
               </div>
             ) : (
               <div className="w-full max-w-2xl">
-                {active.question.imageUrl && <div role="img" aria-label="Question image" className="mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.question.imageUrl})` }} />}
+                {active.question.imageUrl && <div role="img" aria-label="Question image" className="mb-6 h-52 w-full rounded-2xl bg-contain bg-no-repeat bg-center" style={{ backgroundImage: `url(${active.question.imageUrl})` }} />}
                 <h3 className="text-center text-3xl font-black leading-tight">{active.question.text}</h3>
+                {(active.question.questionType === 'multiple-choice' || active.question.questionType === 'multi-part') && <div className="mt-5 space-y-3">
+                  {questionOptions(active.question.options).map((option, index) => <div key={index} className="rounded-xl border border-white/15 p-3 text-zinc-200">
+                    <span className="mr-2 font-bold text-violet-300">{option.key ?? option.label ?? String.fromCharCode(65 + index)}.</span>
+                    {active.question.questionType === 'multiple-choice' ? option.label : option.clue}
+                  </div>)}
+                </div>}
                 <div className="mx-auto mt-8 max-w-md rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-5 py-4 text-center">
                   <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">Correct answer</p>
                   <p className="mt-2 text-lg font-bold text-white">{builderCorrectAnswerDisplay(active.question)}</p>
@@ -6597,7 +6597,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
     const loaded = initialAnswers.map((text, index) => ({ text, alts: acceptedGroups[index] ?? [] }))
     return loaded.length > 0 ? loaded : [{ text: '', alts: [] as string[] }]
   })
-  const [scoring, setScoring] = useState<'each' | 'all'>(() => qtype === 'ranking' && question.pointsMax === 1 ? 'all' : 'each')
+  const [scoring, setScoring] = useState<'each' | 'all'>(() => ['ranking', 'multi-part'].includes(qtype) && question.pointsMax === 1 ? 'all' : 'each')
   const [parts, setParts] = useState(() => {
     const loaded = initialOptions.map((option, index) => ({
       label: option.label ?? String.fromCharCode(65 + index),
@@ -6624,6 +6624,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
 
   const applyTypeChange = (next: QType) => {
     setQtype(next)
+    if (next === 'multiple-choice' && qtype !== 'multiple-choice') setCorrectChoice(choiceOptions[0]?.key ?? 'A')
     if (next === 'ranking') setScoring('all')
   }
 
@@ -6674,9 +6675,9 @@ function QuestionEditor({ question, title, onClose, onSave }: {
       pointsMax = Math.max(1, asStringArray(correctAnswer).length)
     } else if (qtype === 'multi-part') {
       correctAnswer = parts.map(part => part.ans.trim())
-      options = parts.map(part => ({ label: part.label, clue: part.text.trim() }))
+      options = parts.map((part, index) => ({ label: String.fromCharCode(65 + index), clue: part.text.trim() }))
       acceptedAnswers = parts.map(part => part.alts.map(value => value.trim()).filter(Boolean))
-      pointsMax = Math.max(1, parts.length)
+      pointsMax = scoring === 'all' ? 1 : Math.max(1, parts.length)
     } else if (qtype === 'ranking') {
       correctAnswer = rankingItems.map(item => item.trim()).filter(Boolean)
       options = correctAnswer
@@ -6688,9 +6689,20 @@ function QuestionEditor({ question, title, onClose, onSave }: {
       setQuestionSaveError('Add the required correct answer content.')
       return
     }
-    if (qtype === 'multiple-choice' && choiceOptions.some(option => !option.label.trim())) {
+    if (qtype === 'multiple-choice' && (choiceOptions.some(option => !option.label.trim()) || !choiceOptions.some(option => option.key === correctChoice))) {
       setQuestionSaveError('Fill every multiple-choice option.')
       return
+    }
+    if (qtype === 'multi-part' && parts.some(part => !part.ans.trim() || !part.text.trim())) {
+      setQuestionSaveError('Add a clue and answer for every part, or remove the empty part.')
+      return
+    }
+    if (qtype === 'ranking') {
+      const items = asStringArray(correctAnswer).map(item => item.normalize('NFKC').trim().toLocaleLowerCase())
+      if (items.length < 2 || new Set(items).size !== items.length) {
+        setQuestionSaveError('Add at least two different ranking items. Each item must be unique.')
+        return
+      }
     }
     const bonusError = validateSourceQuestionBonus(bonus)
     if (bonusError) {
@@ -6895,7 +6907,7 @@ function QuestionEditor({ question, title, onClose, onSave }: {
                             style={{ color: C.ink, border: `1px solid ${C.line}` }}
                             className="flex-1 rounded-lg px-2.5 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30"
                             placeholder="Part description…" />
-                          <button onClick={() => setParts(ps => ps.filter((_, i) => i !== pi))}
+                          <button onClick={() => setParts(ps => ps.filter((_, i) => i !== pi).map((part, index) => ({ ...part, label: String.fromCharCode(65 + index) })))}
                             style={{ color: C.sub }} className="p-1 hover:text-stop transition-colors shrink-0">
                             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M9 3L3 9M3 3l6 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
                           </button>
@@ -7414,8 +7426,9 @@ function AutoBuild({ go }: { go: Go }) {
             settings: {
               ...(showGameRewardSettings({ type: 'custom', points: 0, description: '', winnerMessage: '' }) as Record<string, Json>),
               ...audienceQuestionSettings({ mode: 'closest-number', prompt: tiebreaker.prompt, correctNumber: Number(tiebreaker.correct_value), allowMultipleWinners: false, shareResponses: false }),
-              answer_unit: tiebreaker.answer_unit,
-              notes: tiebreaker.notes,
+              tiebreaker_answer_unit: tiebreaker.answer_unit,
+              tiebreaker_notes: tiebreaker.notes,
+              source_tiebreaker_id: tiebreaker.id,
             },
           })
         }
@@ -7981,6 +7994,7 @@ function ReviewQuestion({ item, idx, onEdit }: {
 // ─── SCREEN 7: HOST SETUP ─────────────────────────────────────────────────────
 
 function HostSetup({ go }: { go: Go }) {
+  const preferencesEditedRef = useRef(false)
   const [scoringMode, setScoringMode] = useState<ScoringMode>('classic')
   const [reveal, setReveal] = useState<'each' | 'round'>('each')
   const [lb, setLb] = useState<LeaderboardVisibility>('round')
@@ -8012,7 +8026,7 @@ function HostSetup({ go }: { go: Go }) {
     async function loadPreferences() {
       try {
         const settings = await loadHostDefaultGameSettings()
-        if (!active || Object.keys(settings).length === 0) return
+        if (!active || preferencesEditedRef.current || Object.keys(settings).length === 0) return
         setReveal(answerRevealModeFromSettings(settings))
         setLb(leaderboardVisibilityFromSettings(settings))
         setAutoRunMode(autoRunModeFromSettings(settings))
@@ -8130,7 +8144,7 @@ function HostSetup({ go }: { go: Go }) {
   return (
     <div style={{ background: C.ground }} className="min-h-screen">
       <Nav go={go} />
-      <main className="max-w-2xl mx-auto px-6 py-10">
+      <main onChangeCapture={() => { preferencesEditedRef.current = true }} onClickCapture={() => { preferencesEditedRef.current = true }} className="max-w-2xl mx-auto px-6 py-10">
         <button onClick={() => go('dashboard')} style={{ color: C.sub }}
           className="flex items-center gap-1.5 text-sm hover:text-violet transition-colors mb-8">
           <I.back /> My Quizzes
@@ -8480,12 +8494,12 @@ function Lobby({ go }: { go: Go }) {
     approvalBusyRef.current = true
     setApprovalBusy(true)
     setLobbyError(null)
-    const settings: Record<string, Json> = { ...lobbySettings, team_approval_required: required }
-    let settingUpdated = false
     try {
-      const { error: updateError } = await supabase.from('games').update({ settings }).eq('id', lobbyGameId)
-      if (updateError) throw updateError
-      settingUpdated = true
+      const { data, error } = await supabase.rpc('patch_host_game_settings', {
+        p_game_id: lobbyGameId, p_patch: { team_approval_required: required },
+      })
+      if (error) throw error
+      const settings = data as Record<string, Json>
       setLobbySettings(settings)
       setApprovalRequired(required)
       try {
@@ -8494,29 +8508,9 @@ function Lobby({ go }: { go: Go }) {
         console.error('Could not save team-entry default:', preferenceError)
         setLobbyError('Team entry changed for this game, but the default could not be saved.')
       }
-
-      if (!required) {
-        const { data: pending, error: pendingError } = await supabase
-          .from('team_join_requests')
-          .select('id')
-          .eq('game_id', lobbyGameId)
-          .eq('status', 'pending')
-        if (pendingError) throw pendingError
-        for (const request of pending ?? []) {
-          const { error: decisionError } = await supabase.rpc('decide_team_join_request', {
-            p_request_id: request.id,
-            p_decision: 'approved',
-          })
-          if (decisionError) throw decisionError
-        }
-      }
     } catch (updateError) {
       console.error('Could not update team approval setting:', updateError)
-      if (!required && settingUpdated) {
-        setLobbyError('Automatic entry is on, but waiting teams could not be admitted. Please try again.')
-      } else {
-        setLobbyError('Could not update team approval. Please try again.')
-      }
+      setLobbyError('Could not update team approval. No waiting teams were partially admitted. Please try again.')
     } finally {
       approvalBusyRef.current = false
       setApprovalBusy(false)
@@ -8770,6 +8764,8 @@ type LiveTeam = {
 }
 
 function HostBonusPointsButton({ team, onAwarded }: { team: LiveTeam; onAwarded: (teamId: string, score: number) => void }) {
+  const operationRef = useRef<{ id: string; points: number } | null>(null)
+  const completedRef = useRef(false)
   const [open, setOpen] = useState(false)
   const [points, setPoints] = useState(1)
   const [busy, setBusy] = useState(false)
@@ -8777,20 +8773,41 @@ function HostBonusPointsButton({ team, onAwarded }: { team: LiveTeam; onAwarded:
   const [feedback, setFeedback] = useState<string | null>(null)
 
   async function award() {
-    if (busyRef.current || !Number.isInteger(points) || points < 1 || points > 100) return
+    if (busyRef.current || completedRef.current || !Number.isInteger(points) || points < 1 || points > 100) return
     busyRef.current = true
     setBusy(true)
     setFeedback(null)
-    const { data, error } = await supabase.rpc('award_host_bonus_points', { p_team_id: team.id, p_points: points })
-    if (error) setFeedback('Could not award points')
-    else {
+    const storageKey = `trivia-pending-bonus:${team.id}`
+    try {
+      if (!operationRef.current) {
+        try {
+          const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null')
+          if (saved && typeof saved.id === 'string' && Number.isInteger(saved.points) && saved.points >= 1 && saved.points <= 100) operationRef.current = saved
+        } catch { /* Retry remains protected in memory when storage is unavailable. */ }
+      }
+      const operation = operationRef.current ?? { id: crypto.randomUUID(), points }
+      operationRef.current = operation
+      if (operation.points !== points) {
+        setPoints(operation.points)
+        setFeedback(`Retry the pending ${operation.points}-point award first.`)
+        return
+      }
+      try { sessionStorage.setItem(storageKey, JSON.stringify(operation)) } catch { /* In-memory fallback. */ }
+      const { data, error } = await supabase.rpc('award_host_bonus_points_once', { p_team_id: team.id, p_points: operation.points, p_operation_id: operation.id })
+      if (error || !data) throw error ?? new Error('No award returned')
       const updated = Array.isArray(data) ? data[0] : data
       if (updated) onAwarded(team.id, updated.score)
+      operationRef.current = null
+      completedRef.current = true
+      try { sessionStorage.removeItem(storageKey) } catch { /* The award has succeeded. */ }
       setFeedback(`+${points} awarded`)
-      window.setTimeout(() => { setOpen(false); setFeedback(null) }, 900)
+      window.setTimeout(() => { setOpen(false); setFeedback(null); completedRef.current = false }, 900)
+    } catch {
+      setFeedback('Could not confirm the award. Retry safely—points will not be added twice.')
+    } finally {
+      busyRef.current = false
+      setBusy(false)
     }
-    busyRef.current = false
-    setBusy(false)
   }
 
   return <div className="relative shrink-0">
@@ -9085,6 +9102,7 @@ function ReviewBadge({
   )
 }
 function LiveQuestion({ go }: { go: Go }) {
+  const serverClockReady = useServerClock()
   const [phase, setPhase] = useState<'open' | 'closed' | 'revealed'>('open')
   const [answerEditingAllowed, setAnswerEditingAllowed] = useState(false)
   const [submittedAnswersEditableDefault, setSubmittedAnswersEditableDefault] = useState(false)
@@ -9117,7 +9135,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const [audienceResponseOrder, setAudienceResponseOrder] = useState<AudienceResponseOrder>('submitted')
   const [selectedAudienceWinnerIds, setSelectedAudienceWinnerIds] = useState<string[]>([])
   const audienceShowGameIdRef = useRef<string | null>(null)
-  const [showGameNow, setShowGameNow] = useState(() => Date.now())
+  const [showGameNow, setShowGameNow] = useState(() => serverNow())
   const [leaderboardVisibility, setLeaderboardVisibility] = useState<LeaderboardVisibility>('round')
   const [playerScoreVisibility, setPlayerScoreVisibility] = useState<PlayerScoreVisibility>('live')
   const [showCorrectnessPercentage, setShowCorrectnessPercentage] = useState(false)
@@ -9136,6 +9154,7 @@ function LiveQuestion({ go }: { go: Go }) {
   const prizesInitializedRef = useRef(false)
   const autoRunActionRef = useRef<() => void>(() => {})
   const autoRunPublishedKeyRef = useRef('')
+  const autoRunDeadlineRef = useRef<number | null>(null)
   const liveGameSettingsRef = useRef<Record<string, Json>>({})
   const isSpeedGame = speedScoringEnabled(liveGameSettingsRef.current)
   const [syncedSpeedClock, setSyncedSpeedClock] = useState<ReturnType<typeof speedClock>>(null)
@@ -9493,8 +9512,8 @@ function LiveQuestion({ go }: { go: Go }) {
 
   useEffect(() => {
     if (!activeShowGameId || activeShowGameStatus !== 'open' || !activeShowGameExplodeAt) return
-    const interval = window.setInterval(() => setShowGameNow(Date.now()), 100)
-    const delay = Math.max(0, new Date(activeShowGameExplodeAt).getTime() - Date.now())
+    const interval = window.setInterval(() => setShowGameNow(serverNow()), 100)
+    const delay = Math.max(0, new Date(activeShowGameExplodeAt).getTime() - serverNow())
     let cancelled = false
     let resolveInFlight = false
     let resolveErrorLogged = false
@@ -9557,6 +9576,27 @@ function LiveQuestion({ go }: { go: Go }) {
     }
   }, [activeShowGameId, activeShowGameStatus, showGame?.game_type])
 
+  async function checkpointBeforeLeavingRound(roundNumber: number) {
+    const roundQuestions = allQuestions.filter(item => item.round_number === roundNumber)
+    if (!liveGameId || roundQuestions.length === 0) return false
+    let needsReview = autoRunMode === 'round'
+    if (!needsReview) {
+      const keys = roundQuestions.map(item => item.question_key)
+      const results = await Promise.all([
+        supabase.from('submissions').select('id').eq('game_id', liveGameId).in('question_key', keys).is('is_correct', null).limit(1),
+        supabase.from('bonus_submissions').select('id').eq('game_id', liveGameId).in('question_key', keys).is('is_correct', null).limit(1),
+      ])
+      for (const result of results) { if (result.error) throw result.error }
+      needsReview = results.some(result => (result.data?.length ?? 0) > 0)
+    }
+    if (!needsReview) return false
+    await updateLiveGame({ status: 'live', current_screen: 'intermission', answer_phase: 'closed',
+      current_question_key: roundQuestions[roundQuestions.length - 1].question_key,
+      current_content_screen_key: null, current_show_game_key: null, round_scores_finalized: false })
+    go('end-of-round')
+    return true
+  }
+
   async function prepareShowGame(nextShowGame: LiveShowGameDefinition) {
     let shouldSkip = false
     if (nextShowGame.game_type === 'in-show-tiebreaker'
@@ -9564,7 +9604,7 @@ function LiveQuestion({ go }: { go: Go }) {
       if (!liveGameId) throw new Error('Live game is not available.')
       const { data: freshTeams, error: teamError } = await supabase
         .from('teams')
-        .select('id, name, score')
+        .select('id, name, score, last_seen_at')
         .eq('game_id', liveGameId)
         .order('created_at', { ascending: true })
       if (teamError) throw teamError
@@ -9576,6 +9616,8 @@ function LiveQuestion({ go }: { go: Go }) {
     if (shouldSkip) {
       const nextItem = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
         .find(item => item.itemPosition > nextShowGame.item_position) ?? null
+      if ((!nextItem || nextItem.roundNumber !== nextShowGame.round_number) && await checkpointBeforeLeavingRound(nextShowGame.round_number)) return
+
 
       if (!nextItem) {
         if (!liveGameId) throw new Error('No live game to finalize.')
@@ -9840,11 +9882,13 @@ function LiveQuestion({ go }: { go: Go }) {
     setActionBusy(true)
     setLiveError(null)
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('games')
         .update({ answer_phase: 'open', answer_editing_allowed: true })
-        .eq('id', liveGameId)
+        .eq('id', liveGameId).select('settings').single()
       if (error) throw error
+      liveGameSettingsRef.current = hostGameSettingsRecord(data.settings)
+      setSyncedSpeedClock(speedClock(data.settings))
       setPhase('open')
       setAnswerEditingAllowed(true)
     } catch (error) {
@@ -9898,7 +9942,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
   reviewBusyRef.current.add(reviewKey)
   try {
-    const nextPoints = gradingPoints(next, question.points_max, question.question_type === 'ranking' && question.points_max === 1)
+    const nextPoints = gradingPoints(next, question.points_max, ['ranking', 'multi-part'].includes(question.question_type) && question.points_max === 1)
     const { error } = submission.is_correct !== null
       ? await supabase.rpc('rescore_submission', { p_submission_id: submissionId, p_grading_json: next, p_points_awarded: nextPoints })
       : await supabase.from('submissions').update({ grading_json: next }).eq('id', submissionId)
@@ -10011,7 +10055,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         .order('created_at', { ascending: true }),
       supabase
         .from('teams')
-        .select('id, name, score')
+        .select('id, name, score, last_seen_at')
         .eq('game_id', liveGameId)
         .order('created_at', { ascending: true }),
     ])
@@ -10151,6 +10195,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     try {
       const nextItem = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
         .find(item => item.itemPosition > question.item_position) ?? null
+      if ((!nextItem || nextItem.roundNumber !== question.round_number) && await checkpointBeforeLeavingRound(question.round_number)) return
+
 
       if (!nextItem) {
         if (!liveGameId) throw new Error('The live game could not be found.')
@@ -10240,6 +10286,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     try {
       const nextItem = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
         .find(item => item.itemPosition > contentScreen.item_position) ?? null
+      if ((!nextItem || nextItem.roundNumber !== contentScreen.round_number) && await checkpointBeforeLeavingRound(contentScreen.round_number)) return
+
 
       if (answerRevealMode === 'round' && (!nextItem || nextItem.roundNumber !== contentScreen.round_number)) {
         const firstRoundQuestion = allQuestions
@@ -10276,7 +10324,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       }
 
       if (nextItem.roundNumber !== contentScreen.round_number) {
-        if (!question) {
+        if (!allQuestions.some(item => item.round_number === contentScreen.round_number)) {
           if (nextItem.kind === 'show-game') { await prepareShowGame(nextItem.showGame); return }
           if (nextItem.kind === 'content') {
             await updateLiveGame({ current_screen: 'content-screen', answer_phase: 'closed', current_content_screen_key: nextItem.content.screen_key })
@@ -10355,6 +10403,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       }
       const nextItem = liveSequenceItems(allQuestions, allContentScreens, allShowGames)
         .find(item => item.itemPosition > showGame.item_position) ?? null
+      if ((!nextItem || nextItem.roundNumber !== showGame.round_number) && await checkpointBeforeLeavingRound(showGame.round_number)) return
+
 
       if (!nextItem) {
         if (!liveGameId) throw new Error('The live game could not be found.')
@@ -10363,7 +10413,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
         return
       }
       if (nextItem.roundNumber !== showGame.round_number) {
-        if (!question) {
+        if (!allQuestions.some(item => item.round_number === showGame.round_number)) {
           if (nextItem.kind === 'show-game') { await prepareShowGame(nextItem.showGame); return }
           if (nextItem.kind === 'content') {
             await updateLiveGame({ current_screen: 'content-screen', answer_phase: 'closed', current_content_screen_key: nextItem.content.screen_key, current_show_game_key: null })
@@ -10522,21 +10572,25 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     seconds: baseAutoRunTimer.seconds > 0 ? autoRunScaledSeconds(baseAutoRunTimer.seconds, autoRunSpeed) : 0,
   }
 
+  const autoRunScreenReady = gameScreen === 'content-screen' ? Boolean(contentScreen)
+    : gameScreen === 'show-game' ? Boolean(showGame) : Boolean(question)
+
   async function publishAutoRunClock(remaining: number, paused = false) {
-    if (!liveGameId || autoRunMode !== 'round') return
+    if (!serverClockReady || !autoRunScreenReady || !liveGameId || autoRunMode !== 'round') return
     if (isSpeedGame && phase === 'open' && currentSpeedClock) return
     const safeRemaining = Math.max(0, Math.trunc(remaining))
     const autoRunClock: Json = safeRemaining > 0
       ? {
           key: autoRunTimer.key,
           label: autoRunTimer.label,
-          deadline_ms: paused ? null : Date.now() + (safeRemaining * 1000),
+          deadline_ms: paused ? null : serverNow() + (safeRemaining * 1000),
           paused_remaining: paused ? safeRemaining : null,
         }
       : null
+    autoRunDeadlineRef.current = paused || safeRemaining <= 0 ? null : (autoRunClock as { deadline_ms: number }).deadline_ms
     const settings: Record<string, Json> = { ...liveGameSettingsRef.current, auto_run_clock: autoRunClock }
     liveGameSettingsRef.current = settings
-    const { error } = await supabase.from('games').update({ settings }).eq('id', liveGameId)
+    const { error } = await supabase.rpc('patch_host_game_settings', { p_game_id: liveGameId, p_patch: { auto_run_clock: autoRunClock } })
     if (error) console.error('Could not publish Auto-Run clock:', error)
   }
 
@@ -10560,18 +10614,17 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   })
 
   useEffect(() => {
-    // A persisted live-state transition starts a fresh countdown for that state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAutoRunRemaining(autoRunTimer.seconds)
-  }, [autoRunTimer.key, autoRunTimer.seconds])
-
-  useEffect(() => {
-    if (autoRunMode !== 'round' || !autoRunOperating || !liveGameId || autoRunPublishedKeyRef.current === autoRunTimer.key) return
+    if (!serverClockReady || !autoRunScreenReady || autoRunMode !== 'round' || !autoRunOperating || !liveGameId) return
+    if (autoRunPublishedKeyRef.current === autoRunTimer.key) return
+    const saved = restoreAutoRunClock(liveGameSettingsRef.current, autoRunTimer.key, serverNow())
     autoRunPublishedKeyRef.current = autoRunTimer.key
-    void publishAutoRunClock(autoRunTimer.seconds, autoRunPaused)
-    // The state key deliberately controls publication; the deadline is not rewritten each second.
+    autoRunDeadlineRef.current = saved?.deadline ?? null
+    setAutoRunRemaining(saved?.remaining ?? autoRunTimer.seconds)
+    setAutoRunPaused(saved?.paused ?? false)
+    if (!saved) void publishAutoRunClock(autoRunTimer.seconds, false)
+    // Publication is keyed to the persisted screen, never to each countdown tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRunMode, autoRunOperating, autoRunPaused, autoRunTimer.key, autoRunTimer.seconds, liveGameId])
+  }, [serverClockReady, autoRunScreenReady, autoRunMode, autoRunOperating, autoRunTimer.key, autoRunTimer.seconds, liveGameId])
 
   useEffect(() => {
     speedCloseRef.current = () => { if (!actionBusyRef.current) void handleCloseAnswers() }
@@ -10587,7 +10640,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       loading = false
       if (!active || error) return
       const clock = speedClock(data?.settings)
-      if (clock?.key === expectedSpeedClockKey) setSyncedSpeedClock(clock)
+      if (clock?.key === expectedSpeedClockKey) setSyncedSpeedClock(current => current?.key === clock.key && current.deadline_ms > clock.deadline_ms ? current : clock)
     }
     void sync()
     const timer = window.setInterval(() => { void sync() }, 3000)
@@ -10595,30 +10648,33 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }, [isSpeedGame, liveGameId, phase, expectedSpeedClockKey])
   const speedDeadline = currentSpeedClock?.deadline_ms ?? null
   useEffect(() => {
-    if (speedDeadline === null || phase !== 'open') return
+    if (!serverClockReady || speedDeadline === null || phase !== 'open') return
     const tick = () => {
-      setSpeedRemaining(Math.max(0, Math.ceil((speedDeadline - Date.now()) / 1000)))
-      if (Date.now() >= speedDeadline + AUTO_RUN_SUBMISSION_GRACE_MS) speedCloseRef.current()
+      setSpeedRemaining(Math.max(0, Math.ceil((speedDeadline - serverNow()) / 1000)))
+      if (serverNow() >= speedDeadline + AUTO_RUN_SUBMISSION_GRACE_MS) speedCloseRef.current()
     }
     const timer = window.setInterval(tick, 250)
     const initial = window.setTimeout(tick, 0)
     return () => { window.clearInterval(timer); window.clearTimeout(initial) }
-  }, [speedDeadline, phase])
+  }, [serverClockReady, speedDeadline, phase])
 
   useEffect(() => {
-    if (autoRunMode !== 'round' || !autoRunOperating || autoRunPaused || actionBusy || autoRunRemaining <= 0) return
+    if (!serverClockReady || !autoRunScreenReady || autoRunMode !== 'round' || !autoRunOperating || autoRunPaused || actionBusy || autoRunTimer.seconds <= 0) return
     if (isSpeedGame && phase === 'open' && speedDeadline !== null) return
-    const timer = window.setTimeout(() => {
-      setAutoRunRemaining(current => {
-        if (current <= 1) {
-          window.setTimeout(() => autoRunActionRef.current(), AUTO_RUN_SUBMISSION_GRACE_MS)
-          return 0
-        }
-        return current - 1
-      })
-    }, 1000)
-    return () => window.clearTimeout(timer)
-  }, [actionBusy, autoRunMode, autoRunOperating, autoRunPaused, autoRunRemaining, autoRunTimer.key, isSpeedGame, phase, speedDeadline])
+    const key = autoRunTimer.key
+    let fired = false
+    const timer = window.setInterval(() => {
+      const deadline = autoRunDeadlineRef.current
+      if (deadline === null || autoRunPublishedKeyRef.current !== key) return
+      setAutoRunRemaining(Math.max(0, Math.ceil((deadline - serverNow()) / 1000)))
+      if (!fired && serverNow() >= deadline + AUTO_RUN_SUBMISSION_GRACE_MS) {
+        fired = true
+        autoRunActionRef.current()
+      }
+    }, 250)
+    // Includes the grace window: pausing, navigating or unmounting cancels it.
+    return () => window.clearInterval(timer)
+  }, [serverClockReady, autoRunScreenReady, actionBusy, autoRunMode, autoRunOperating, autoRunPaused, autoRunTimer.key, autoRunTimer.seconds, isSpeedGame, phase, speedDeadline])
 
   useEffect(() => {
     if (autoRunMode !== 'round' || !autoRunOperating || !allActivePlayersLocked) return
@@ -10640,8 +10696,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     setSettingsBusy(true)
     setLiveError(null)
     try {
-      const settings: Record<string, Json> = { ...liveGameSettingsRef.current, ...patch }
-      const { error } = await supabase.from('games').update({ settings }).eq('id', liveGameId)
+      const { data, error } = await supabase.rpc('patch_host_game_settings', { p_game_id: liveGameId, p_patch: patch })
+      const settings = data as Record<string, Json>
       if (error) {
         console.error('Could not update live settings:', error)
         setLiveError('Could not update the live settings. Please try again.')
@@ -10668,12 +10724,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   async function setLiveAutoJoin(enabled: boolean) {
     if (!await updateLiveSettings({ team_approval_required: !enabled })) return
     setApprovalRequired(!enabled)
-    if (!enabled || !liveGameId) return
-    const { data: pending } = await supabase.from('team_join_requests').select('id').eq('game_id', liveGameId).eq('status', 'pending')
-    for (const request of pending ?? []) {
-      const { error } = await supabase.rpc('decide_team_join_request', { p_request_id: request.id, p_decision: 'approved' })
-      if (error) console.error('Could not auto-admit waiting team:', error)
-    }
+
   }
 
   async function setLiveAutoRun(enabled: boolean) {
@@ -10687,37 +10738,9 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
   }
 
   async function setLiveSubmittedAnswersEditable(enabled: boolean) {
-    if (!liveGameId || settingsBusyRef.current) return
-    settingsBusyRef.current = true
-    setSettingsBusy(true)
-    setLiveError(null)
-    try {
-      const settings: Record<string, Json> = { ...liveGameSettingsRef.current, submitted_answers_editable: enabled }
-      const gameUpdate = phase === 'open'
-        ? { settings, answer_editing_allowed: enabled }
-        : { settings }
-      const { error } = await supabase.from('games').update(gameUpdate).eq('id', liveGameId)
-      if (error) {
-        console.error('Could not update submitted answer editing:', error)
-        setLiveError('Could not update answer editing. Please try again.')
-        return
-      }
-      liveGameSettingsRef.current = settings
-      setSubmittedAnswersEditableDefault(enabled)
-      if (phase === 'open') setAnswerEditingAllowed(enabled)
-      try {
-        await saveHostDefaultGameSettings(settings)
-      } catch (preferenceError) {
-        console.error('Could not save answer editing as a default:', preferenceError)
-        setLiveError('Answer editing changed for this game, but the default could not be saved.')
-      }
-    } catch (unexpectedError) {
-      console.error('Could not update submitted answer editing:', unexpectedError)
-      setLiveError('Could not update answer editing. Please try again.')
-    } finally {
-      settingsBusyRef.current = false
-      setSettingsBusy(false)
-    }
+    if (!await updateLiveSettings({ submitted_answers_editable: enabled })) return
+    setSubmittedAnswersEditableDefault(enabled)
+    if (phase === 'open') setAnswerEditingAllowed(enabled)
   }
 
   async function saveLivePrizes() {
@@ -11566,7 +11589,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           const bonusRow = bonusAnswerRows.find(row => row.team.id === team.id) ?? null
           const bonusItem = bonusRow?.grading?.items[0] ?? null
           const hasReview = items.some(item => item.status === 'review') || (showBonusInAnswers && bonusItem?.status === 'review')
-          const coreBase = grading ? gradingPoints(grading, question?.points_max ?? 1, question?.question_type === 'ranking' && (question?.points_max ?? 1) === 1) : 0
+          const coreBase = grading ? gradingPoints(grading, question?.points_max ?? 1, ['ranking', 'multi-part'].includes(question?.question_type ?? '') && (question?.points_max ?? 1) === 1) : 0
           const bonusBase = showBonusInAnswers && bonusRow?.grading ? bonusGradingPoints(bonusRow.grading, activeBonus?.points ?? 1) : 0
           const score = isSpeedGame
             ? speedAward(coreBase, question?.points_max ?? 1, submission?.speed_points_max ?? 100) + speedAward(bonusBase, activeBonus?.points ?? 1, bonusRow?.submission?.speed_points_max ?? 100)
@@ -11912,6 +11935,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 // ─── SCREEN 10: END OF ROUND ──────────────────────────────────────────────────
 
 function EndOfRound({ go }: { go: Go }) {
+  const [roundDataReady, setRoundDataReady] = useState(false)
   const [gameId, setGameId] = useState('')
   const [gameTitle, setGameTitle] = useState('Good Trivia Company')
   const [intermission, setIntermission] = useState(false)
@@ -11924,10 +11948,10 @@ function EndOfRound({ go }: { go: Go }) {
   const [revealingAnswers, setRevealingAnswers] = useState(false)
   const [teams, setTeams] = useState<LiveTeam[]>([])
   const [currentQuestion, setCurrentQuestion] = useState<LiveQuestionDefinition | null>(null)
-  const [nextQuestion, setNextQuestion] = useState<LiveQuestionDefinition | null>(null)
+  const [nextRoundItem, setNextRoundItem] = useState<LiveSequenceItem | null>(null)
   const [roundQuestions, setRoundQuestions] = useState<LiveQuestionDefinition[]>([])
-  const [currentSubmissions, setCurrentSubmissions] = useState<Pick<LiveSubmission, 'is_correct'>[]>([])
-  const [currentBonusSubmissions, setCurrentBonusSubmissions] = useState<Pick<LiveBonusSubmission, 'is_correct'>[]>([])
+  const [currentSubmissions, setCurrentSubmissions] = useState<Pick<LiveSubmission, 'is_correct' | 'team_id'>[]>([])
+  const [currentBonusSubmissions, setCurrentBonusSubmissions] = useState<Pick<LiveBonusSubmission, 'is_correct' | 'team_id'>[]>([])
   const [roundSubmissions, setRoundSubmissions] = useState<LiveSubmission[]>([])
   const [roundBonusSubmissions, setRoundBonusSubmissions] = useState<LiveBonusSubmission[]>([])
   const [reviewAllAnswers, setReviewAllAnswers] = useState(false)
@@ -11943,6 +11967,7 @@ function EndOfRound({ go }: { go: Go }) {
 
     async function loadRoundSummary() {
       const version = ++loadVersion
+      setRoundDataReady(false)
       const { data: game, error: gameError } = await supabase
         .from('games')
         .select('id, title, current_question_key, current_screen, settings, round_scores_finalized')
@@ -11964,14 +11989,10 @@ function EndOfRound({ go }: { go: Go }) {
       setSubmittedAnswersEditable(submittedAnswersEditableFromSettings(game.settings))
       const configuredAutoRun = autoRunModeFromSettings(game.settings)
       setAutoRunMode(configuredAutoRun)
-      const finalizedForDisplay = configuredAutoRun === 'off' ? true : game.round_scores_finalized
-      setRoundFinalized(finalizedForDisplay)
-      if (configuredAutoRun === 'off' && !game.round_scores_finalized) {
-        await supabase.from('games').update({ round_scores_finalized: true }).eq('id', game.id)
-      }
+      setRoundFinalized(game.round_scores_finalized)
       setRevealingAnswers(game.current_screen === 'delayed-reveal')
 
-      const [{ data: questionRows }, { data: teamRows }] = await Promise.all([
+      const [{ data: questionRows, error: questionError }, { data: teamRows, error: teamError }, contentResult, showGameResult] = await Promise.all([
         supabase
           .from('game_questions')
           .select('question_key, position, item_position, round_number, round_position, round_question_count, round_title, prompt, category, difficulty, question_type, correct_answer, accepted_answers, options, image_url, points_max, bonus, notes')
@@ -11979,19 +12000,22 @@ function EndOfRound({ go }: { go: Go }) {
           .order('position', { ascending: true }),
         supabase
           .from('teams')
-          .select('id, name, score')
+          .select('id, name, score, last_seen_at')
           .eq('game_id', game.id)
           .order('score', { ascending: false }),
+        supabase.from('game_content_screens').select('*').eq('game_id', game.id),
+        supabase.from('game_show_games').select('*').eq('game_id', game.id),
       ])
 
       if (!active || version !== loadVersion) return
+      if (questionError || teamError || contentResult.error || showGameResult.error) { setError('Could not load all round questions and teams. Refresh to retry; scoring is disabled.'); return }
 
       const questions = (questionRows ?? []) as LiveQuestionDefinition[]
       const current = questions.find(item => item.question_key === game.current_question_key) ?? null
-      const next = current ? questions.find(item => item.round_number > current.round_number) ?? null : null
+      const next = current ? liveSequenceItems(questions, contentResult.data ?? [], showGameResult.data ?? []).find(item => item.roundNumber > current.round_number) ?? null : null
 
       setCurrentQuestion(current)
-      setNextQuestion(next)
+      setNextRoundItem(next)
       setRoundQuestions(current ? questions.filter(item => item.round_number === current.round_number) : [])
       setTeams((teamRows ?? []) as LiveTeam[])
 
@@ -12002,10 +12026,23 @@ function EndOfRound({ go }: { go: Go }) {
           supabase.from('bonus_submissions').select('id, team_id, question_key, answer_text, is_correct, points_awarded, grading_json, speed_points_max').eq('game_id', game.id).in('question_key', roundKeys),
         ])
         if (active && version === loadVersion) {
+          if (submissionResult.error || bonusSubmissionResult.error) {
+            setError('Could not load all round answers. Refresh to retry; scoring is disabled.')
+            return
+          }
           setRoundSubmissions((submissionResult.data ?? []) as LiveSubmission[])
           setRoundBonusSubmissions((bonusSubmissionResult.data ?? []) as LiveBonusSubmission[])
+          const allScored = [...(submissionResult.data ?? []), ...(bonusSubmissionResult.data ?? [])].every(row => row.is_correct !== null)
+          if (configuredAutoRun === 'off' && !game.round_scores_finalized && allScored) {
+            const { error: finalizedError } = await supabase.from('games').update({ round_scores_finalized: true }).eq('id', game.id)
+            if (!active || version !== loadVersion) return
+            if (finalizedError) { setError('Could not confirm round scores. Refresh to retry.'); return }
+            setRoundFinalized(true)
+          }
         }
       }
+      if (!active || version !== loadVersion) return
+      setRoundDataReady(true)
       setError(null)
 
       if (!channel) {
@@ -12033,19 +12070,19 @@ function EndOfRound({ go }: { go: Go }) {
     let active = true
     async function loadRevealAccuracy() {
       const [coreResult, bonusResult] = await Promise.all([
-        supabase.from('submissions').select('is_correct').eq('game_id', gameId).eq('question_key', questionKey),
-        supabase.from('bonus_submissions').select('is_correct').eq('game_id', gameId).eq('question_key', questionKey),
+        supabase.from('submissions').select('team_id, is_correct').eq('game_id', gameId).eq('question_key', questionKey),
+        supabase.from('bonus_submissions').select('team_id, is_correct').eq('game_id', gameId).eq('question_key', questionKey),
       ])
       if (!active) return
-      setCurrentSubmissions((coreResult.data ?? []) as Pick<LiveSubmission, 'is_correct'>[])
-      setCurrentBonusSubmissions((bonusResult.data ?? []) as Pick<LiveBonusSubmission, 'is_correct'>[])
+      setCurrentSubmissions((coreResult.data ?? []) as Pick<LiveSubmission, 'is_correct' | 'team_id'>[])
+      setCurrentBonusSubmissions((bonusResult.data ?? []) as Pick<LiveBonusSubmission, 'is_correct' | 'team_id'>[])
     }
     void loadRevealAccuracy()
     return () => { active = false }
   }, [currentQuestion, gameId])
 
   async function toggleIntermission() {
-    if (busyRef.current) return
+    if (!roundDataReady || busyRef.current || !roundFinalized) return
     busyRef.current = true
     setBusy(true)
     setError(null)
@@ -12063,17 +12100,18 @@ function EndOfRound({ go }: { go: Go }) {
   }
 
   async function startNextRound() {
-    if (!nextQuestion || busyRef.current) return
+    if (!roundDataReady || !roundFinalized || !nextRoundItem || busyRef.current) return
     busyRef.current = true
     setBusy(true)
     setError(null)
     try {
       await updateLiveGame({
         status: 'live',
-        current_question_key: nextQuestion.question_key,
-        current_content_screen_key: null,
-        current_screen: 'round-start',
-        answer_phase: 'open',
+        current_question_key: nextRoundItem.kind === 'question' ? nextRoundItem.question.question_key : currentQuestion?.question_key ?? '',
+        current_content_screen_key: nextRoundItem.kind === 'content' ? nextRoundItem.content.screen_key : null,
+        current_show_game_key: nextRoundItem.kind === 'show-game' ? nextRoundItem.showGame.show_game_key : null,
+        current_screen: nextRoundItem.kind === 'question' ? 'round-start' : nextRoundItem.kind === 'content' ? 'content-screen' : 'show-game',
+        answer_phase: nextRoundItem.kind === 'question' ? 'open' : 'closed',
         answer_editing_allowed: submittedAnswersEditable,
         question_stage: 'core',
         round_scores_finalized: false,
@@ -12109,7 +12147,7 @@ function EndOfRound({ go }: { go: Go }) {
         return
       }
 
-      if (nextQuestion) {
+      if (nextRoundItem) {
         await updateLiveGame({
           status: 'live',
           current_screen: roundResultsScreen(leaderboardVisibility),
@@ -12154,7 +12192,7 @@ function EndOfRound({ go }: { go: Go }) {
       const pointsMax = bonus && bonusDefinition ? bonusDefinition.points : roundQuestion.points_max
       const nextPoints = bonus
         ? bonusGradingPoints(next, pointsMax)
-        : gradingPoints(next, pointsMax, roundQuestion.question_type === 'ranking' && pointsMax === 1)
+        : gradingPoints(next, pointsMax, ['ranking', 'multi-part'].includes(roundQuestion.question_type) && pointsMax === 1)
       const scored = submission.is_correct !== null
       const { error: reviewError } = scored
         ? await supabase.rpc(bonus ? 'rescore_bonus_submission' : 'rescore_submission', { p_submission_id: submission.id, p_grading_json: next, p_points_awarded: nextPoints })
@@ -12167,7 +12205,7 @@ function EndOfRound({ go }: { go: Go }) {
       const setter = bonus ? setRoundBonusSubmissions : setRoundSubmissions
       setter(rows => rows.map(row => row.id === submission.id ? { ...row, grading_json: next, ...(scored ? { points_awarded: submission.speed_points_max == null ? nextPoints : speedAward(nextPoints, pointsMax, submission.speed_points_max), is_correct: nextPoints >= pointsMax } : {}) } : row))
       if (scored && gameId) {
-        const { data: refreshedTeams, error: teamsError } = await supabase.from('teams').select('id, name, score').eq('game_id', gameId).order('score', { ascending: false })
+        const { data: refreshedTeams, error: teamsError } = await supabase.from('teams').select('id, name, score, last_seen_at').eq('game_id', gameId).order('score', { ascending: false })
         if (!teamsError) setTeams((refreshedTeams ?? []) as LiveTeam[])
       }
     } catch (reviewError) {
@@ -12179,14 +12217,17 @@ function EndOfRound({ go }: { go: Go }) {
   }
 
   async function finalizeRound(markPendingIncorrect = false) {
-    if (!gameId || !currentQuestion || busyRef.current) return
+    if (!roundDataReady || !gameId || !currentQuestion || busyRef.current) return
     busyRef.current = true
     setBusy(true)
     setError(null)
     try {
       for (const roundQuestion of roundQuestions) {
-        const core = roundSubmissions.filter(item => item.question_key === roundQuestion.question_key)
-        const bonuses = roundBonusSubmissions.filter(item => item.question_key === roundQuestion.question_key)
+        const core = roundSubmissions.filter(item => item.question_key === roundQuestion.question_key).map(item => markPendingIncorrect
+          ? { ...item, grading_json: markPendingGradingIncorrect(storedSubmissionGrading(roundQuestion, item)) } : item)
+        const bonusDefinition = runtimeBonusFromJson(roundQuestion.bonus)
+        const bonuses = roundBonusSubmissions.filter(item => item.question_key === roundQuestion.question_key).map(item => markPendingIncorrect && bonusDefinition
+          ? { ...item, grading_json: markPendingGradingIncorrect(storedBonusGrading(bonusDefinition, item)) } : item)
         const results = buildConfidentRevealResults(roundQuestion, core)
         const bonusResults = buildConfidentBonusRevealResults(runtimeBonusFromJson(roundQuestion.bonus), bonuses)
         if (results.length > 0 || bonusResults.length > 0) {
@@ -12204,13 +12245,15 @@ function EndOfRound({ go }: { go: Go }) {
       const { error: finalizeError } = await supabase.rpc('finalize_auto_run_round', {
         p_game_id: gameId,
         p_round_number: currentQuestion.round_number,
-        p_mark_pending_incorrect: markPendingIncorrect,
+        // Every reviewed part was handled above. Never zero an unseen answer
+        // that arrived after the snapshot; require a refresh/review instead.
+        p_mark_pending_incorrect: false,
       })
       if (finalizeError) throw finalizeError
       await updateLiveGame({ current_screen: roundResultsScreen(leaderboardVisibility) })
       setIntermission(false)
       setRoundFinalized(true)
-      const { data: refreshedTeams } = await supabase.from('teams').select('id, name, score').eq('game_id', gameId).order('score', { ascending: false })
+      const { data: refreshedTeams } = await supabase.from('teams').select('id, name, score, last_seen_at').eq('game_id', gameId).order('score', { ascending: false })
       setTeams((refreshedTeams ?? []) as LiveTeam[])
     } catch (finalizeError) {
       console.error('Could not finalize Auto-Run round:', finalizeError)
@@ -12222,7 +12265,7 @@ function EndOfRound({ go }: { go: Go }) {
   }
 
   async function viewFinalResults() {
-    if (!gameId || busyRef.current || (autoRunMode === 'round' && !roundFinalized)) return
+    if (!roundDataReady || !gameId || busyRef.current || !roundFinalized) return
     busyRef.current = true
     setBusy(true)
     setError(null)
@@ -12241,16 +12284,17 @@ function EndOfRound({ go }: { go: Go }) {
   const leaderboardPlacements = competitionPlacements(leaderboard)
   const roundNumber = currentQuestion?.round_number ?? 1
   const playersSeeRoundLeaderboard = roundResultsScreen(leaderboardVisibility) === 'round-results'
-  const revealCorrectness = correctnessSummary(teams.length, currentSubmissions)
+  const accuracyTeamIds = new Set(teams.filter(team => !isTeamDormant(team.last_seen_at)).map(team => team.id))
+  const revealCorrectness = correctnessSummary(accuracyTeamIds.size, currentSubmissions.filter(s => accuracyTeamIds.has(s.team_id)))
   const revealCorrectnessItems = questionItemCorrectness(
     currentQuestion,
-    teams.length,
-    roundSubmissions.filter(submission => submission.question_key === currentQuestion?.question_key),
+    accuracyTeamIds.size,
+    roundSubmissions.filter(submission => submission.question_key === currentQuestion?.question_key && accuracyTeamIds.has(submission.team_id)),
   )
   const revealCompoundQuestion = currentQuestion?.question_type === 'multi-answer'
     || currentQuestion?.question_type === 'multi-part'
     || currentQuestion?.question_type === 'ranking'
-  const revealBonusCorrectness = correctnessSummary(teams.length, currentBonusSubmissions)
+  const revealBonusCorrectness = correctnessSummary(accuracyTeamIds.size, currentBonusSubmissions.filter(s => accuracyTeamIds.has(s.team_id)))
   const revealBonus = runtimeBonusFromJson(currentQuestion?.bonus)
   const playerScoresAtCheckpoint = scoreVisibility === 'live' || (scoreVisibility === 'round' && roundFinalized)
   const pendingRoundItems = [
@@ -12323,12 +12367,12 @@ function EndOfRound({ go }: { go: Go }) {
             )}
             <p style={{ color: C.liveDim }} className="mt-5 text-sm">Each team also sees its own submitted answer, result, and points.</p>
             {error && <p style={{ color: C.stop }} className="mt-5 text-sm font-semibold">{error}</p>}
-            <button data-host-navigation="forward" onClick={advanceDelayedReveal} disabled={busy} style={{ background: C.violet }} className="mt-8 min-w-72 rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
+            <button data-host-navigation="forward" onClick={advanceDelayedReveal} disabled={!roundDataReady || busy} style={{ background: C.violet }} className="mt-8 min-w-72 rounded-2xl px-8 py-5 text-xl font-extrabold text-white hover:opacity-90 disabled:opacity-50">
               {busy
                 ? 'Advancing…'
                 : hasNextReveal
                   ? 'Show Next Answer →'
-                  : nextQuestion
+                  : nextRoundItem
                     ? 'Show Round Results →'
                     : 'Show Final Results →'}
             </button>
@@ -12358,13 +12402,13 @@ function EndOfRound({ go }: { go: Go }) {
             className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-5">✓ Round Complete</div>
           <h1 style={{ color: C.liveText }} className="text-5xl font-extrabold">Round {roundNumber} Complete</h1>
           <p style={{ color: C.liveDim }} className="mt-2 text-sm">
-            {nextQuestion ? `Next up: Round ${nextQuestion.round_number} · ${nextQuestion.round_title}` : 'That was the final round.'}
+            {nextRoundItem ? `Next up: Round ${nextRoundItem.roundNumber} · ${(nextRoundItem.kind === 'question' ? nextRoundItem.question.round_title : nextRoundItem.kind === 'content' ? nextRoundItem.content.round_title : nextRoundItem.showGame.round_title)}` : 'That was the final round.'}
           </p>
         </div>
 
         {error && <div style={{ background: `${C.stop}18`, border: `1px solid ${C.stop}55`, color: '#FCA5A5' }} className="rounded-xl px-4 py-3 mb-5 text-sm font-semibold">{error}</div>}
 
-        {autoRunMode === 'round' && (
+        {(autoRunMode === 'round' || !roundFinalized) && (
           <section style={{ background: C.liveSurface, border: `1px solid ${roundFinalized ? `${C.go}55` : `${C.violet}70`}` }} className="mb-7 rounded-2xl p-5 shadow-2xl">
             <div>
               <div>
@@ -12387,7 +12431,7 @@ function EndOfRound({ go }: { go: Go }) {
                     </div>
                   </div>
                 ))}
-                <button type="button" disabled={busy} onClick={() => {
+                <button type="button" disabled={!roundDataReady || busy} onClick={() => {
                   if (window.confirm(`${pendingRoundItems.length} answer${pendingRoundItems.length === 1 ? ' is' : 's are'} still awaiting review. Mark all pending answers incorrect and finalize this round?`)) void finalizeRound(true)
                 }} style={{ color: '#FCA5A5' }} className="cursor-pointer text-xs font-bold hover:underline disabled:cursor-not-allowed disabled:opacity-50">
                   Mark all pending incorrect &amp; finalize
@@ -12456,7 +12500,7 @@ function EndOfRound({ go }: { go: Go }) {
                 <div className="mt-5 border-t pt-4" style={{ borderColor: C.liveLine }}>
                   <button
                     type="button"
-                    disabled={busy || pendingRoundItems.length > 0}
+                    disabled={!roundDataReady || busy || pendingRoundItems.length > 0}
                     onClick={() => { void finalizeRound(false) }}
                     style={{ background: pendingRoundItems.length > 0 ? C.livePanel : C.go, color: pendingRoundItems.length > 0 ? C.liveDim : 'white' }}
                     className="w-full cursor-pointer rounded-xl px-5 py-3 text-sm font-extrabold disabled:cursor-not-allowed"
@@ -12520,29 +12564,29 @@ function EndOfRound({ go }: { go: Go }) {
           <button
             type="button"
             onClick={toggleIntermission}
-            disabled={busy || (autoRunMode === 'round' && !roundFinalized)}
+            disabled={!roundDataReady || busy || !roundFinalized}
             style={{ background: C.livePanel, border: `1px solid ${C.liveLine}`, color: C.liveText }}
             className="flex-1 cursor-pointer rounded-xl px-5 py-3.5 text-sm font-semibold transition-all hover:brightness-125 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {autoRunMode === 'round' && !roundFinalized ? 'Players waiting for finalization' : intermission ? 'Hide Intermission' : 'Take a Break'}
+            {!roundFinalized ? 'Players waiting for finalization' : intermission ? 'Hide Intermission' : 'Take a Break'}
           </button>
-          {nextQuestion ? (
+          {nextRoundItem ? (
             <button
               type="button"
               data-host-navigation="forward"
               onClick={startNextRound}
-              disabled={busy || (autoRunMode === 'round' && !roundFinalized)}
+              disabled={!roundDataReady || busy || !roundFinalized}
               style={{ background: C.violet, color: 'white', boxShadow: `0 8px 28px ${C.violet}45` }}
               className="flex-1 cursor-pointer rounded-xl px-6 py-3.5 text-base font-semibold transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Start Round {nextQuestion.round_number}
+              Start Round {nextRoundItem.roundNumber}
             </button>
           ) : (
             <button
               type="button"
               data-host-navigation="forward"
               onClick={viewFinalResults}
-              disabled={busy || (autoRunMode === 'round' && !roundFinalized)}
+              disabled={!roundDataReady || busy || !roundFinalized}
               style={{ background: C.violet, color: 'white', boxShadow: `0 8px 28px ${C.violet}45` }}
               className="flex-1 cursor-pointer rounded-xl px-6 py-3.5 text-base font-semibold transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
             >

@@ -1,13 +1,11 @@
 export function numericResponseDigits(value: string) {
-  const normalized = value.replace(/,/g, '').replace(/[^0-9.-]/g, '')
-  const negative = normalized.startsWith('-') ? '-' : ''
-  const unsigned = normalized.replace(/-/g, '')
-  const [whole = '', ...decimalParts] = unsigned.split('.')
-  return `${negative}${whole}${decimalParts.length > 0 ? `.${decimalParts.join('')}` : ''}`
+  // Do not silently turn a malformed guess into a different valid number.
+  return value.trim().replace(/[−﹣－]/g, '-').replace(/,/g, '')
 }
 
 export function formatNumericResponseInput(value: string) {
   const normalized = numericResponseDigits(value)
+  if (!/^-?\d*(?:\.\d*)?$/.test(normalized)) return normalized
   if (!normalized || normalized === '-' || normalized === '.' || normalized === '-.') return normalized
   const negative = normalized.startsWith('-') ? '-' : ''
   const unsigned = negative ? normalized.slice(1) : normalized
@@ -18,6 +16,7 @@ export function formatNumericResponseInput(value: string) {
 
 export function parseNumericResponseInput(value: string) {
   const normalized = numericResponseDigits(value)
+  if (!/^-?\d*(?:\.\d*)?$/.test(normalized)) return null
   if (!normalized || normalized === '-' || normalized === '.' || normalized === '-.') return null
   const parsed = Number(normalized)
   return Number.isFinite(parsed) ? parsed : null

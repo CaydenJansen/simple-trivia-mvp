@@ -6,20 +6,24 @@ async function mockBonus(page: Page, editing = true, timed = false) {
   let deadline = Date.now() + 60000
   await page.addInitScript(() => {
     localStorage.setItem('simple-trivia-game-id', 'bonus-test-game')
+    localStorage.setItem('simple-trivia-join-request-id', 'request-a')
+    localStorage.setItem('simple-trivia-join-request-token', 'token-a')
     localStorage.setItem('simple-trivia-team-id', 'bonus-test-team')
   })
   await page.route('**/rest/v1/**', route => {
     const name = new URL(route.request().url()).pathname.split('/').pop()
+    if (name === 'get_team_join_request') return route.fulfill({ json: { admission_status: 'approved', team_id: 'bonus-test-team', name: 'Test team', game_status: 'live' } })
+    if (name === 'get_server_epoch_ms') return route.fulfill({ json: Date.now() })
     if (name === 'games') return route.fulfill({ json: { id: 'bonus-test-game', status: 'live', current_screen: 'single-answer', current_question_key: 'q1', answer_phase: 'open', question_stage: 'bonus', answer_editing_allowed: editing, settings: { auto_run_clock: timed ? { key: 'open-q1-bonus', label: 'Answers close in', deadline_ms: deadline, paused_remaining: null } : null } } })
     if (name === 'get_player_game_question') return route.fulfill({ json: { question_key: 'q1', position: 1, item_position: 1, round_number: 1, round_position: 1, round_question_count: 1, round_title: 'Bonus test', prompt: 'Main question', question_type: 'single-answer', points_max: 1, has_bonus: true, bonus: { prompt: 'Bonus fixture', points: 1 } } })
     if (name === 'teams') return route.fulfill({ json: { id: 'bonus-test-team', game_id: 'bonus-test-game', name: 'Test team', score: 0 } })
-    if (name === 'submit_player_bonus_answer') {
+    if (name === 'submit_owned_player_answer') {
       const answer = route.request().postDataJSON().p_answer_text
       requests.push(answer)
       saved = { answer_text: answer, is_correct: null, points_awarded: 0, grading_json: null }
       return route.fulfill({ json: 'bonus-submission' })
     }
-    if (name === 'get_player_bonus_submission') return route.fulfill({ json: saved ? [saved] : [] })
+    if (name === 'get_owned_player_submission') return route.fulfill({ json: route.request().postDataJSON().p_bonus ? saved : null })
     return route.fulfill({ json: [] })
   })
   return { requests, setDeadline: () => { deadline = Date.now() + 3500 } }

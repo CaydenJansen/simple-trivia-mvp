@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { serverNow, useServerClock } from '@/lib/trivia/use-server-clock';
 import { supabase } from "@/lib/supabase/client";
 import {
   leaderboardVisibilityFromSettings,
@@ -36,7 +37,7 @@ import { autoRunClockColor, autoRunClockDeadlineMs, autoRunClockFromSettings, au
 import { speedClock, speedScoringEnabled, speedPointsAvailable } from '@/lib/trivia/speed-scoring';
 import { nextSuggestedTeamName } from "@/lib/trivia/team-name-suggestions";
 import { showGameRewardDescription, showGameRewardFromSettings, showGameWinnerDetail } from "@/lib/trivia/show-game-rewards";
-import { answerCorrectnessSummaries, correctAnswerIndex, correctnessSummary, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
+import { correctAnswerIndex, type CorrectnessSummary } from "@/lib/trivia/correctness-rate";
 import { playersSeeCorrectnessPercentage } from "@/lib/trivia/correctness-visibility";
 import BrandWordmark from "@/components/BrandWordmark";
 import TeamWheel from "@/components/TeamWheel";
@@ -221,6 +222,10 @@ function submittedAnswerLabel(answerText: string, question: LiveQuestionDefiniti
   return String(parsed ?? '')
 }
 
+function playerAdmissionArgs() {
+  return { p_request_id: localStorage.getItem('simple-trivia-join-request-id') ?? '', p_request_token: localStorage.getItem('simple-trivia-join-request-token') ?? '' }
+}
+
 async function resolveLivePlayerScreen(gameId: string, teamId: string, gameState: RemoteGameState): Promise<PlayerScreen | null> {
   if (gameState.current_screen === 'lobby') return 'waiting'
 
@@ -232,14 +237,11 @@ async function resolveLivePlayerScreen(gameId: string, teamId: string, gameState
 
     const [{ data: submission, error }, { data: bonusSubmission, error: bonusError }, { data: question }] = await Promise.all([
       supabase
-        .from('submissions')
-        .select('id, is_correct, points_awarded')
-        .eq('game_id', gameId)
-        .eq('team_id', teamId)
-        .eq('question_key', questionKey)
+        .rpc('get_owned_player_submission', { p_game_id: gameId, p_team_id: teamId, p_question_key: questionKey, ...playerAdmissionArgs() })
         .maybeSingle(),
       supabase
-        .rpc('get_player_bonus_submission', {
+        .rpc('get_owned_player_submission', {
+              ...playerAdmissionArgs(), p_bonus: true,
           p_game_id: gameId,
           p_team_id: teamId,
           p_question_key: questionKey,
@@ -261,6 +263,7 @@ async function resolveLivePlayerScreen(gameId: string, teamId: string, gameState
       corePointsMax: question?.points_max ?? 1,
       bonusPointsMax: runtimeBonusFromJson(question?.bonus)?.points ?? 0,
       speedScoring: speedScoringEnabled(gameState.settings),
+      scoresHidden: !playersSeeScoresOnScreen(gameState.settings, gameState.current_screen ?? ''),
     }) as PlayerScreen
   }
 
@@ -303,6 +306,7 @@ function useLivePlayerSync(
 
     async function loadGameState() {
       if (loadingGameState) return
+      const startedVersion = stateApplyVersion
       if (!navigator.onLine) {
         if (active) setScreen('reconnecting')
         return
@@ -314,7 +318,7 @@ function useLivePlayerSync(
         .eq('id', activeGameId)
         .maybeSingle()
       loadingGameState = false
-      if (!active) return
+      if (!active || startedVersion !== stateApplyVersion) return
       if (error) {
         console.error('Could not load live game state:', error)
         setScreen('reconnecting')
@@ -403,6 +407,7 @@ function usePlayerPresence(enabled: boolean) {
 }
 
 function usePlayerAutoRunClock() {
+  const clockReady = useServerClock()
   const [settings, setSettings] = useState<Json | null>(null)
   const [now, setNow] = useState<number | null>(null)
 
@@ -417,7 +422,7 @@ function usePlayerAutoRunClock() {
       if (!active) return
       if (error) return console.error('Could not load the Auto-Run clock:', error)
       setSettings(data?.settings ?? null)
-      setNow(Date.now())
+      setNow(serverNow())
     }
 
     void load()
@@ -429,7 +434,7 @@ function usePlayerAutoRunClock() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${activeGameId}` }, payload => {
         if (!active) return
         setSettings((payload.new as { settings?: Json }).settings ?? null)
-        setNow(Date.now())
+        setNow(serverNow())
       })
       .subscribe(status => { if (status === 'SUBSCRIBED') void load() })
 
@@ -448,18 +453,19 @@ function usePlayerAutoRunClock() {
 
   useEffect(() => {
     if (!settings) return
-    const interval = window.setInterval(() => setNow(Date.now()), 1000)
+    const interval = window.setInterval(() => setNow(serverNow()), 1000)
     return () => window.clearInterval(interval)
   }, [settings])
 
-  if (now === null) return null
+  if (now === null || !clockReady) return null
+  const currentTime = serverNow()
   const speed = speedClock(settings)
   if (speed) {
-    const remaining = Math.max(0, Math.ceil((speed.deadline_ms - now) / 1000))
-    const points = speedPointsAvailable(speed.duration_seconds - remaining, speed.duration_seconds)
+    const remaining = Math.max(0, Math.ceil((speed.deadline_ms - currentTime) / 1000))
+    const points = speedPointsAvailable((currentTime - speed.opened_at_ms) / 1000, speed.duration_seconds)
     return { key: speed.key, label: `Answers close in · up to ${points} per point`, remaining, paused: false, deadlineMs: speed.deadline_ms }
   }
-  const clock = autoRunClockFromSettings(settings, now)
+  const clock = autoRunClockFromSettings(settings, currentTime)
   return clock ? { ...clock, deadlineMs: autoRunClockDeadlineMs(settings) } : null
 }
 
@@ -468,7 +474,7 @@ type PlayerSubmitOptions = { deadline?: boolean }
 function useAutoSubmitPlayerDraft(
   value: string | string[],
   enabled: boolean,
-  submit: (value: string | string[], options?: PlayerSubmitOptions) => Promise<void>,
+  submit: (value: string | string[], options?: PlayerSubmitOptions) => Promise<unknown>,
   questionKey?: string,
   stage: 'core' | 'bonus' = 'core',
 ) {
@@ -487,15 +493,28 @@ function useAutoSubmitPlayerDraft(
 
   useEffect(() => {
     if (!clockKey || !clockLabel?.startsWith('Answers') || clockPaused || clockDeadlineMs === null) return
-    if (clockKey.startsWith('speed-') && clockKey !== `speed-${questionKey}-${stage}`) return
-    const key = clockKey
+    if (clockKey !== `speed-${questionKey}-${stage}` && clockKey !== `open-${questionKey}-${stage}`) return
+    const key = `${clockKey}:${clockDeadlineMs}`
+    let active = true
+    let retryTimer: number | null = null
+    async function attempt(attemptNumber: number) {
+      let success: unknown
+      try { success = await submitRef.current(latestValueRef.current, { deadline: true }) }
+      catch { success = false }
+      if (!active) return
+      if (success === true) { submittedClockKeyRef.current = key; return }
+      // Retry only within the server's short deadline grace period. A changed
+      // question, extended clock, or unmount cancels this entire attempt chain.
+      if (attemptNumber < 3 && serverNow() < clockDeadlineMs! + 500) {
+        retryTimer = window.setTimeout(() => { void attempt(attemptNumber + 1) }, 150)
+      }
+    }
     const timer = window.setTimeout(() => {
       if (!enabledRef.current || submittedClockKeyRef.current === key) return
-      submittedClockKeyRef.current = key
-      void submitRef.current(latestValueRef.current, { deadline: true })
-    }, Math.max(0, clockDeadlineMs - Date.now() - 250))
-    return () => window.clearTimeout(timer)
-  }, [clockDeadlineMs, clockKey, clockLabel, clockPaused, questionKey, stage, enabled])
+      void attempt(1)
+    }, Math.max(0, clockDeadlineMs - serverNow() - 250))
+    return () => { active = false; window.clearTimeout(timer); if (retryTimer !== null) window.clearTimeout(retryTimer) }
+  }, [clockDeadlineMs, clockKey, clockLabel, clockPaused, questionKey, stage])
 }
 
 function useLiveQuestionDefinition() {
@@ -660,6 +679,8 @@ function useSubmitAnswer(
   const [submitNotice, setSubmitNotice] = useState<string | null>(null)
   const submitBusyRef = useRef(false)
   const noticeTimerRef = useRef<number | null>(null)
+  const submissionVersionRef = useRef(0)
+  useEffect(() => () => { submissionVersionRef.current += 1 }, [expectedQuestionKey, expectedScreen])
 
   useEffect(() => () => {
     if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current)
@@ -667,6 +688,7 @@ function useSubmitAnswer(
 
   async function submit(value: string | string[], options: PlayerSubmitOptions = {}) {
     if (submitBusyRef.current || !expectedQuestionKey) return
+    const submissionVersion = submissionVersionRef.current
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
     if (!gameId || !teamId) return go('join')
@@ -683,6 +705,7 @@ function useSubmitAnswer(
           .select('current_screen, answer_phase, answer_editing_allowed, current_question_key')
           .eq('id', gameId)
           .maybeSingle()
+        if (submissionVersion !== submissionVersionRef.current) return
         if (gameError || !game) throw gameError ?? new Error('Game not found')
         if (game.current_screen !== expectedScreen || game.answer_phase !== 'open' || game.current_question_key !== expectedQuestionKey) {
           go('no-answer')
@@ -692,21 +715,26 @@ function useSubmitAnswer(
       }
 
       const answerText = Array.isArray(value) ? JSON.stringify(value.map(item => item.trim())) : value.trim()
-      const { error } = await supabase.rpc('submit_player_answer', {
+      const { error } = await supabase.rpc('submit_owned_player_answer', {
+        ...playerAdmissionArgs(),
         p_game_id: gameId,
         p_team_id: teamId,
         p_question_key: expectedQuestionKey,
         p_answer_text: answerText,
       })
+      if (submissionVersion !== submissionVersionRef.current) return
       if (error) throw error
-      localStorage.setItem('simple-trivia-last-answer', answerText)
+      window.dispatchEvent(new Event('trivia-answer-saved'))
+      try { localStorage.setItem('simple-trivia-last-answer', answerText) } catch { /* The submitted database answer is already safe. */ }
       if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current)
       setSubmitNotice(existingSubmission
         ? 'Updated. Your latest answer replaced the previous one.'
         : options.deadline ? 'Time is up. Your partial answer was submitted.' : 'Answer submitted.')
       noticeTimerRef.current = window.setTimeout(() => setSubmitNotice(null), 3500)
       if (!options.deadline && !answerEditingAllowed) go('submitted')
+      return true
     } catch (error) {
+      if (submissionVersion !== submissionVersionRef.current) return
       console.error('Could not submit answer:', error)
       const message = readableErrorMessage(error)
       setSubmitError(message.includes('already locked')
@@ -733,9 +761,12 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitNotice, setSubmitNotice] = useState<string | null>(null)
   const submitBusyRef = useRef(false)
+  const submissionVersionRef = useRef(0)
+  useEffect(() => () => { submissionVersionRef.current += 1 }, [expectedQuestionKey])
 
   async function submit(value: string | string[], options: PlayerSubmitOptions = {}) {
     if (submitBusyRef.current || !expectedQuestionKey) return
+    const submissionVersion = submissionVersionRef.current
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
     if (!gameId || !teamId) return go('join')
@@ -752,6 +783,7 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey
           .select('answer_phase, answer_editing_allowed, question_stage, current_question_key')
           .eq('id', gameId)
           .maybeSingle()
+        if (submissionVersion !== submissionVersionRef.current) return
         if (gameError) throw gameError
         if (!game || game.answer_phase !== 'open' || game.question_stage !== 'bonus' || game.current_question_key !== expectedQuestionKey) {
           setSubmitError('Bonus answers have closed.')
@@ -761,18 +793,23 @@ function useSubmitBonusAnswer(go: (s: PlayerScreen) => void, expectedQuestionKey
       }
 
       const answerText = String(value).trim()
-      const { error } = await supabase.rpc('submit_player_bonus_answer', {
+      const { error } = await supabase.rpc('submit_owned_player_answer', {
+        ...playerAdmissionArgs(), p_bonus: true,
         p_game_id: gameId,
         p_team_id: teamId,
         p_question_key: expectedQuestionKey,
         p_answer_text: answerText,
       })
+      if (submissionVersion !== submissionVersionRef.current) return
       if (error) throw error
+      window.dispatchEvent(new Event('trivia-answer-saved'))
       setSubmitNotice(existingSubmission || submitNotice
         ? 'Updated. Your latest bonus answer replaced the previous one.'
         : options.deadline ? 'Time is up. Your partial bonus answer was submitted.' : 'Bonus answer submitted.')
       if (!options.deadline && !answerEditingAllowed) go('bonus-submitted')
+      return true
     } catch (error) {
+      if (submissionVersion !== submissionVersionRef.current) return
       console.error('Could not submit bonus answer:', error)
       const message = readableErrorMessage(error)
       setSubmitError(message.includes('already locked')
@@ -1080,6 +1117,7 @@ function PlayerBonusResult({ snapshot }: { snapshot: PlayerSnapshot }) {
 }
 
 function PlayerQuestionResultSummary({ snapshot }: { snapshot: PlayerSnapshot }) {
+  const scoresVisible = useContext(PlayerScoreVisibilityContext)
   const hasBonus = snapshot.bonusPointsMax > 0
   const totalAwarded = snapshot.pointsAwarded + snapshot.bonusPointsAwarded
   const pointLabel = (points: number) => `${points} ${points === 1 ? 'point' : 'points'}`
@@ -1095,7 +1133,7 @@ function PlayerQuestionResultSummary({ snapshot }: { snapshot: PlayerSnapshot })
         <PlayerBonusResult snapshot={snapshot} />
       </div>
 
-      <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="w-full overflow-hidden rounded-2xl">
+      {scoresVisible && <section style={{ background: C.panel, border: `1px solid ${C.line}` }} className="w-full overflow-hidden rounded-2xl">
         {hasBonus ? (
           <>
             <div className="grid grid-cols-2">
@@ -1117,7 +1155,7 @@ function PlayerQuestionResultSummary({ snapshot }: { snapshot: PlayerSnapshot })
             <p style={{ color: snapshot.pointsAwarded > 0 ? C.go : C.sub }} className="text-xl font-black">+{pointLabel(snapshot.pointsAwarded)}</p>
           </div>
         )}
-      </section>
+      </section>}
 
       {snapshot.correctness && !isCompoundResultType(snapshot.questionType) && (
         <p style={{ color: C.sub }} className="text-center text-xs font-bold">
@@ -1182,14 +1220,11 @@ function usePlayerSnapshot(): PlayerSnapshot {
         const [questionResult, submissionResult, bonusSubmissionResult] = await Promise.all([
           loadPlayerQuestion(activeGameId, game.current_question_key),
           supabase
-            .from('submissions')
-            .select('answer_text, is_correct, points_awarded, grading_json')
-            .eq('game_id', activeGameId)
-            .eq('team_id', activeTeamId)
-            .eq('question_key', game.current_question_key)
+            .rpc('get_owned_player_submission', { p_game_id: activeGameId, p_team_id: activeTeamId, p_question_key: game.current_question_key, ...playerAdmissionArgs() })
             .maybeSingle(),
           supabase
-            .rpc('get_player_bonus_submission', {
+            .rpc('get_owned_player_submission', {
+              ...playerAdmissionArgs(), p_bonus: true,
               p_game_id: activeGameId,
               p_team_id: activeTeamId,
               p_question_key: game.current_question_key,
@@ -1207,19 +1242,16 @@ function usePlayerSnapshot(): PlayerSnapshot {
         bonusSubmission = bonusSubmissionResult.data
 
         if (game.answer_phase === 'revealed' && playersSeeCorrectnessPercentage(game.settings)) {
-          const [{ count: teamCount }, { data: allSubmissions, error: correctnessError }] = await Promise.all([
-            supabase.from('teams').select('id', { count: 'exact', head: true }).eq('game_id', activeGameId),
-            supabase.from('submissions').select('is_correct, grading_json').eq('game_id', activeGameId).eq('question_key', game.current_question_key),
-          ])
-          if (correctnessError) {
-            console.error('Could not load the player correctness percentage:', correctnessError)
-          } else {
-            correctness = correctnessSummary(teamCount ?? 0, allSubmissions ?? [])
+          const { data, error: accuracyError } = await supabase.rpc('get_player_question_accuracy', {
+            p_game_id: activeGameId, p_team_id: activeTeamId, p_question_key: game.current_question_key, ...playerAdmissionArgs(),
+          })
+          if (accuracyError) console.error('Could not load player correctness:', accuracyError)
+          else if (data && typeof data === 'object' && !Array.isArray(data)) {
+            const accuracy = data as unknown as CorrectnessSummary & { items: CorrectnessSummary[] }
+            correctness = { total: accuracy.total, correct: accuracy.correct, percentage: accuracy.percentage }
             if (isCompoundResultType(question?.question_type ?? null)) {
               const ownItems = playerReviewItemsFromJson(submission?.grading_json)
-              const summaries = answerCorrectnessSummaries(question!.question_type, question!.correct_answer, teamCount ?? 0,
-                (allSubmissions ?? []).map(row => ({ items: playerReviewItemsFromJson(row.grading_json) })))
-              correctnessItems = ownItems.map((item, index) => summaries[question!.question_type === 'multi-answer'
+              correctnessItems = ownItems.map((item, index) => accuracy.items[question!.question_type === 'multi-answer'
                 ? correctAnswerIndex(question!.correct_answer, item) : index] ?? null)
             }
           }
@@ -1266,6 +1298,8 @@ function usePlayerSnapshot(): PlayerSnapshot {
       })
     }
 
+    const reloadOwnAnswer = () => { void loadSnapshot() }
+    window.addEventListener('trivia-answer-saved', reloadOwnAnswer)
     void loadSnapshot()
     const channel = supabase
       .channel(`player-snapshot-${teamId}-${crypto.randomUUID()}`)
@@ -1277,6 +1311,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
     return () => {
       active = false
       if (retryTimer !== null) window.clearTimeout(retryTimer)
+      window.removeEventListener('trivia-answer-saved', reloadOwnAnswer)
       void supabase.removeChannel(channel)
     }
   }, [])
@@ -1306,10 +1341,12 @@ function useLeaderboardVisibility() {
     if (!gameId) return
     const activeGameId = gameId
     let active = true
+    let version = 0
 
     async function load() {
-      const { data } = await supabase.from('games').select('settings').eq('id', activeGameId).maybeSingle()
-      if (active) setVisibility(leaderboardVisibilityFromSettings(data?.settings))
+      const requestVersion = ++version
+      const { data, error } = await supabase.from('games').select('settings').eq('id', activeGameId).maybeSingle()
+      if (active && requestVersion === version && !error && data) setVisibility(leaderboardVisibilityFromSettings(data.settings))
     }
 
     void load()
@@ -1361,10 +1398,12 @@ function useLiveLeaderboard(enabled = true) {
     if (!gameId || !enabled) return
     const activeGameId = gameId
     let active = true
+    let version = 0
 
     async function load() {
-      const { data } = await supabase.from('teams').select('id, name, score, final_placement, final_sort_order').eq('game_id', activeGameId).order('score', { ascending: false })
-      if (active) setTeams((data ?? []) as PlayerLeaderboardTeam[])
+      const requestVersion = ++version
+      const { data, error } = await supabase.from('teams').select('id, name, score, final_placement, final_sort_order').eq('game_id', activeGameId).order('score', { ascending: false })
+      if (active && requestVersion === version && !error) setTeams((data ?? []) as PlayerLeaderboardTeam[])
     }
     void load()
     const channel = supabase
@@ -1510,10 +1549,12 @@ function PlayerPrimaryHeader({ onLeave }: { onLeave: () => void }) {
 function PlayerQuestionCard({
   prompt,
   eyebrow,
+  imageUrl,
   tone = 'question',
 }: {
   prompt: string
   eyebrow?: string
+  imageUrl?: string | null
   tone?: 'question' | 'bonus'
 }) {
   const bonus = tone === 'bonus'
@@ -1537,6 +1578,7 @@ function PlayerQuestionCard({
       <h2 style={{ color: C.ink, fontSize: 'clamp(22px, 6vw, 27px)', lineHeight: 1.3, fontWeight: 900 }}>
         {prompt}
       </h2>
+      {imageUrl && <div role="img" aria-label="Question image" className="mt-3 h-40 w-full bg-contain bg-center bg-no-repeat" style={{ backgroundImage: `url(${imageUrl})` }} />}
     </section>
   )
 }
@@ -1763,6 +1805,7 @@ export function JoinGame({ go }: { go: (s: PlayerScreen) => void }) {
 
 // ─── SCREEN 2 — TEAM SETUP ────────────────────────────────────────────────────
 function TeamSetup({ go }: { go: (s: PlayerScreen) => void }) {
+  const joinOperationsRef = useRef(new Map<string, string>())
   const [name, setName] = useState('')
   const [pin, setPin] = useState('')
   const [pinMode, setPinMode] = useState<TeamPinMode>('none')
@@ -1818,8 +1861,17 @@ async function handleJoin() {
     return;
   }
   try {
+    const operationKey = `simple-trivia-join-operation:${gameId}:${name.trim().toLowerCase().replace(/\s+/g, ' ')}`
+    let operationId = joinOperationsRef.current.get(operationKey)
+    if (!operationId) {
+      try { operationId = localStorage.getItem(operationKey) ?? undefined } catch { /* use memory fallback */ }
+      operationId ??= crypto.randomUUID()
+      joinOperationsRef.current.set(operationKey, operationId)
+      try { localStorage.setItem(operationKey, operationId) } catch { /* retries still work in this page */ }
+    }
     const { data: request, error } = await supabase
-      .rpc("join_live_game", {
+      .rpc("join_live_game_once", {
+        p_operation_id: operationId,
         p_game_id: gameId,
         p_team_name: name.trim(),
         p_pin_mode: pinMode,
@@ -1831,6 +1883,8 @@ async function handleJoin() {
     localStorage.setItem("simple-trivia-join-request-id", request.request_id);
     localStorage.setItem("simple-trivia-join-request-token", request.request_token);
     localStorage.setItem("simple-trivia-team-name", request.name);
+    joinOperationsRef.current.delete(operationKey);
+    try { localStorage.removeItem(operationKey) } catch { /* credentials above are already durable */ }
 
     if (request.admission_status === 'approved' && request.team_id) {
       localStorage.setItem('simple-trivia-team-id', request.team_id)
@@ -2203,11 +2257,15 @@ function ApprovalPending({ go }: { go: (s: PlayerScreen) => void }) {
     withdrawingRef.current = true
     setWithdrawing(true)
     try {
-      const { error } = await supabase.rpc('withdraw_team_join_request', {
+      const { data: withdrawn, error } = await supabase.rpc('withdraw_team_join_request', {
         p_request_id: requestId,
         p_request_token: requestToken,
       })
       if (error) throw error
+      if (!withdrawn) {
+        setStatusError('Your request has already been processed. Checking your admission…')
+        return
+      }
       localStorage.removeItem('simple-trivia-join-request-id')
       localStorage.removeItem('simple-trivia-join-request-token')
       go('team-setup')
@@ -2423,7 +2481,7 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'}${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points` : ''}`} />
+        <PlayerQuestionCard imageUrl={question?.image_url} prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'}${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points` : ''}`} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
         <textarea rows={3} value={answer} onChange={e => { answerDirtyRef.current = true; setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
@@ -2473,13 +2531,7 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-5">
-        <div style={{ borderRadius: 16, overflow: 'hidden', background: C.ground, border: `1px solid ${C.line}`, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', height: 180 }}>
-          {question?.image_url ? <>
-            {/* eslint-disable-next-line @next/next/no-img-element -- Host-authored URLs cannot use a fixed remote-image allowlist. */}
-            <img src={question.image_url} alt="Question image" style={{ maxHeight: 140, maxWidth: '80%', objectFit: 'contain' }} />
-          </> : <span style={{ color: C.sub }}>Loading image…</span>}
-        </div>
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'}${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points` : ''}`} />
+        <PlayerQuestionCard imageUrl={question?.image_url} prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'}${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points` : ''}`} />
         <label style={{ color: C.sub, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Your answer</label>
         <textarea rows={3} value={answer} onChange={e => { answerDirtyRef.current = true; setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
@@ -2530,7 +2582,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'}${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points` : ''}`} />
+        <PlayerQuestionCard imageUrl={question?.image_url} prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'}${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points` : ''}`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {choices.map((choice, i) => {
             const key = choice.key ?? String.fromCharCode(65 + i)
@@ -2597,7 +2649,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · ${snapshot.speedScoring ? `Up to ${snapshot.pointsMax} points · partial credit` : '1 point per correct answer'}`} />
+        <PlayerQuestionCard imageUrl={question?.image_url} prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · ${snapshot.speedScoring ? `Up to ${snapshot.pointsMax} points · partial credit` : '1 point per correct answer'}`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {answers.map((answer, i) => <div key={i}>
             <input ref={element => { inputRefs.current[i] = element }} value={answer} onChange={e => setA(i, e.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); inputRefs.current[i + 1]?.focus() } }} placeholder="Type an answer…"
@@ -2657,7 +2709,7 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-5">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · ${snapshot.speedScoring ? `Up to ${snapshot.pointsMax} points · partial credit` : '1 point per part'}`} />
+        <PlayerQuestionCard imageUrl={question?.image_url} prompt={question?.prompt ?? 'Loading question…'} eyebrow={`${question?.category ?? 'Question'} · ${snapshot.speedScoring ? `Up to ${snapshot.pointsMax} points · partial credit` : '1 point per part'}`} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {parts.map((part, i) => <div key={part.label ?? i}>
             <p style={{ color: C.violet, fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', marginBottom: 8 }}>PART {part.label ?? String.fromCharCode(65 + i)}</p>
@@ -2680,6 +2732,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
   const question = useLiveQuestionDefinition()
   const snapshot = usePlayerSnapshot()
   const [items, setItems] = useState<string[]>([])
+  const [hasDraft, setHasDraft] = useState(false)
   const [justMoved, setJustMoved] = useState<string | null>(null)
   const [justDisplaced, setJustDisplaced] = useState<string | null>(null)
   const { submit, submitting, submitError, submitNotice } = useSubmitAnswer(go, 'ranking', question?.question_key, snapshot.hasSubmission)
@@ -2702,12 +2755,14 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
     // Reset the order for a new question, or restore it when answers reopen.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (next.length) setItems(next)
+    setHasDraft(localDraft.length > 0)
   }, [question?.question_key, optionItemsKey, correctItemsKey, draftKey, storedItemsKey])
-  useAutoSubmitPlayerDraft(items, items.length > 0 && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
+  useAutoSubmitPlayerDraft(items, hasDraft && items.length > 0 && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
   function move(i: number, dir: -1 | 1) {
     const j = i + dir
     if (j < 0 || j >= items.length) return
+    setHasDraft(true)
 
     snapshots.current = new Map()
 
@@ -2769,7 +2824,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
       />
 
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        <PlayerQuestionCard prompt={question?.prompt ?? 'Loading question…'} eyebrow={`Put these in order${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points${question?.points_max === 1 ? ' · all positions correct' : ''}` : ''}`} />
+        <PlayerQuestionCard imageUrl={question?.image_url} prompt={question?.prompt ?? 'Loading question…'} eyebrow={`Put these in order${snapshot.speedScoring ? ` · Up to ${snapshot.pointsMax} points${question?.points_max === 1 ? ' · all positions correct' : ''}` : ''}`} />
         <p style={{ color: C.sub, fontSize: 14, marginBottom: 16 }}>Tap the arrows to change the order.</p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -3203,7 +3258,7 @@ function ShowGame() {
   const balloonPulseTimerRef = useRef<number | null>(null)
   const balloonPulseBusyRef = useRef(false)
   const balloonPulsePromiseRef = useRef<Promise<void> | null>(null)
-  const [showGameNow, setShowGameNow] = useState(() => Date.now())
+  const [showGameNow, setShowGameNow] = useState(() => serverNow())
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async (requestedShowGameKey?: string | null) => {
@@ -3224,12 +3279,9 @@ function ShowGame() {
       setError(null)
     }
     if (!nextShowGameKey) return
-    const { data: activeShowGame, error: showGameError } = await supabase
-      .from('game_show_games')
-      .select('id, show_game_key, round_number, round_title, game_type, title, settings, status, started_at, explode_at, winner_team_id')
-      .eq('game_id', gameId)
-      .eq('show_game_key', nextShowGameKey)
-      .maybeSingle()
+    const { data: activeShowGame, error: showGameError } = await supabase.rpc('get_owned_player_show_game', {
+      p_game_id: gameId, p_team_id: teamId, p_show_game_key: nextShowGameKey, ...playerAdmissionArgs(),
+    }).maybeSingle()
     if (stale()) return
     if (showGameError) { setError('Could not load the game.'); return }
     if (activeShowGame?.id !== wheelShowGameIdRef.current) {
@@ -3253,8 +3305,7 @@ function ShowGame() {
     } else { setHasPressed(false); setBombResult(null) }
     if (activeShowGame && isEliminationShowGame(activeShowGame.game_type)) {
       const state = eliminationShowGameState(activeShowGame.settings)
-      const { data: roundChoices } = await supabase.from('game_show_game_choices').select('team_id, choice')
-        .eq('game_show_game_id', activeShowGame.id).eq('round_number', state.roundNumber)
+      const { data: roundChoices } = await supabase.rpc('get_owned_player_choices', { p_game_id: gameId, p_team_id: teamId, p_show_game_id: activeShowGame.id, p_round_number: state.roundNumber, ...playerAdmissionArgs() })
       if (stale()) return
       const choice = (roundChoices ?? []).find(item => item.team_id === teamId)
       setOwnChoice(choice?.choice ?? (activeShowGame.game_type === 'dodge-the-rock' ? String(state.positions[teamId] ?? 1) : null))
@@ -3393,7 +3444,7 @@ function ShowGame() {
   const collaborativePollingId = showGame?.id ?? null
   const collaborativePollingStatus = showGame?.status ?? null
   useEffect(() => {
-    if (!collaborativePollingType || !['lowest-bidder', 'deal-or-no-deal', 'beat-the-bomb'].includes(collaborativePollingType) || collaborativePollingStatus !== 'open') return
+    if (!collaborativePollingType || (collaborativePollingType === 'shared-cursor' && collaborativePollingStatus === 'open')) return
     let active = true
     let timer: number | null = null
     const poll = async () => {
@@ -3415,14 +3466,13 @@ function ShowGame() {
     const syncCursor = async () => {
       if (syncing) return
       syncing = true
-      const { data } = await supabase
-        .from('game_show_games')
-        .select('id, show_game_key, round_number, round_title, game_type, title, settings, status, started_at, explode_at, winner_team_id')
-        .eq('id', collaborativePollingId)
-        .maybeSingle()
+      const { data } = await supabase.rpc('get_owned_player_show_game', {
+        p_game_id: localStorage.getItem('simple-trivia-game-id') ?? '', p_team_id: localStorage.getItem('simple-trivia-team-id') ?? '',
+        p_show_game_key: currentShowGameKeyRef.current ?? '', ...playerAdmissionArgs(),
+      }).maybeSingle()
       if (active && data) {
         setShowGame(current => current?.id === data.id ? data as PlayerShowGame : current)
-        setShowGameNow(Date.now())
+        setShowGameNow(serverNow())
       }
       syncing = false
       if (active) timer = window.setTimeout(() => { void syncCursor() }, 400)
@@ -3462,7 +3512,7 @@ function ShowGame() {
 
   useEffect(() => {
     if (!showGame?.explode_at || showGame.status !== 'open') return
-    const timer = window.setInterval(() => setShowGameNow(Date.now()), 200)
+    const timer = window.setInterval(() => setShowGameNow(serverNow()), 200)
     return () => window.clearInterval(timer)
   }, [showGame?.explode_at, showGame?.status])
 
@@ -3526,7 +3576,7 @@ function ShowGame() {
     const requestId=localStorage.getItem('simple-trivia-join-request-id');const requestToken=localStorage.getItem('simple-trivia-join-request-token');if(!requestId||!requestToken)return
     collaborativeBusyRef.current=true;setCollaborativeBusy(true);setError(null)
     const {data,error:pullError}=await supabase.rpc('pull_shared_cursor',{p_game_show_game_id:showGame.id,p_request_id:requestId,p_request_token:requestToken})
-    if(pullError)setError('Connection interrupted. Reconnecting…');else { setError(null); if(data){setShowGame(data as PlayerShowGame);setShowGameNow(Date.now())} }
+    if(pullError)setError('Connection interrupted. Reconnecting…');else { setError(null); if(data){setShowGame(data as PlayerShowGame);setShowGameNow(serverNow())} }
     collaborativeBusyRef.current=false;setCollaborativeBusy(false)
   }
 
@@ -3827,7 +3877,7 @@ function ShowGame() {
               {!exploded ? <>
                 <div style={{background:C.violetPale,color:C.violet}} className="mb-4 rounded-xl px-4 py-3 text-center font-black tabular-nums">{eliminationSecondsRemaining}s to choose</div>
                 <label htmlFor="lowest-bid" style={{color:C.sub}} className="mb-2 block text-left text-xs font-black uppercase tracking-wider">Your whole number</label>
-                <input id="lowest-bid" type="number" min="0" step="1" inputMode="numeric" value={lowestBid} onChange={event=>{lowestBidDirtyRef.current=true;setLowestBid(event.target.value)}} style={{border:`2px solid ${C.violet}`,color:C.ink}} className="w-full rounded-2xl bg-white px-4 py-4 text-center text-3xl font-black focus:outline-none" />
+                <input id="lowest-bid" type="number" min="0" step="1" inputMode="numeric" value={lowestBid} onFocus={()=>{lowestBidDirtyRef.current=true}} onChange={event=>{lowestBidDirtyRef.current=true;setLowestBid(event.target.value)}} style={{border:`2px solid ${C.violet}`,color:C.ink}} className="w-full rounded-2xl bg-white px-4 py-4 text-center text-3xl font-black focus:outline-none" />
                 <button type="button" onClick={()=>void submitLowestBid()} disabled={collaborativeBusy||!lowestBid.trim()} style={{background:C.violet}} className="mt-3 w-full rounded-2xl px-6 py-4 text-lg font-black text-white disabled:opacity-40">{collaborativeBusy?'Saving…':ownLowestBid?'Update locked bid':'Lock in bid'}</button>
                 {ownLowestBid&&<p style={{color:C.go}} className="mt-3 text-sm font-bold">Your current bid is locked as {ownLowestBid.bid}.</p>}
               </> : <><div style={{background:C.violetPale}} className="rounded-2xl px-5 py-5"><p style={{color:C.sub}} className="text-xs font-black uppercase">Your bid</p><p style={{color:C.violet}} className="mt-1 text-5xl font-black">{ownLowestBid?.bid??'—'}</p></div><h2 style={{color:won?C.go:C.ink}} className="mt-5 text-4xl font-black">{won?'You won!':showGame.winner_team_id?'Another unique low bid won':'No unique bid this time'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}{lowestBidMatches.length>1&&<div style={{background:C.panel,border:`1px solid ${C.line}`}} className="mt-5 rounded-2xl px-5 py-4 text-left"><p style={{color:C.sub}} className="text-xs font-black uppercase tracking-wider">Also chose {ownLowestBid?.bid}</p><p style={{color:C.ink}} className="mt-2 font-bold">{lowestBidMatches.filter(item=>!item.is_own).map(item=>item.team_name).join(' · ')}</p></div>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></>}
@@ -3981,7 +4031,7 @@ function DelayedReveal() {
   const scoresVisible = useContext(PlayerScoreVisibilityContext)
   if (!snapshot.loaded) return <PlayerSnapshotLoading />
   const fullyCorrect = snapshot.isCorrect === true
-  const partiallyCorrect = snapshot.pointsAwarded > 0 && !fullyCorrect
+  const partiallyCorrect = !fullyCorrect && (snapshot.pointsAwarded > 0 || snapshot.reviewItems.some(item => item.status === 'correct'))
   const resultTitle = !snapshot.answer
     ? 'No answer submitted'
     : fullyCorrect
@@ -4150,7 +4200,8 @@ function LiveTiebreaker() {
     const gameId = localStorage.getItem('simple-trivia-game-id')
     const teamId = localStorage.getItem('simple-trivia-team-id')
     if (!gameId || !teamId) return
-    const { data, error: loadError } = await supabase.rpc('get_player_tiebreaker_state', {
+    const { data, error: loadError } = await supabase.rpc('get_owned_player_tiebreaker_state', {
+      ...playerAdmissionArgs(),
       p_game_id: gameId,
       p_team_id: teamId,
     }).maybeSingle()
@@ -4165,7 +4216,8 @@ function LiveTiebreaker() {
     setState(next)
     if (attemptIdRef.current !== (next?.attempt_id ?? null)) {
       attemptIdRef.current = next?.attempt_id ?? null
-      setAnswer(next?.numeric_answer !== null && next?.numeric_answer !== undefined ? String(next.numeric_answer) : '')
+      const draftKey = playerDraftStorageKey(gameId, teamId, next?.attempt_id ? `backup-${next.attempt_id}` : undefined)
+      setAnswer(next?.numeric_answer !== null && next?.numeric_answer !== undefined ? String(next.numeric_answer) : readPlayerDraft<string>(localStorage, draftKey) ?? '')
     } else if (next?.numeric_answer !== null && next?.numeric_answer !== undefined) {
       setAnswer(String(next.numeric_answer))
     }
@@ -4204,7 +4256,8 @@ function LiveTiebreaker() {
     setSubmitting(true)
     setError(null)
     try {
-      const { error: submitError } = await supabase.rpc('submit_player_tiebreaker', {
+      const { error: submitError } = await supabase.rpc('submit_owned_player_tiebreaker', {
+        ...playerAdmissionArgs(),
         p_game_id: gameId,
         p_team_id: teamId,
         p_attempt_id: state.attempt_id,
@@ -4310,7 +4363,10 @@ function LiveTiebreaker() {
         ) : (
           <form onSubmit={submit}>
             <label style={{ color: C.sub, fontSize: 12, fontWeight: 800 }}>YOUR CLOSEST ANSWER{state.answer_unit ? ` (${state.answer_unit})` : ''}</label>
-            <input type="number" step="any" inputMode="decimal" value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Enter a number"
+            <input type="number" step="any" inputMode="decimal" value={answer} onChange={event => {
+              setAnswer(event.target.value)
+              writePlayerDraft(localStorage, playerDraftStorageKey(localStorage.getItem('simple-trivia-game-id'), localStorage.getItem('simple-trivia-team-id'), `backup-${state.attempt_id}`), event.target.value)
+            }} placeholder="Enter a number"
               style={{ width: '100%', marginTop: 8, border: `2px solid ${C.line}`, borderRadius: 16, padding: '16px', fontSize: 22, fontWeight: 800, color: C.ink, background: C.panel }} />
             {error && <p style={{ color: C.stop, fontSize: 13, fontWeight: 700, marginTop: 10 }}>{error}</p>}
             <button type="submit" disabled={!answer.trim() || submitting} style={{ width: '100%', marginTop: 16, background: C.violet, color: 'white', borderRadius: 16, padding: '15px', fontSize: 16, fontWeight: 900, opacity: !answer.trim() || submitting ? 0.5 : 1 }}>
@@ -4351,7 +4407,11 @@ function GameEnded({ go }: { go: (s: PlayerScreen) => void }) {
       <h1 style={{ color: C.ink, fontSize: 26 }} className="font-black mb-3">This game has ended.</h1>
       <p style={{ color: C.sub, fontSize: 15, marginBottom: 32 }}>Thanks for playing with Good Trivia Company.</p>
       <div style={{ width: '100%', maxWidth: 280 }}>
-        <Btn onClick={() => go('join')}>Join Another Game</Btn>
+        <Btn onClick={() => {
+          PLAYER_SESSION_KEYS.forEach(key => localStorage.removeItem(key))
+          window.history.replaceState(null, '', window.location.pathname)
+          go('join')
+        }}>Join Another Game</Btn>
       </div>
     </div>
   )
@@ -4370,8 +4430,8 @@ function PartialCorrect() {
       <div className="flex-1 overflow-y-auto px-5 py-5">
         <PlayerQuestionCard prompt={snapshot.prompt || 'Question result'} />
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-          <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.go, fontWeight: 900 }}>{totalAwarded}/{totalMax}</div>
-          <h1 style={{ color: C.ink, fontSize: 30 }} className="font-black">{totalAwarded} of {totalMax} points</h1>
+          <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.go, fontWeight: 900 }}>{scoresVisible ? `${totalAwarded}/${totalMax}` : '✓'}</div>
+          <h1 style={{ color: C.ink, fontSize: 30 }} className="font-black">{scoresVisible ? `${totalAwarded} of ${totalMax} points` : 'Partly correct'}</h1>
           <PlayerQuestionResultSummary snapshot={snapshot} />
           {scoresVisible && <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>}
           <WaitMsg msg="Waiting for the next question…" />
@@ -4579,7 +4639,19 @@ export function PlayerFlow() {
           setScreen('approval-pending')
           setRestoringSession(false)
           return
+        } else {
+          localStorage.removeItem('simple-trivia-team-id')
+          localStorage.removeItem('simple-trivia-join-request-id')
+          localStorage.removeItem('simple-trivia-join-request-token')
+          setScreen('team-setup')
+          setRestoringSession(false)
+          return
         }
+      } else {
+        localStorage.removeItem('simple-trivia-team-id')
+        setScreen('team-setup')
+        setRestoringSession(false)
+        return
       }
 
       const [{ data: game, error: gameError }, { data: team, error: teamError }] = await Promise.all([
@@ -4588,7 +4660,7 @@ export function PlayerFlow() {
           .select('status, current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key, settings')
           .eq('id', gameId)
           .maybeSingle(),
-        teamId && !securelyRestoredTeam
+        teamId
           ? supabase.from('teams').select('id, game_id, name').eq('id', teamId).maybeSingle()
           : Promise.resolve({ data: null, error: null }),
       ])
@@ -4614,9 +4686,11 @@ export function PlayerFlow() {
         return
       }
 
-      if (!securelyRestoredTeam && (!team || team.game_id !== gameId)) {
+      if (!securelyRestoredTeam || !team || team.game_id !== gameId) {
         localStorage.removeItem('simple-trivia-team-id')
         localStorage.removeItem('simple-trivia-team-name')
+        localStorage.removeItem('simple-trivia-join-request-id')
+        localStorage.removeItem('simple-trivia-join-request-token')
         setScreen(gameAcceptsNewTeams(game.status) ? 'team-setup' : 'game-ended')
         setRestoringSession(false)
         return

@@ -67,7 +67,7 @@ async function mockCollaborativeGame(page: Page, type: GameType) {
     }
     if (path.endsWith('/rpc/touch_team_presence')) return json('team-a')
     if (path.endsWith('/games')) return json({ id: 'collab-game', title: 'Test', status: 'live', current_screen: 'show-game', answer_phase: 'closed', answer_editing_allowed: false, question_stage: 'core', current_question_key: null, current_content_screen_key: null, current_show_game_key: 'collab-a', settings: {} })
-    if (path.endsWith('/game_show_games')) return json(showGame)
+    if (path.endsWith('/rpc/get_owned_player_show_game')) return json(showGame)
     if (path.endsWith('/teams')) {
       const teams = [{ id: 'team-a', game_id: 'collab-game', name: 'Purple People', score: 0, last_seen_at: new Date(now).toISOString() }, { id: 'team-b', game_id: 'collab-game', name: 'Quiz Kids', score: 0, last_seen_at: new Date(now).toISOString() }]
       return json(url.searchParams.has('id') ? teams[0] : teams)

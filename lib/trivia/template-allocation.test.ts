@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { allocateTemplateQuestions } from './template-allocation'
+import { allocateTemplateQuestions, allocateTemplateRoundTopics } from './template-allocation'
 
 describe('template question allocation', () => {
+  it('F22 assigns random topics using the whole template supply, not greedy local choices', () => {
+    const pool = [{ id: 'a', type: 'ranking', topic: 'A' }, { id: 'b', type: 'single', topic: 'B' }]
+    const result = allocateTemplateRoundTopics([{ number: 1, topics: ['A','B'] }, { number: 2, topics: ['A'] }],
+      [{ round_number: 1, type: 'any' }, { round_number: 2, type: 'ranking' }], pool,
+      (s, c) => s.type === 'any' || s.type === c.type, (c, topic) => c.topic === topic, () => 0.99)
+    expect(result?.get(1)).toBe('B')
+    expect(result?.get(2)).toBe('A')
+  })
   const pool = [{ id: 'r', type: 'ranking' }, { id: 's', type: 'single-answer' }]
   const matches = (slot: string, candidate: typeof pool[number]) => slot === 'any' || slot === candidate.type
   it('reserves restricted questions without changing output order', () => {

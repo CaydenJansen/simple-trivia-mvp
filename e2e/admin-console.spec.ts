@@ -7,7 +7,7 @@ test('stale suggestions do not report that an accepted answer was added', async 
   await mockAdmin(page, 'admin')
   let reviewed = false
   await page.route('**/rest/v1/rpc/get_answer_suggestion_queue', route => route.fulfill({ json: reviewed ? [] : [{ suggestion_id: 's1', question_id: 'q1', question_prompt: 'Which planet?', question_type: 'single-answer', current_answer: 'Venus', answer_slot: 0, proposed_answer: 'Planet Venus', expected_answer: 'Venus', distinct_host_count: 3, signal_count: 3, status: 'pending', created_at: '2026-09-01' }] }))
-  await page.route('**/rest/v1/rpc/review_answer_suggestion', route => { reviewed = true; return route.fulfill({ json: 'stale' }) })
+  await page.route('**/rest/v1/rpc/review_answer_suggestion_with_slot', route => { reviewed = true; return route.fulfill({ json: 'stale' }) })
   await page.reload()
   await page.getByRole('button', { name: 'Approve alias' }).click()
   await expect(page.getByText('This question has changed since the suggestion was collected. No accepted answer was added.')).toBeVisible()

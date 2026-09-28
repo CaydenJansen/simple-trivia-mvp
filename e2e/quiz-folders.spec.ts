@@ -16,7 +16,7 @@ async function fixture(page: Page, failReorder = false) {
     if (name === 'quizzes') {
       if (route.request().method() === 'PATCH') {
         quiz.folder_id = route.request().postDataJSON().folder_id
-        return route.fulfill({ status: 204, body: '' })
+        return route.fulfill({ json: { folder_id: quiz.folder_id } })
       }
       return route.fulfill({ json: [quiz] })
     }

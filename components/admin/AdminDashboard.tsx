@@ -118,6 +118,7 @@ export default function AdminDashboard() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busySuggestion, setBusySuggestion] = useState<string | null>(null);
+  const [suggestionSlots, setSuggestionSlots] = useState<Record<string, number>>({});
   const reviewBusyRef = useRef(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -168,10 +169,11 @@ export default function AdminDashboard() {
     setNotice(null);
     setError(null);
     try {
-      const { data: result, error: reviewError } = await supabase.rpc("review_answer_suggestion", {
+      const { data: result, error: reviewError } = await supabase.rpc("review_answer_suggestion_with_slot", {
         p_suggestion_id: suggestion.suggestion_id,
         p_decision: decision,
         p_note: null,
+        p_answer_slot: suggestionSlots[suggestion.suggestion_id] ?? null,
       });
       if (reviewError) throw reviewError;
       if (!['approved', 'rejected', 'stale'].includes(String(result))) throw new Error('Unexpected review result');
@@ -277,12 +279,17 @@ export default function AdminDashboard() {
                           <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
                             <div><dt className="text-xs font-bold uppercase tracking-wider text-[#8a849c]">Current answer</dt><dd className="mt-1 font-semibold text-[#4f4b63]">{formatAnswer(suggestion.current_answer)}</dd></div>
                             <div><dt className="text-xs font-bold uppercase tracking-wider text-[#8a849c]">Host-approved alternative</dt><dd className="mt-1 font-black text-[#7c3aed]">{suggestion.proposed_answer}</dd></div>
-                            <div><dt className="text-xs font-bold uppercase tracking-wider text-[#8a849c]">Answer slot</dt><dd className="mt-1 font-semibold text-[#4f4b63]">{suggestion.answer_slot + 1}</dd></div>
+                            <div><dt className="text-xs font-bold uppercase tracking-wider text-[#8a849c]">Answer slot</dt><dd className="mt-1 font-semibold text-[#4f4b63]">{suggestion.answer_slot >= 0 ? suggestion.answer_slot + 1 : (
+                              <select aria-label="Matching answer for alternative" value={suggestionSlots[suggestion.suggestion_id] ?? ''} onChange={event => setSuggestionSlots(current => ({ ...current, [suggestion.suggestion_id]: Number(event.target.value) }))} className="mt-1 max-w-full rounded-lg border border-violet-200 bg-white px-2 py-2">
+                                <option value="" disabled>Choose matching answer…</option>
+                                {Array.isArray(suggestion.current_answer) && suggestion.current_answer.map((answer, index) => <option key={index} value={index}>{index + 1}. {String(answer)}</option>)}
+                              </select>
+                            )}</dd></div>
                           </dl>
                         </div>
                         <div className="flex shrink-0 gap-2">
                           <button type="button" disabled={busySuggestion === suggestion.suggestion_id} onClick={() => void review(suggestion, "rejected")} className="rounded-xl border border-red-200 bg-white px-4 py-2.5 text-sm font-bold text-red-700 disabled:opacity-50">Reject</button>
-                          <button type="button" disabled={busySuggestion === suggestion.suggestion_id} onClick={() => void review(suggestion, "approved")} className="rounded-xl bg-[#7c3aed] px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">Approve alias</button>
+                          <button type="button" disabled={busySuggestion === suggestion.suggestion_id || (suggestion.answer_slot < 0 && suggestionSlots[suggestion.suggestion_id] === undefined)} onClick={() => void review(suggestion, "approved")} className="rounded-xl bg-[#7c3aed] px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">Approve alias</button>
                         </div>
                       </div>
                     </article>

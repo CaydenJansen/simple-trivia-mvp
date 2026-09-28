@@ -35,12 +35,14 @@ export default function PermanentHostJoin() {
     let retryTimer: ReturnType<typeof setTimeout> | null = null
 
     async function resolveGame() {
+      try {
       const { data, error } = await supabase.rpc('resolve_host_join_link', { p_slug: resolvedSlug })
       if (!active) return
       if (error) {
         console.error('Could not resolve permanent host link:', error)
         setState('error')
-        setMessage('We couldn’t check for a live game. Check your connection and try again.')
+        setMessage('We couldn’t check for a live game. We’ll keep trying when your connection returns.')
+        retryTimer = setTimeout(() => { if (active) void resolveGame() }, 10000)
         return
       }
 
@@ -53,6 +55,12 @@ export default function PermanentHostJoin() {
       setState('waiting')
       setMessage('There isn’t a game live here right now.')
       retryTimer = setTimeout(() => { if (active) void resolveGame() }, 10000)
+      } catch {
+        if (!active) return
+        setState('error')
+        setMessage('We couldn’t check for a live game. We’ll keep trying when your connection returns.')
+        retryTimer = setTimeout(() => { if (active) void resolveGame() }, 10000)
+      }
     }
 
     void resolveGame()

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
 import type { Database } from "@/lib/supabase/database.types";
@@ -21,6 +21,8 @@ export default function BuilderTiebreakerPicker({
   const [error, setError] = useState<string | null>(null);
   const [entryMode, setEntryMode] = useState<"choose" | "search">("choose");
   const [randomLoading, setRandomLoading] = useState(false);
+  const activeRef = useRef(true);
+  useEffect(() => { activeRef.current = true; return () => { activeRef.current = false; }; }, []);
 
   useEffect(() => {
     if (entryMode !== "search") return;
@@ -64,6 +66,7 @@ export default function BuilderTiebreakerPicker({
     setRandomLoading(true);
     setError(null);
     const countResult = await supabase.from("source_tiebreakers").select("id", { count: "exact", head: true }).eq("status", "active").eq("is_verified", true);
+    if (!activeRef.current) return;
     if (countResult.error || !countResult.count) {
       setError("Could not find an active tiebreaker question.");
       setRandomLoading(false);
@@ -71,6 +74,7 @@ export default function BuilderTiebreakerPicker({
     }
     const offset = Math.floor(Math.random() * countResult.count);
     const result = await supabase.from("source_tiebreakers").select("*").eq("status", "active").eq("is_verified", true).range(offset, offset).single();
+    if (!activeRef.current) return;
     setRandomLoading(false);
     if (result.error || !result.data) {
       setError("Could not choose a random tiebreaker. Please try again.");

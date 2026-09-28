@@ -28,3 +28,8 @@ export function effectiveTriviaDifficulty(
   }
   return fallback
 }
+
+export function effectiveDifficultyFilter(level: number) {
+  if (!Number.isInteger(level) || level < 1 || level > 5) throw new Error('Invalid difficulty level')
+  return `observed_difficulty.eq.${level},and(observed_difficulty.is.null,editorial_difficulty.eq.${level})`
+}

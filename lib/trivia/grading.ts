@@ -1,4 +1,5 @@
 import { answerCandidates, answerVariants } from './answer-variants'
+import { normalizeAnswerText } from './answer-normalization'
 
 export type ReviewStatus = 'correct' | 'incorrect' | 'review'
 
@@ -36,12 +37,13 @@ export type GradingSubmission = {
 }
 
 export function normaliseTriviaAnswer(value: string) {
-  return value.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  return normalizeAnswerText(value)
 }
 
 export function parseStoredAnswer(value: string): unknown {
   try {
-    return JSON.parse(value)
+    const parsed: unknown = JSON.parse(value)
+    return parsed === null ? value : parsed
   } catch {
     return value
   }
@@ -197,6 +199,7 @@ function bestMatch(submitted: string, expected: string, accepted: string[] = [])
   return matches.find(match => match.status === 'correct')
     ?? matches.find(match => match.status === 'review')
     ?? matches[0]
+    ?? { expected, status: 'review' as const, review_reason: undefined }
 }
 
 export function buildSubmissionGrading(question: GradingQuestion, answerText: string): SubmissionGrading {
@@ -232,7 +235,8 @@ export function buildSubmissionGrading(question: GradingQuestion, answerText: st
       accepted: acceptedGroups.shift() ?? [],
     }))
 
-    const items: ReviewItem[] = submittedRaw.map((submitted) => {
+    // Reserve every exact answer before a fuzzy response may consume its slot.
+    const exactItems: (ReviewItem | null)[] = submittedRaw.map((submitted) => {
       const norm = normaliseTriviaAnswer(submitted)
       const exactIndex = remaining.findIndex(candidate => norm && answerCandidates(candidate.value, candidate.accepted)
         .some(value => normaliseTriviaAnswer(value) === norm))
@@ -241,7 +245,11 @@ export function buildSubmissionGrading(question: GradingQuestion, answerText: st
         const [match] = remaining.splice(exactIndex, 1)
         return { submitted, expected: match.value, status: 'correct' }
       }
+      return null
+    })
 
+    const items: ReviewItem[] = submittedRaw.map((submitted, index) => {
+      if (exactItems[index]) return exactItems[index]!
       const nearMatches = remaining.map((candidate, index) => ({
         index,
         candidate,
@@ -365,8 +373,12 @@ export function gradingPoints(grading: SubmissionGrading, max: number, allOrNoth
   return Math.min(correct, maximum)
 }
 
+export function markPendingGradingIncorrect(grading: SubmissionGrading): SubmissionGrading {
+  return { ...grading, items: grading.items.map(item => item.status === 'review' ? { ...item, status: 'incorrect' } : item) }
+}
+
 export function scoreSubmission(question: GradingQuestion, submission: GradingSubmission) {
   const max = Math.max(1, question.points_max || 1)
   const grading = storedSubmissionGrading(question, submission)
-  return { grading, points: gradingPoints(grading, max, question.question_type === 'ranking' && max === 1), max }
+  return { grading, points: gradingPoints(grading, max, ['ranking', 'multi-part'].includes(question.question_type) && max === 1), max }
 }

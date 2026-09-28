@@ -12,6 +12,13 @@ const base = {
 }
 
 describe('live bonus stage flow', () => {
+  it('classifies revealed answers correctly without disclosing hidden points', () => {
+    const hidden = { ...base, answerPhase: 'revealed', scoresHidden: true, bonusPointsMax: 0 }
+    expect(playerQuestionStageScreen({ ...hidden, coreSubmission: { points_awarded: 0, is_correct: true } })).toBe('correct')
+    const partial = { points_awarded: 0, is_correct: false, grading_json: { items: [{ status: 'correct' }, { status: 'incorrect' }] } }
+    expect(playerQuestionStageScreen({ ...hidden, corePointsMax: 2, coreSubmission: partial })).toBe('partial-correct')
+    expect(playerQuestionStageScreen({ ...hidden, corePointsMax: 1, coreSubmission: partial })).toBe('incorrect')
+  })
   it('starts on the ordinary question screen', () => {
     expect(playerQuestionStageScreen(base)).toBe('single-answer')
   })

@@ -15,7 +15,7 @@ import type {
   QuestionStatus,
   QuestionType,
 } from "@/lib/supabase/database.types";
-import { TRIVIA_DIFFICULTIES } from "@/lib/trivia/difficulty";
+import { TRIVIA_DIFFICULTIES, effectiveTriviaDifficulty, effectiveDifficultyFilter } from "@/lib/trivia/difficulty";
 import QuestionUsageIndicator from "@/components/host/QuestionUsageIndicator";
 import SourceQuestionAnswerPreview from "@/components/host/SourceQuestionAnswerPreview";
 import {
@@ -249,6 +249,7 @@ function validateDraft(draft: QuestionDraft) {
   const answers = draft.answers.map((answer) => answer.trim());
   if (answers.some((answer) => !answer)) return "Fill each answer row or remove the empty row.";
   if (draft.questionType === "ranking" && answers.length < 2) return "Add at least two ranking items.";
+  if (draft.questionType === "ranking" && new Set(answers.map(answer => answer.normalize("NFKC").toLocaleLowerCase())).size !== answers.length) return "Each ranking item must be different.";
   if (draft.questionType === "multi-part") {
     const missingClue = answers.some((_, index) => !draft.clues[index]?.trim());
     if (missingClue) return "Add a clue for every multi-part answer.";
@@ -259,10 +260,6 @@ function validateDraft(draft: QuestionDraft) {
 function questionTypeLabel(type: QuestionType | QuestionMechanic) {
   if (type === "image-question") return "Single Answer";
   return QUESTION_TYPES.find((option) => option.value === type)?.label ?? type;
-}
-
-function difficultyLabel(value: number | null) {
-  return value ? TRIVIA_DIFFICULTIES[value - 1] : null;
 }
 
 export default function QuestionsArea({ adminMode = false }: { adminMode?: boolean }) {
@@ -283,6 +280,8 @@ export default function QuestionsArea({ adminMode = false }: { adminMode?: boole
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [editing, setEditing] = useState<SourceQuestion | null | "new">(null);
+  const editorRequestRef = useRef(0);
+  useEffect(() => () => { editorRequestRef.current += 1; }, []);
 
   useEffect(() => {
     let active = true;
@@ -325,7 +324,7 @@ export default function QuestionsArea({ adminMode = false }: { adminMode?: boole
         const searchFilter = sourceQuestionSearchOrFilter(search, taxonomy.categories, taxonomy.tags, taxonomy.tagAliases);
         if (searchFilter) query = query.or(searchFilter);
         if (questionType !== "all") query = query.eq("mechanic", questionType);
-        if (difficulty) query = query.eq("editorial_difficulty", Number(difficulty));
+        if (difficulty) query = query.or(effectiveDifficultyFilter(Number(difficulty)));
         if (categoryId) query = query.contains("category_ids", [categoryId]);
         if (tagId) query = query.contains("tag_ids", [tagId]);
         if ((adminMode || tab === "mine") && status !== "all") query = query.eq("status", status);
@@ -342,6 +341,8 @@ export default function QuestionsArea({ adminMode = false }: { adminMode?: boole
           const loadedQuestions = data ?? [];
           setQuestions(loadedQuestions);
           setCount(total ?? 0);
+          const lastPage = Math.max(0, Math.ceil((total ?? 0) / 50) - 1);
+          if (page > lastPage) { setPage(lastPage); setLoading(false); return; }
 
           const sourceQuestionIds = loadedQuestions.map((question) => question.id);
           if (sourceQuestionIds.length === 0) {
@@ -377,6 +378,7 @@ export default function QuestionsArea({ adminMode = false }: { adminMode?: boole
   }, [tab, search, questionType, difficulty, categoryId, tagId, status, taxonomy.categories, taxonomy.tags, taxonomy.tagAliases, refresh, adminMode, page]);
 
   function changeTab(nextTab: QuestionTab) {
+    editorRequestRef.current += 1;
     setPage(0);
     setTab(nextTab);
     setSearch("");
@@ -388,8 +390,10 @@ export default function QuestionsArea({ adminMode = false }: { adminMode?: boole
   }
 
   async function openEditor(question: SourceQuestion) {
+    const request = ++editorRequestRef.current;
     if (adminMode && question.mechanic === "multi-part") {
       const result = await supabase.from("source_question_parts").select("id, position").eq("source_question_id", question.id).order("position");
+      if (request !== editorRequestRef.current) return;
       if (result.error) { setLoadError("Could not load question parts. Please retry."); return; }
       const count = Array.isArray(question.correct_answer) ? question.correct_answer.length : 0;
       setEditing({ ...question, editor_part_ids: Array.from({ length: count }, (_, i) => result.data.find(part => part.position === i + 1)?.id ?? null) });
@@ -429,7 +433,7 @@ export default function QuestionsArea({ adminMode = false }: { adminMode?: boole
         {adminMode || tab === "mine" ? (
           <button
             type="button"
-            onClick={() => setEditing("new")}
+            onClick={() => { editorRequestRef.current += 1; setEditing("new"); }}
             className="inline-flex items-center justify-center rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700"
           >
             + Write New
@@ -514,7 +518,7 @@ export default function QuestionsArea({ adminMode = false }: { adminMode?: boole
             {tab === "mine" ? "Write a reusable question here. Adding it to a quiz will create an independent copy later." : "Platform questions will appear here once active library content has been added."}
           </p>
           {adminMode || tab === "mine" ? (
-            <button type="button" onClick={() => setEditing("new")} className="mt-5 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-700">Write New</button>
+            <button type="button" onClick={() => { editorRequestRef.current += 1; setEditing("new"); }} className="mt-5 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-700">Write New</button>
           ) : null}
         </div>
       ) : (
@@ -532,13 +536,14 @@ export default function QuestionsArea({ adminMode = false }: { adminMode?: boole
         </div>
       )}
 
-      {count > 50 && <div className="mt-5 flex items-center gap-4"><button disabled={loading || page === 0} onClick={() => setPage(value => value - 1)} className="rounded-lg border px-3 py-2 disabled:opacity-40">Previous page</button><span className="text-sm">Page {page + 1}</span><button disabled={loading || (page + 1) * 50 >= count} onClick={() => setPage(value => value + 1)} className="rounded-lg border px-3 py-2 disabled:opacity-40">Next page</button></div>}
+      {(count > 50 || page > 0) && <div className="mt-5 flex items-center gap-4"><button disabled={loading || page === 0} onClick={() => setPage(value => value - 1)} className="rounded-lg border px-3 py-2 disabled:opacity-40">Previous page</button><span className="text-sm">Page {page + 1}</span><button disabled={loading || (page + 1) * 50 >= count} onClick={() => setPage(value => value + 1)} className="rounded-lg border px-3 py-2 disabled:opacity-40">Next page</button></div>}
       {editing ? (
         <QuestionEditor
+          key={editing === 'new' ? 'new' : editing.id}
           adminMode={adminMode}
           question={editing === "new" ? null : editing}
           taxonomy={taxonomy}
-          onClose={() => setEditing(null)}
+          onClose={() => { editorRequestRef.current += 1; setEditing(null); }}
           onSaved={() => {
             setNotice(adminMode ? "Question Library changes saved. Existing quiz copies are unchanged." : "Question saved.");
             setEditing(null);
@@ -591,7 +596,7 @@ function QuestionCard({
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">{questionTypeLabel(question.mechanic)}</span>
             {question.category_names.length > 0 ? <span className="text-xs text-zinc-500">{question.category_names.length === 1 ? question.category_names[0] : "Mixed categories"}</span> : null}
-            {difficultyLabel(question.editorial_difficulty) ? <span className="text-xs text-zinc-500">· {difficultyLabel(question.editorial_difficulty)}</span> : null}
+            {effectiveTriviaDifficulty(question.observed_difficulty, question.editorial_difficulty, "") ? <span className="text-xs text-zinc-500">· {effectiveTriviaDifficulty(question.observed_difficulty, question.editorial_difficulty, "")}</span> : null}
             {bonus.enabled ? <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">+ {bonus.points} pt bonus</span> : null}
             {editable ? <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${statusColors[question.status]}`}>{question.status.replace("_", " ")}</span> : null}
           </div>
@@ -685,6 +690,7 @@ function QuestionEditor({
   const [bonus, setBonus] = useState(() => sourceQuestionBonusDraft(question?.bonus));
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const createOperationRef = useRef<string | null>(null);
   const [verified, setVerified] = useState(question?.is_verified ?? false);
   const [error, setError] = useState<string | null>(null);
   const [showCategory, setShowCategory] = useState(() => Boolean(question?.primary_category_id));
@@ -752,9 +758,10 @@ function QuestionEditor({
     setSaving(true);
     setError(null);
     const payload = questionPayload(draft);
+    if (!question && !createOperationRef.current) createOperationRef.current = crypto.randomUUID();
     const args = {
       p_question_id: question?.id ?? null,
-      p_question: payload,
+      p_question: { ...payload, _expected_revision: question?.revision ?? null, _operation_id: createOperationRef.current },
       p_primary_category_id: draft.primaryCategoryId || null,
       p_secondary_category_ids: draft.secondaryCategoryIds,
       p_tag_ids: draft.tagIds,
@@ -766,7 +773,7 @@ function QuestionEditor({
         : supabase.rpc("save_my_question_with_inherited_metadata", args));
       if (result.error) {
         console.error("Could not save source question:", result.error);
-        setError(adminMode ? result.error.message : "Could not save this question. Check the fields and try again.");
+        setError(result.error.message || "Could not save this question. Check the fields and try again.");
         return;
       }
       onSaved();

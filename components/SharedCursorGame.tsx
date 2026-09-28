@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { serverNow } from '@/lib/trivia/use-server-clock'
 import { sharedCursorState } from '@/lib/trivia/collaborative-show-games'
 import type { Json } from '@/lib/supabase/database.types'
 
@@ -14,10 +15,10 @@ export default function SharedCursorGame({ teams, settings, ownTeamId, dark = fa
 }) {
   const state = sharedCursorState(settings)
   const candidateName = teams.find(team => team.id === state.candidateTeamId)?.name
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState(() => serverNow())
   useEffect(() => {
     if (!state.candidateTeamId || !state.candidateSince) return
-    const timer = window.setInterval(() => setNow(Date.now()), 50)
+    const timer = window.setInterval(() => setNow(serverNow()), 50)
     return () => window.clearInterval(timer)
   }, [state.candidateSince, state.candidateTeamId])
   const candidateProgress = state.candidateSince ? Math.max(0, Math.min(100, ((now - state.candidateSince) / 1000) * 100)) : 0
