@@ -115,9 +115,9 @@ Scope: **every audit finding since the last pushed commit**, as clarified by the
 - [x] Database tests — both suites passed against the linked Supabase schema with all 11 migrations inside a rollback-only transaction. Synthetic fixtures only.
 - [x] Typecheck and lint — passed.
 - [x] Production build and public route smoke tests — passed locally.
-- [x] Relevant host/player browser tests — 190 passing across desktop/mobile Chromium and WebKit; 48 additional targeted rerun checks passed after final privacy/clock integration.
-- [ ] Push, required migration application and production deployment
-- [ ] Production verification (report any unavailable checks explicitly)
+- [x] Relevant host/player browser tests — 190 passing across desktop/mobile Chromium and WebKit; 48 additional targeted rerun checks passed after final privacy/clock integration, followed by two paused Auto-Run reload checks with delayed question hydration.
+- [x] Push, required migration application and production deployment — code commit `2e20ac2` pushed to `codex/mvp-foundation-20260821`; all 11 migrations applied through `20260928230000`; Vercel deployment `dpl_7KVNE6oJzGhywnmhZGDhbmpvo73j` promoted on 28 September 2026.
+- [x] Production verification — live domain resolves to the Ready deployment; `/`, `/host`, `/play` return HTTP 200; database reports no pending migrations. Both SQL regression suites passed again on the deployed schema in a rollback-only transaction. Public server-clock RPC returns a valid epoch; invalid player credentials are rejected and anonymous raw submission reads are denied.
 
 ## Evidence and limits
 
