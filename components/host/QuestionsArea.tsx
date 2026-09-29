@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import QuestionImage from "@/components/QuestionImage";
 import { supabase } from "@/lib/supabase/client";
 import type {
   AudienceScope,
@@ -809,7 +810,9 @@ function QuestionEditor({
 
           <div className="rounded-2xl border border-zinc-200 bg-white p-4">
             <OptionalEditorField label="Image (Optional)" shown={showImage} summary={draft.imageUrl ? "Image URL added" : null} onToggle={() => setShowImage((value) => !value)}>
-              <input type="url" value={draft.imageUrl} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="https://…" />
+              <QuestionImage src={draft.imageUrl} compact className="mb-3" />
+              <p className="mb-2 text-xs text-zinc-500">Use a public link directly to an image. We show the full image without cropping.</p>
+              <input aria-label="Question image URL" type="url" value={draft.imageUrl} onChange={(event) => setDraft({ ...draft, imageUrl: event.target.value })} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="https://…" />
             </OptionalEditorField>
           </div>
 
@@ -882,6 +885,7 @@ function QuestionEditor({
                   <span className="text-sm font-semibold text-zinc-700">Image (Optional)</span>
                   <input type="url" value={bonus.imageUrl} onChange={(event) => setBonus({ ...bonus, imageUrl: event.target.value })} className="mt-2 w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-sm outline-none focus:border-violet-500" placeholder="https://…" />
                 </label>
+                <QuestionImage src={bonus.imageUrl} alt="Bonus image" compact />
 
                 <div className="rounded-xl border border-violet-200 bg-white p-4">
                   <OptionalEditorField label="Bonus details (Optional)" shown={showBonusDetails} summary={bonusDetailsSummary} onToggle={() => setShowBonusDetails((value) => !value)}>

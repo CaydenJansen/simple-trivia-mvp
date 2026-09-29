@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import QuestionImage from "@/components/QuestionImage";
 import { serverNow, useServerClock } from '@/lib/trivia/use-server-clock';
 import { supabase } from "@/lib/supabase/client";
 import {
@@ -1578,7 +1579,7 @@ function PlayerQuestionCard({
       <h2 style={{ color: C.ink, fontSize: 'clamp(22px, 6vw, 27px)', lineHeight: 1.3, fontWeight: 900 }}>
         {prompt}
       </h2>
-      {imageUrl && <div role="img" aria-label="Question image" className="mt-3 h-40 w-full bg-contain bg-center bg-no-repeat" style={{ backgroundImage: `url(${imageUrl})` }} />}
+      <QuestionImage src={imageUrl} className="mt-3" />
     </section>
   )
 }
@@ -2965,11 +2966,7 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        {bonus?.imageUrl && (
-          <div style={{ borderRadius: 16, overflow: 'hidden', background: C.ground, border: `1px solid ${C.line}`, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', height: 180 }}>
-            <div role="img" aria-label="Bonus image" style={{ width: '85%', height: 150, backgroundImage: `url(${bonus.imageUrl})`, backgroundPosition: 'center', backgroundRepeat: 'no-repeat', backgroundSize: 'contain' }} />
-          </div>
-        )}
+        <QuestionImage src={bonus?.imageUrl} alt="Bonus image" className="mb-5" />
         <PlayerQuestionCard
           prompt={bonus?.prompt ?? 'Loading bonus…'}
           eyebrow={`Bonus · ${snapshot.bonusPointsMax || bonus?.points || 1} ${(snapshot.bonusPointsMax || bonus?.points || 1) === 1 ? 'point' : 'points'}`}
@@ -3159,7 +3156,7 @@ function ContentScreen() {
 
       <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
         {contentScreen?.image_url ? (
-          <div role="img" aria-label="Content screen image" style={{ backgroundImage: `url(${contentScreen.image_url})`, borderRadius: 20, width: '100%', maxWidth: 340, height: 220, backgroundPosition: 'center', backgroundSize: 'cover', marginBottom: 24 }} />
+          <QuestionImage src={contentScreen.image_url} alt="Content screen image" className="mb-6 w-full" />
         ) : (
           <div style={{ background: C.violetPale, borderRadius: 24, width: 72, height: 72 }} className="flex items-center justify-center mb-6 shrink-0">
             <span style={{ fontSize: 32 }}>✦</span>

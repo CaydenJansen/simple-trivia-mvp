@@ -12,6 +12,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import QRCode from "qrcode";
+import QuestionImage from "@/components/QuestionImage";
 import { serverNow, useServerClock } from '@/lib/trivia/use-server-clock';
 import { supabase } from "@/lib/supabase/client";
 import { allocateTemplateQuestions, allocateTemplateRoundTopics } from '@/lib/trivia/template-allocation';
@@ -4549,7 +4550,7 @@ function QuizBuilder({ go }: { go: Go }) {
         </div>
       </header>
 
-      <div className="flex" style={{ maxWidth: 1280, margin: '0 auto' }}>
+      <div className="flex flex-col md:flex-row" style={{ maxWidth: 1280, margin: '0 auto' }}>
         <main className="flex-1 px-6 py-7 space-y-3.5 min-w-0">
           <div className="mx-auto mb-5 flex w-full max-w-xl justify-center">
             <div
@@ -4866,7 +4867,7 @@ function QuizBuilder({ go }: { go: Go }) {
         </main>
 
         {/* Structure sidebar */}
-        <aside className={`shrink-0 px-4 py-7 transition-all ${sidebarOpen ? 'w-56' : 'w-14'}`}>
+        <aside className={`w-full shrink-0 px-4 py-7 transition-all ${sidebarOpen ? 'md:w-56' : 'md:w-14'}`}>
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }}
             className="rounded-2xl p-4 sticky top-20">
             <div className="flex items-center justify-between mb-3">
@@ -5649,6 +5650,7 @@ function BuilderQuestionAnswerPreview({ question }: { question: BuilderQuestionD
         <div style={{ border: `1px solid ${C.violet}35`, background: C.violetMist }} className="rounded-lg px-3 py-2.5 text-xs">
           <p style={{ color: C.violet }} className="font-bold">Bonus · {bonus.points} {bonus.points === 1 ? 'point' : 'points'}</p>
           <p style={{ color: C.ink }} className="mt-1 font-semibold">{bonus.prompt || '—'}</p>
+          <QuestionImage src={bonus.imageUrl} alt="Bonus image" compact className="my-2" />
           <p style={{ color: C.sub }} className="mt-0.5"><span style={{ color: C.go }} className="font-bold">Answer:</span> {bonus.answer || '—'}</p>
         </div>
       )}
@@ -5741,7 +5743,7 @@ function QuizPreview({ title, rounds, onClose }: {
               <div className="text-center"><h3 className="text-2xl font-bold">Nothing to preview yet</h3><p className="mt-2 text-zinc-400">Add a question or content screen first.</p></div>
             ) : active.kind === 'content' ? (
               <div className="w-full max-w-2xl text-center">
-                {active.screen.imageUrl && <div role="img" aria-label="Content screen image" className="mx-auto mb-6 h-52 w-full rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${active.screen.imageUrl})` }} />}
+                <QuestionImage src={active.screen.imageUrl} alt="Content screen image" className="mb-6" />
                 <h3 className="text-4xl font-black leading-tight">{active.screen.title || 'Untitled screen'}</h3>
                 {active.screen.body && <p className="mx-auto mt-5 max-w-xl text-lg leading-8 text-zinc-300">{active.screen.body}</p>}
               </div>
@@ -5769,7 +5771,7 @@ function QuizPreview({ title, rounds, onClose }: {
               </div>
             ) : (
               <div className="w-full max-w-2xl">
-                {active.question.imageUrl && <div role="img" aria-label="Question image" className="mb-6 h-52 w-full rounded-2xl bg-contain bg-no-repeat bg-center" style={{ backgroundImage: `url(${active.question.imageUrl})` }} />}
+                <QuestionImage src={active.question.imageUrl} className="mb-6" />
                 <h3 className="text-center text-3xl font-black leading-tight">{active.question.text}</h3>
                 {(active.question.questionType === 'multiple-choice' || active.question.questionType === 'multi-part') && <div className="mt-5 space-y-3">
                   {questionOptions(active.question.options).map((option, index) => <div key={index} className="rounded-xl border border-white/15 p-3 text-zinc-200">
@@ -5789,6 +5791,7 @@ function QuizPreview({ title, rounds, onClose }: {
                 {activeBonus?.enabled && (
                   <div className="mx-auto mt-4 max-w-md rounded-2xl border border-violet-300/30 bg-violet-300/10 px-5 py-4 text-center">
                     <p className="text-xs font-bold uppercase tracking-[0.18em] text-violet-300">Bonus · {activeBonus.points} {activeBonus.points === 1 ? 'point' : 'points'}</p>
+                    <QuestionImage src={activeBonus.imageUrl} alt="Bonus image" className="mt-3" />
                     <p className="mt-2 text-base font-bold text-white">{activeBonus.prompt}</p>
                     <p className="mt-2 text-sm text-violet-100">Answer: {activeBonus.answer}</p>
                   </div>
@@ -6412,7 +6415,7 @@ function BuilderQuestion({ q, idx, replacing, canCycleLibraryBack, onEdit, onRep
       cursor: 'pointer',
       opacity: replacing ? 0.6 : 1,
     }}
-      className="flex items-start gap-3 px-3 py-3 rounded-xl hover:border-violet hover:shadow-sm transition-all group">
+      className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 px-3 py-3 rounded-xl hover:border-violet hover:shadow-sm transition-all group sm:flex">
       <button type="button" aria-label={`Drag question ${idx + 1} to reorder`} title="Drag to reorder"
         onPointerDown={onPointerDown}
         style={{ color: C.sub }} className="mt-0.5 touch-none select-none cursor-grab hover:text-ink active:cursor-grabbing transition-colors shrink-0"
@@ -6424,17 +6427,7 @@ function BuilderQuestion({ q, idx, replacing, canCycleLibraryBack, onEdit, onRep
             Question Library
           </div>
         )}
-        {q.hasImage && (
-          <div style={{ background: C.ground, border: `1px solid ${C.line}` }}
-            className="rounded-lg h-16 mb-2 flex items-center justify-center gap-2 overflow-hidden">
-            <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
-              <rect x="1" y="1" width="16" height="12" rx="2" stroke={C.sub} strokeWidth="1.2"/>
-              <circle cx="5.5" cy="5" r="1.5" fill={C.sub} fillOpacity="0.5"/>
-              <path d="M1 10l4-4 3 3 2.5-2.5L16 12" stroke={C.sub} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            <span style={{ color: C.sub }} className="text-xs">{q.imageUrl?.split('/').pop() ?? 'Question image'}</span>
-          </div>
-        )}
+        <QuestionImage src={q.imageUrl} compact className="mb-2" />
         <div className="flex items-start gap-2 mb-2">
           <span style={{ color: C.sub }} className="text-[11px] font-mono shrink-0 mt-0.5">Q{idx + 1}</span>
           <p style={{ color: C.ink }} className="text-sm leading-snug group-hover:text-violet transition-colors">{q.text}</p>
@@ -6451,7 +6444,7 @@ function BuilderQuestion({ q, idx, replacing, canCycleLibraryBack, onEdit, onRep
         </div>
         <BuilderQuestionAnswerPreview question={q} />
       </div>
-      <div className="flex items-center gap-1 shrink-0 mt-0.5" onClick={e => e.stopPropagation()}>
+      <div className="col-start-2 flex flex-wrap items-center gap-1 shrink-0 mt-0.5" onClick={e => e.stopPropagation()}>
         {isLibraryQuestion && (
           <button
             type="button"
@@ -7014,7 +7007,8 @@ function QuestionEditor({ question, title, onClose, onSave }: {
                   </div>
                   <textarea rows={2} value={bonus.aliases} onChange={event => setBonus({ ...bonus, aliases: event.target.value })} placeholder="Accepted alternatives — one per line"
                     style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
-                  <input value={bonus.imageUrl} onChange={event => setBonus({ ...bonus, imageUrl: event.target.value })} placeholder="Bonus image URL (optional)"
+                  <QuestionImage src={bonus.imageUrl} alt="Bonus image" compact />
+                  <input aria-label="Bonus image URL" type="url" value={bonus.imageUrl} onChange={event => setBonus({ ...bonus, imageUrl: event.target.value })} placeholder="Bonus image URL (optional)"
                     style={{ border: `1px solid ${C.line}`, color: C.ink }} className="w-full rounded-xl bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet/30" />
                   <button type="button" onClick={() => { setBonus({ ...EMPTY_SOURCE_QUESTION_BONUS }); setShowBonus(false) }} style={{ color: C.stop }} className="text-xs font-bold hover:underline">Remove bonus</button>
                 </div>
@@ -7088,10 +7082,11 @@ function QuestionEditor({ question, title, onClose, onSave }: {
             </Field>
 
             <Field label="Image (Optional)">
-              <input value={imageUrl} onChange={event => setImageUrl(event.target.value)} placeholder="https://example.com/question-image.png"
+              <QuestionImage src={imageUrl} compact className="mb-3" />
+              <input aria-label="Question image URL" type="url" value={imageUrl} onChange={event => setImageUrl(event.target.value)} placeholder="https://example.com/question-image.png"
                 style={{ border: `1px solid ${C.line}`, color: C.ink }}
                 className="w-full rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet/30" />
-              <p style={{ color: C.sub }} className="text-[11px] mt-1.5 opacity-70">Image uploads will be added later; existing hosted image URLs are preserved here.</p>
+              <p style={{ color: C.sub }} className="text-[11px] mt-1.5 opacity-70">Paste a public link directly to an image. Its full shape is preserved—no cropping.</p>
             </Field>
           </div>
         </div>
@@ -11126,7 +11121,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <section style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="w-full max-w-4xl rounded-3xl p-8 text-center shadow-2xl">
             <p style={{ color: '#C4B5FD' }} className="mb-4 text-xs font-bold uppercase tracking-[0.2em]">Shown on every player screen</p>
             {contentScreen?.image_url && (
-              <div role="img" aria-label="Live content screen image" className="mx-auto mb-7 h-64 max-w-2xl rounded-2xl bg-cover bg-center" style={{ backgroundImage: `url(${contentScreen.image_url})` }} />
+              <QuestionImage src={contentScreen.image_url} alt="Content screen image" className="mx-auto mb-7 max-w-2xl" />
             )}
             <h1 className="text-5xl font-black leading-tight">{contentScreen?.title ?? 'Loading content screen…'}</h1>
             {contentScreen?.body && <p style={{ color: C.liveDim }} className="mx-auto mt-6 max-w-2xl text-xl leading-8">{contentScreen.body}</p>}
@@ -11186,7 +11181,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
       </header>
       {autoRunControls}
 
-      <div className="flex flex-1 items-start min-h-0">
+      <div className="flex flex-1 flex-col items-start min-h-0 md:flex-row">
         <div className="mx-auto flex w-full max-w-[1500px] flex-1 flex-col gap-5 px-5 py-5 pb-12 min-w-0 lg:px-7 lg:py-6">
           {gameScreen === 'round-start' ? (
             <>
@@ -11269,12 +11264,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               </p>
             </div>
 
-            {question?.image_url && (
-              <div style={{ background: '#fff', borderRadius: 16 }} className="h-36 mb-5 flex items-center justify-center overflow-hidden">
-                {/* eslint-disable-next-line @next/next/no-img-element -- Host-authored URLs cannot use a fixed remote-image allowlist. */}
-                <img src={question.image_url} alt="Question image" className="max-h-28 max-w-[80%] object-contain" />
-              </div>
-            )}
+            <QuestionImage src={question?.image_url} className="mb-5" />
 
             <p style={{ color: C.liveText }} className="mb-4 text-xl font-extrabold leading-snug xl:text-2xl">
               {question?.prompt ?? 'Loading question…'}
@@ -11371,6 +11361,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                     {questionStage === 'core' && phase !== 'revealed' ? 'Host only · Up next' : 'Shown to players'}
                   </span>
                 </div>
+                <QuestionImage src={activeBonus.imageUrl} alt="Bonus image" className="mt-3" />
                 <p style={{ color: C.liveText }} className="mt-2 text-lg font-extrabold">{activeBonus.prompt}</p>
                 <p style={{ color: phase === 'revealed' ? C.go : '#C4B5FD' }} className="mt-2 text-sm font-bold">
                   Answer: {activeBonus.correctAnswer}
@@ -11777,7 +11768,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
 </div>
 
-        <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}`, width: 300 }} className="flex flex-col shrink-0 sticky top-[52px] h-[calc(100dvh-52px)]">
+        <div style={{ background: C.liveSurface, borderLeft: `1px solid ${C.liveLine}` }} className="flex w-full flex-col shrink-0 md:sticky md:top-[52px] md:h-[calc(100dvh-52px)] md:w-[300px]">
           <div className="flex-1 p-5 overflow-y-auto">
             <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-3">Leaderboard</p>
             <div className="space-y-1">

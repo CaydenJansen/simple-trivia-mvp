@@ -1,3 +1,4 @@
+import QuestionImage from "@/components/QuestionImage"
 import { sourceQuestionBonusDraft } from '@/lib/trivia/source-question-bonus'
 import { sourceQuestionPreview } from '@/lib/trivia/source-question-preview'
 import type { Json } from '@/lib/supabase/database.types'
@@ -7,6 +8,7 @@ type PreviewQuestion = {
   correct_answer: unknown
   accepted_answers: unknown
   options: unknown
+  image_url?: string | null
   bonus?: Json | null
 }
 
@@ -21,6 +23,7 @@ export default function SourceQuestionAnswerPreview({ question }: { question: Pr
 
   return (
     <div className="mt-3 space-y-2">
+      <QuestionImage src={question.image_url} compact />
       <div className="rounded-xl border border-zinc-200 bg-zinc-50/70 px-3.5 py-3">
         {preview.kind === 'multiple-choice' ? (
           <div className="grid gap-1.5 sm:grid-cols-2">
@@ -83,6 +86,7 @@ export default function SourceQuestionAnswerPreview({ question }: { question: Pr
         <div className="rounded-xl border border-violet-200 bg-violet-50/70 px-3.5 py-3 text-xs">
           <p className="font-bold text-violet-700">Bonus · {bonus.points} {bonus.points === 1 ? 'point' : 'points'}</p>
           <p className="mt-1 font-semibold leading-5 text-zinc-900">{bonus.prompt || 'Bonus prompt not set'}</p>
+          <QuestionImage src={bonus.imageUrl} alt="Bonus image" compact className="my-2" />
           <p className="mt-0.5 leading-5">
             <span className="font-bold text-emerald-600">Answer:</span>{' '}
             <span className="font-bold text-zinc-900">{bonus.answer || '—'}</span>
