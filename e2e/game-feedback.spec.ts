@@ -84,6 +84,21 @@ test('saved answer styling persists then clears immediately on editing', async (
   await expect(page.getByText('✓ Answer saved. Any edits need to be submitted again.')).toBeVisible()
 })
 
+for (const answer of ['9007199254740993', 'true', 'null']) {
+  test(`saved literal answer ${answer} survives refresh and stays acknowledged`, async ({ page }) => {
+    const { state } = await answers(page)
+    state.phase = 'open'
+    state.answer = answer
+    await page.goto('/play')
+    const input = page.getByPlaceholder('Type your answer…')
+    await expect(input).toHaveValue(state.answer)
+    await expect(page.getByText('✓ Answer saved. Any edits need to be submitted again.')).toBeVisible()
+    await page.reload()
+    await expect(input).toHaveValue(state.answer)
+    await expect(input).toHaveCSS('background-color', 'rgb(236, 253, 245)')
+  })
+}
+
 test('eliminated SPR teams watch live remaining picks', async ({ page }) => {
   await answers(page)
   let choice = 'rock'

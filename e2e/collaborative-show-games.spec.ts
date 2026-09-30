@@ -172,6 +172,52 @@ test('Shared Cursor recovers from a transient connection error after a successfu
   await expect(page.getByText('Connection interrupted. Reconnecting…')).toBeHidden()
 })
 
+test('Shared Cursor clears a connection warning when passive updates recover, without another tap', async ({ page }) => {
+  const mock = await mockCollaborativeGame(page, 'shared-cursor')
+  await page.goto('/play')
+  const tap = page.getByRole('button', { name: 'Tap to nudge the cursor toward Purple People' })
+  await expect(tap).toBeEnabled()
+  let disconnected = true
+  let pulls = 0
+  page.on('request', request => { if (request.url().endsWith('/rpc/pull_shared_cursor')) pulls++ })
+  await page.route('**/rest/v1/rpc/get_owned_player_show_game', route => disconnected
+    ? route.fulfill({ status: 503, json: { message: 'Temporary connection failure' } })
+    : route.fallback())
+  mock.failNextCursorTap()
+  await tap.click()
+  await expect(page.getByText('Connection interrupted. Reconnecting…')).toBeVisible()
+  mock.patchShowGame({ settings: { eligible_team_ids: ['team-a', 'team-b'], cursor_x: 0.7, cursor_y: 0, cursor_positions: { 'team-a': { x: -1, y: 0 }, 'team-b': { x: 1, y: 0 } } } })
+  disconnected = false
+  await expect(page.getByText('Connection interrupted. Reconnecting…')).toBeHidden()
+  await expect.poll(() => page.getByLabel('Shared mouse cursor').evaluate(element => (element as HTMLElement).style.left)).toBe('77.3%')
+  await expect(tap).toBeEnabled()
+  expect(pulls).toBe(1)
+})
+
+test('show games retry initial loading failures and clear later load warnings without losing drafts', async ({ page }) => {
+  await mockCollaborativeGame(page, 'lowest-bidder')
+  let unavailable = true
+  let failures = 0
+  await page.route('**/rest/v1/rpc/get_owned_player_show_game', route => {
+    if (!unavailable) return route.fallback()
+    failures++
+    return route.fulfill({ status: 503, json: { message: 'Temporary load failure' } })
+  })
+  await page.goto('/play')
+  await expect.poll(() => failures).toBeGreaterThan(0)
+  // Let startup/subscription requests finish before restoring the connection.
+  await page.waitForTimeout(1800)
+  unavailable = false
+  const bid = page.getByLabel('Your whole number')
+  await expect(bid).toHaveValue('7')
+  await bid.fill('42')
+  unavailable = true
+  await expect(page.getByText('Could not load the game.', { exact: true })).toBeVisible()
+  unavailable = false
+  await expect(page.getByText('Could not load the game.', { exact: true })).toBeHidden()
+  await expect(bid).toHaveValue('42')
+})
+
 test('Beat the Bomb confirms a cut when the response is lost after saving', async ({ page }) => {
   const mock = await mockCollaborativeGame(page, 'beat-the-bomb')
   mock.failNextBombCutResponse()

@@ -4,6 +4,7 @@ import {
   gradingPoints,
   normaliseTriviaAnswer,
   reviewMatchForPair,
+  parseStoredAnswer,
   type GradingQuestion,
 } from './grading'
 
@@ -18,12 +19,30 @@ function question(overrides: Partial<GradingQuestion>): GradingQuestion {
 }
 
 describe('answer normalization', () => {
+  it.each([['COVID 19', 'COVID-19'], ['Apollo 11', 'Apollo-11'], ['B 52', 'B-52'], ['1000', '1,000'], ['1000000', '1,000,000'], ['$1000.25', '$1,000.25'], ['-1000', '−1,000']])('accepts equivalent punctuation in %s and %s', (submitted, expected) => {
+    expect(buildSubmissionGrading(question({ correct_answer: expected }), submitted).items[0].status).toBe('correct')
+  })
+  it.each([['9007199254740992', '9007199254740993'], ['0.123456789012345678', '0.123456789012345679'], ['.5 minutes', '5 minutes'], ['- .5', '.5'], ['1,000', '1,001'], ['1, 2, 3', '123']])('keeps distinct numeric values %s and %s out of typo review', (submitted, expected) => {
+    expect(reviewMatchForPair(submitted, expected).status).toBe('incorrect')
+  })
   it.each([['3 minutes', '2 minutes'], ['1998', '1999'], ['2.5 minutes', '25 minutes'], ['Apollo 12', 'Apollo 13'], ['-2 minutes', '2 minutes']])('never treats %s versus %s as a typo', (submitted, expected) => {
     expect(reviewMatchForPair(submitted, expected)).toEqual({ status: 'incorrect' })
   })
   it('still reviews spelling with the same quantity and honours explicit aliases', () => {
     expect(reviewMatchForPair('2 minites', '2 minutes').status).toBe('review')
     expect(buildSubmissionGrading(question({ correct_answer: '2 minutes', accepted_answers: ['two minutes'] }), 'two minutes').items[0].status).toBe('correct')
+  })
+  it.each(['multi-answer', 'multi-part', 'ranking'])('%s preserves numeric meaning and accepts thousands formatting consistently', question_type => {
+    const grade = (submitted: string, expected: string) => buildSubmissionGrading(question({ question_type, correct_answer: [expected] }), JSON.stringify([submitted])).items[0].status
+    expect(grade('5', '.5')).toBe('incorrect')
+    expect(grade('5', '-.5')).toBe('incorrect')
+    expect(grade('1000000', '1,000,000')).toBe('correct')
+    expect(grade('COVID 19', 'COVID-19')).toBe('correct')
+  })
+  it('does not award the same multi-answer slot twice using numeric formatting variants', () => {
+    const result = buildSubmissionGrading(question({ question_type: 'multi-answer', correct_answer: ['1,000', '2,000'], points_max: 2 }), '["1000","1,000"]')
+    expect(result.items.map(item => item.status)).toEqual(['correct', 'incorrect'])
+    expect(result.missing).toEqual(['2,000'])
   })
   it('ignores case, surrounding whitespace, punctuation, and repeated separators', () => {
     expect(normaliseTriviaAnswer('  Sonic: The   Hedgehog! ')).toBe('sonic the hedgehog')
@@ -33,6 +52,15 @@ describe('answer normalization', () => {
 
 describe('single-answer grading', () => {
   const single = question({})
+
+  it.each(['9007199254740993', '0.123456789012345678', '0.0000001', 'true', 'false', 'null', '{"name":"Ada"}'])('preserves the exact literal answer %s through parsing and grading', answer => {
+    expect(parseStoredAnswer(answer)).toBe(answer)
+    expect(buildSubmissionGrading(question({ correct_answer: answer }), answer).items[0]).toMatchObject({ submitted: answer, status: 'correct' })
+  })
+  it('does not round a wrong large number into a correct answer', () => {
+    expect(buildSubmissionGrading(question({ correct_answer: '9007199254740992' }), '9007199254740993').items[0].status).toBe('incorrect')
+    expect(parseStoredAnswer('["One","Two"]')).toEqual(['One', 'Two'])
+  })
 
   it('grades normalized exact answers as correct', () => {
     expect(buildSubmissionGrading(single, ' canada! ').items[0].status).toBe('correct')

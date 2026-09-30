@@ -43,7 +43,9 @@ export function normaliseTriviaAnswer(value: string) {
 export function parseStoredAnswer(value: string): unknown {
   try {
     const parsed: unknown = JSON.parse(value)
-    return parsed === null ? value : parsed
+    // Only compound answers and encoded strings use JSON. Literal answers such
+    // as numbers or "true" must stay text for exact grading and draft restoration.
+    return Array.isArray(parsed) || typeof parsed === 'string' ? parsed : value
   } catch {
     return value
   }
@@ -165,13 +167,31 @@ export function reviewReasonLabel(reason: ReviewReason) {
   return 'Possible spelling mistake'
 }
 
+function numericAnswerParts(text: string) {
+  // Only standard thousands groups: never merge a list such as "1, 2, 3".
+  const formatted = text.replace(/(?<![\d.,])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\d.,])/g, value => value.replaceAll(',', ''))
+  const tokens = formatted.match(/(?:(?<![\p{L}\p{N}])[-−﹣－]\s*)?(?:\d+(?:\.\d+)?|\.\d+)/gu) ?? []
+  const numbers = tokens.map(token => {
+    // Compare exact decimal strings, not floating-point numbers that can round
+    // distinct large answers to the same value. A name's hyphen isn't a minus.
+    const negative = /^[-−﹣－]/u.test(token)
+    const [whole, fraction = ''] = token.replace(/^[-−﹣－]\s*/u, '').split('.')
+    const integer = (whole || '0').replace(/^0+(?=\d)/, '')
+    const decimals = fraction.replace(/0+$/, '')
+    const value = `${integer}${decimals ? `.${decimals}` : ''}`
+    return `${negative && value !== '0' ? '-' : ''}${value}`
+  })
+  return { formatted, numbers }
+}
+
 export function reviewMatchForPair(submitted: string, expected: string): Pick<ReviewItem, 'status' | 'review_reason'> {
   // Digits carry meaning: a different quantity/year is not a spelling slip.
   // Check the original strings so punctuation normalization cannot hide decimals.
-  const numbers = (text: string) => (text.replace(/[−﹣－]/g, '-').replace(/-\s+(?=\d)/g, '-').replace(/(?<=\d),(?=\d{3}(?:\D|$))/g, '').match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number)
-  if (JSON.stringify(numbers(submitted)) !== JSON.stringify(numbers(expected))) return { status: 'incorrect' }
-  const normalizedSubmitted = normaliseTriviaAnswer(submitted)
-  const normalizedExpected = normaliseTriviaAnswer(expected)
+  const submittedParts = numericAnswerParts(submitted)
+  const expectedParts = numericAnswerParts(expected)
+  if (JSON.stringify(submittedParts.numbers) !== JSON.stringify(expectedParts.numbers)) return { status: 'incorrect' }
+  const normalizedSubmitted = normaliseTriviaAnswer(submittedParts.formatted)
+  const normalizedExpected = normaliseTriviaAnswer(expectedParts.formatted)
 
   if (normalizedSubmitted && normalizedSubmitted === normalizedExpected) return { status: 'correct' }
   if (
@@ -241,9 +261,8 @@ export function buildSubmissionGrading(question: GradingQuestion, answerText: st
 
     // Reserve every exact answer before a fuzzy response may consume its slot.
     const exactItems: (ReviewItem | null)[] = submittedRaw.map((submitted) => {
-      const norm = normaliseTriviaAnswer(submitted)
-      const exactIndex = remaining.findIndex(candidate => norm && answerCandidates(candidate.value, candidate.accepted)
-        .some(value => normaliseTriviaAnswer(value) === norm))
+      const exactIndex = remaining.findIndex(candidate => answerCandidates(candidate.value, candidate.accepted)
+        .some(value => reviewMatchForPair(submitted, value).status === 'correct'))
 
       if (exactIndex >= 0) {
         const [match] = remaining.splice(exactIndex, 1)
@@ -303,7 +322,7 @@ export function buildSubmissionGrading(question: GradingQuestion, answerText: st
         label: String(index + 1),
         submitted: submitted[index] ?? '',
         expected: expectedValue,
-        status: normaliseTriviaAnswer(submitted[index] ?? '') === normaliseTriviaAnswer(expectedValue)
+        status: reviewMatchForPair(submitted[index] ?? '', expectedValue).status === 'correct'
           ? 'correct'
           : 'incorrect',
       })),

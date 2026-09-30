@@ -95,6 +95,43 @@ test('a failed image has a useful retry without losing the answer', async ({ pag
   await expect(page.getByPlaceholder('Type your answer…')).toHaveValue('Still here')
 })
 
+for (const height of [320, 412]) {
+  test(`image zoom keeps every edge reachable on a ${height}px landscape screen and refits after rotation`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 839, height })
+    await player(page, `${media}/portrait.svg`)
+    await page.goto('/play')
+    await page.getByPlaceholder('Type your answer…').fill('Keep this draft')
+    await page.getByRole('button', { name: 'Enlarge question image', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Question image enlarged' })
+    const image = dialog.getByRole('img')
+    for (let i = 0; i < 6; i++) await page.getByRole('button', { name: 'Zoom in', exact: true }).click()
+    const bounds = await image.evaluate(element => {
+      const viewport = element.parentElement!
+      viewport.scrollTop = viewport.scrollHeight
+      viewport.scrollLeft = viewport.scrollWidth
+      const img = element.getBoundingClientRect()
+      const view = viewport.getBoundingClientRect()
+      const modal = element.closest('dialog')!.getBoundingClientRect()
+      return { imageBottom: img.bottom, imageRight: img.right, viewportBottom: view.bottom, viewportRight: view.right, dialogBottom: modal.bottom, dialogRight: modal.right }
+    })
+    expect(bounds.viewportBottom).toBeLessThanOrEqual(bounds.dialogBottom - 10)
+    expect(bounds.viewportRight).toBeLessThanOrEqual(bounds.dialogRight - 10)
+    expect(bounds.imageBottom).toBeLessThanOrEqual(bounds.viewportBottom + 1)
+    expect(bounds.imageRight).toBeLessThanOrEqual(bounds.viewportRight + 1)
+    await page.screenshot({ path: testInfo.outputPath('landscape-zoom-bottom.png') })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.getByRole('button', { name: 'Reset image zoom' }).click()
+    await expect.poll(() => image.evaluate(element => {
+      const img = element.getBoundingClientRect(), viewport = element.parentElement!.getBoundingClientRect()
+      return img.height <= viewport.height + 1 && img.width <= viewport.width + 1
+    })).toBe(true)
+    await page.getByRole('button', { name: 'Close image', exact: true }).click()
+    await expect(page.getByPlaceholder('Type your answer…')).toHaveValue('Keep this draft')
+    await page.getByRole('button', { name: 'Enlarge question image', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Reset image zoom' })).toHaveText('100% · Reset')
+  })
+}
+
 test('bonus images use the same full-image layout', async ({ page }) => {
   await player(page, `${media}/wide.svg`, 'bonus')
   await page.goto('/play')

@@ -16,6 +16,7 @@ import {
 import { prizeAwardsFromJson, type PrizeAward } from "@/lib/trivia/prizes";
 import { PLAYER_SESSION_KEYS, restoredTeamFromAdmission, shouldResetPlayerSessionForJoinCode } from "@/lib/trivia/session-recovery";
 import { initialRankingOrder } from "@/lib/trivia/ranking-order";
+import { parseStoredAnswer } from "@/lib/trivia/grading";
 import { playerDraftStorageKey, readPlayerDraft, savedAnswerForQuestion, writePlayerDraft } from "@/lib/trivia/player-draft";
 import { gameCodeFromSearch, normalizeGameCode, withGameCodeInUrl } from "@/lib/trivia/join-code";
 import { runtimeBonusFromJson } from "@/lib/trivia/bonus-grading";
@@ -175,10 +176,6 @@ function playerScreenFromGameState(value: string | null | undefined): PlayerScre
   if (!value) return null
   if (value === 'lobby') return 'waiting'
   return LIVE_PLAYER_SCREENS.has(value as PlayerScreen) ? value as PlayerScreen : null
-}
-
-function parseStoredAnswer(value: string): unknown {
-  try { return JSON.parse(value) } catch { return value }
 }
 
 function asStringArray(value: unknown): string[] {
@@ -3336,7 +3333,8 @@ function ShowGame() {
       p_game_id: gameId, p_team_id: teamId, p_show_game_key: nextShowGameKey, ...playerAdmissionArgs(),
     }).maybeSingle()
     if (stale()) return
-    if (showGameError) { setError('Could not load the game.'); return }
+    if (showGameError) { setError(current => current ?? 'Could not load the game.'); return }
+    if (activeShowGame) setError(current => current === 'Could not load the game.' ? null : current)
     if (activeShowGame?.id !== wheelShowGameIdRef.current) {
       wheelShowGameIdRef.current = activeShowGame?.id ?? null
       setWheelSettled(false)
@@ -3497,14 +3495,15 @@ function ShowGame() {
   const collaborativePollingId = showGame?.id ?? null
   const collaborativePollingStatus = showGame?.status ?? null
   useEffect(() => {
-    if (!collaborativePollingType || (collaborativePollingType === 'shared-cursor' && collaborativePollingStatus === 'open')) return
+    if (collaborativePollingType === 'shared-cursor' && collaborativePollingStatus === 'open') return
     let active = true
     let timer: number | null = null
     const poll = async () => {
-      await load()
-      if (active) timer = window.setTimeout(() => { void poll() }, 800)
+      try { await load() }
+      catch { if (active) setError(current => current ?? 'Could not load the game.') }
+      finally { if (active) timer = window.setTimeout(() => { void poll() }, 800) }
     }
-    void poll()
+    timer = window.setTimeout(() => { void poll() }, 800)
     return () => {
       active = false
       if (timer !== null) window.clearTimeout(timer)
@@ -3526,9 +3525,10 @@ function ShowGame() {
         p_show_game_key: currentShowGameKeyRef.current ?? '', ...playerAdmissionArgs(),
       }).maybeSingle()
       if (cursorError) console.error('Could not refresh cursor:', cursorError)
-      if (active && data && version === cursorUpdateVersionRef.current) {
+      if (active && !cursorError && data?.id === collaborativePollingId && version === cursorUpdateVersionRef.current) {
         setShowGame(current => current?.id === data.id ? data as PlayerShowGame : current)
         setShowGameNow(serverNow())
+        setError(current => current === 'Connection interrupted. Reconnecting…' || current === 'Could not load the game.' ? null : current)
       }
       } catch (error) { console.error('Could not refresh cursor:', error) } finally {
       syncing = false
@@ -3630,13 +3630,15 @@ function ShowGame() {
   }
 
   async function pullCursor() {
-    cursorUpdateVersionRef.current += 1
     if(!showGame||showGame.game_type!=='shared-cursor'||collaborativeBusyRef.current)return
     const requestId=localStorage.getItem('simple-trivia-join-request-id');const requestToken=localStorage.getItem('simple-trivia-join-request-token');if(!requestId||!requestToken)return
     collaborativeBusyRef.current=true;setCollaborativeBusy(true);setError(null)
+    cursorUpdateVersionRef.current += 1
+    try {
     const {data,error:pullError}=await supabase.rpc('pull_shared_cursor',{p_game_show_game_id:showGame.id,p_request_id:requestId,p_request_token:requestToken})
     if(pullError)setError('Connection interrupted. Reconnecting…');else { setError(null); if(data){cursorUpdateVersionRef.current += 1;setShowGame(data as PlayerShowGame);setShowGameNow(serverNow())} }
-    collaborativeBusyRef.current=false;setCollaborativeBusy(false)
+    } catch { setError('Connection interrupted. Reconnecting…') }
+    finally { collaborativeBusyRef.current=false;setCollaborativeBusy(false) }
   }
 
   async function chooseEliminationOption(choice: string) {

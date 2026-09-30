@@ -21,3 +21,12 @@
 - Rollback-only SQL fixtures check normal and speed override idempotency/reversals, spectator capability checks, hidden Deal ceilings, unique 3/40/100-team assignment and three swap rounds, and fractional server stamina.
 - Existing player access and audit SQL suites are rerun against the proposed migration in a transaction. No fixtures or test scores are retained.
 - Browser coverage uses controlled API fixtures; it is not a substitute for a live venue/network load test.
+
+## Follow-up regression fixes
+
+- Numeric comparison distinguishes a hyphen in a name from a negative quantity, accepts standard comma thousands separators, and compares decimal strings without floating-point rounding. Multi-answer and ranking exact-match paths now use the same numeric guard; aliases and duplicate-slot prevention remain intact.
+- Stored literal answers remain text rather than being coerced into JSON numbers, booleans, nulls, or objects. The player and grader share this parser, preserving precise numbers and literal answers such as `true` through refresh and saved-state feedback.
+- The enlarged image measures its actual available viewport. Zoomed image edges remain reachable on short landscape screens, and rotation refits the image without discarding an answer draft.
+- Successful passive Shared Cursor recovery clears connection warnings without another tap. Tap exceptions release the busy guard. Other show games retry failed initial loads and clear recovered load warnings while preserving edited bids and unrelated action errors.
+- Added regression coverage for 320px/412px landscape zoom, rotation, restored literal answers, passive warning recovery, failed initial loads, and consistent numeric grading across question types. No database migration is required for this follow-up.
+- Follow-up validation: 441 unit tests passed; the four affected browser suites passed 194 checks across desktop/mobile Chromium and WebKit, with two intentional desktop skips for a mobile-only check. Production build, TypeScript, lint, and whitespace checks passed. These are controlled browser fixtures, not a new live multiplayer/load test.
