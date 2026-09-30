@@ -289,6 +289,8 @@ function useLivePlayerSync(
     let active = true
     let stateApplyVersion = 0
     let loadingGameState = false
+    let lastStateRefresh = 0
+    let revealedResult = false
     let retryTimer: number | null = null
 
     function scheduleRetry() {
@@ -300,6 +302,8 @@ function useLivePlayerSync(
     }
 
     async function applyGameState(gameState: RemoteGameState) {
+      revealedResult = gameState.answer_phase === 'revealed'
+      lastStateRefresh = Date.now()
       const version = ++stateApplyVersion
       const next = await resolveLivePlayerScreen(activeGameId, activeTeamId, gameState)
       if (active && version === stateApplyVersion && next) setScreen(next)
@@ -313,12 +317,12 @@ function useLivePlayerSync(
         return
       }
       loadingGameState = true
+      try {
       const { data, error } = await supabase
         .from('games')
         .select('current_screen, answer_phase, answer_editing_allowed, question_stage, current_question_key, current_content_screen_key, current_show_game_key, settings')
         .eq('id', activeGameId)
         .maybeSingle()
-      loadingGameState = false
       if (!active || startedVersion !== stateApplyVersion) return
       if (error) {
         console.error('Could not load live game state:', error)
@@ -332,6 +336,7 @@ function useLivePlayerSync(
       }
       if (data) await applyGameState(data as RemoteGameState)
       else setScreen('game-ended')
+      } finally { loadingGameState = false }
     }
 
     void loadGameState()
@@ -356,6 +361,9 @@ function useLivePlayerSync(
         }
       })
 
+    const statePoll = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && (revealedResult || Date.now() - lastStateRefresh >= 5000)) void loadGameState()
+    }, 1500)
     const handleOffline = () => { if (active) setScreen('reconnecting') }
     const handleOnline = () => { if (active) void loadGameState() }
     window.addEventListener('offline', handleOffline)
@@ -364,6 +372,7 @@ function useLivePlayerSync(
     return () => {
       active = false
       if (retryTimer !== null) window.clearTimeout(retryTimer)
+      window.clearInterval(statePoll)
       window.removeEventListener('offline', handleOffline)
       window.removeEventListener('online', handleOnline)
       void supabase.removeChannel(channel)
@@ -858,6 +867,7 @@ type PlayerSnapshot = {
   prizeAwards: PrizeAward[]
   bonusAnswer: string
   hasBonusSubmission: boolean
+  bonusIsCorrect: boolean | null
   bonusCorrectAnswer: string
   bonusPointsAwarded: number
   bonusPointsMax: number
@@ -897,6 +907,20 @@ function isCompoundResultType(questionType: PlayerScreen | null) {
   return questionType === 'multi-answer' || questionType === 'multi-part' || questionType === 'ranking'
 }
 
+function samePlayerAnswer(current: unknown, saved: unknown) {
+  const clean = (value: unknown): unknown => Array.isArray(value) ? value.map(clean) : typeof value === 'string' ? value.trim() : value
+  return JSON.stringify(clean(current)) === JSON.stringify(clean(saved))
+}
+
+function AnswerSaveState({ saved, hasSubmission }: { saved: boolean; hasSubmission: boolean }) {
+  if (!saved && !hasSubmission) return null
+  return <p aria-live="polite" className="mt-3 rounded-xl border px-3 py-2 text-sm font-bold" style={{ color: saved ? C.go : C.sub, background: saved ? C.goMist : C.ground, borderColor: saved ? C.goBorder : C.line }}>{saved ? '✓ Answer saved. Any edits need to be submitted again.' : 'Unsaved changes — submit to replace your saved answer.'}</p>
+}
+
+function ResultMark({ correct, size = 16 }: { correct: boolean; size?: number }) {
+  return <svg role="img" aria-label={correct ? 'Correct' : 'Incorrect'} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="block shrink-0">{correct ? <path d="m5 12 4 4L19 6" /> : <path d="m6 6 12 12M18 6 6 18" />}</svg>
+}
+
 function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
   const items = snapshot.reviewItems
   if (!isCompoundResultType(snapshot.questionType) || items.length === 0) return null
@@ -928,7 +952,7 @@ function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
                 background: review ? C.cautionMist : 'transparent',
                 padding: '14px 16px',
                 display: 'grid',
-                gridTemplateColumns: label ? '28px minmax(0, 1fr) 70px 30px' : 'minmax(0, 1fr) 70px 30px',
+                gridTemplateColumns: label ? '28px minmax(0, 1fr) 30px' : 'minmax(0, 1fr) 30px',
                 alignItems: 'center',
                 gap: 10,
               }}
@@ -953,14 +977,14 @@ function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
               )}
 
               <div className="min-w-0">
-                <div className="flex items-center gap-2 min-w-0">
+                <div className="min-w-0 flex flex-col items-start gap-1">
                   <span
                     style={{
                       color: correct ? C.go : C.ink,
                       fontSize: 16,
                       fontWeight: 800,
                     }}
-                    className="truncate"
+                    className="whitespace-pre-wrap [overflow-wrap:anywhere]"
                   >
                     {item.submitted || 'No answer'}
                   </span>
@@ -969,7 +993,7 @@ function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
                       <span style={{ color: C.sub, fontSize: 12 }} className="shrink-0">→</span>
                       <span
                         style={{ color: C.go, fontSize: 14, fontWeight: 800 }}
-                        className="truncate"
+                        className="whitespace-pre-wrap [overflow-wrap:anywhere]"
                         title={`Correct answer: ${item.expected}`}
                       >
                         {item.expected}
@@ -977,11 +1001,9 @@ function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
                     </>
                   )}
                 </div>
+                {itemCorrectness && <p style={{ color: C.sub }} className="mt-2 text-xs font-bold">{itemCorrectness.percentage}% of teams got this answer</p>}
               </div>
 
-              <span style={{ color: C.sub, fontSize: 10, fontWeight: 800, textAlign: 'right' }} className="tabular-nums">
-                {itemCorrectness ? itemCorrectness.percentage + '% teams' : ''}
-              </span>
 
               <div
                 style={{
@@ -998,7 +1020,7 @@ function PlayerAnswerBreakdown({ snapshot }: { snapshot: PlayerSnapshot }) {
                   fontWeight: 900,
                 }}
               >
-                {correct ? '✓' : review ? '?' : '×'}
+                {review ? '?' : <ResultMark correct={correct} />}
               </div>
             </div>
           )
@@ -1050,10 +1072,10 @@ function PlayerSimpleAnswerResult({ snapshot }: { snapshot: PlayerSnapshot }) {
           gap: 10,
         }}
       >
-        <div className="min-w-0 flex items-center gap-2">
+        <div className="min-w-0 flex flex-col items-start gap-1">
           <span
             style={{ color: correct ? C.go : C.ink, fontSize: 17, fontWeight: 800 }}
-            className="truncate"
+            className="whitespace-pre-wrap [overflow-wrap:anywhere]"
           >
             {snapshot.answer || 'No answer'}
           </span>
@@ -1063,7 +1085,7 @@ function PlayerSimpleAnswerResult({ snapshot }: { snapshot: PlayerSnapshot }) {
               <span style={{ color: C.sub, fontSize: 12 }} className="shrink-0">→</span>
               <span
                 style={{ color: C.go, fontSize: 15, fontWeight: 800 }}
-                className="truncate"
+                className="whitespace-pre-wrap [overflow-wrap:anywhere]"
                 title={`Correct answer: ${snapshot.correctAnswer}`}
               >
                 {snapshot.correctAnswer}
@@ -1087,7 +1109,7 @@ function PlayerSimpleAnswerResult({ snapshot }: { snapshot: PlayerSnapshot }) {
             fontWeight: 900,
           }}
         >
-          {correct ? '✓' : '×'}
+          <ResultMark correct={correct} />
         </div>
       </div>
     </div>
@@ -1096,21 +1118,21 @@ function PlayerSimpleAnswerResult({ snapshot }: { snapshot: PlayerSnapshot }) {
 
 function PlayerBonusResult({ snapshot }: { snapshot: PlayerSnapshot }) {
   if (snapshot.bonusPointsMax <= 0) return null
-  const correct = snapshot.bonusPointsAwarded > 0
+  const correct = snapshot.bonusIsCorrect === true
   return (
     <div style={{ background: correct ? C.goMist : C.panel, border: `1px solid ${correct ? C.goBorder : C.line}`, borderRadius: 18, width: '100%', overflow: 'hidden' }}>
       <div style={{ padding: '12px 16px', borderBottom: `1px solid ${correct ? C.goBorder : C.line}` }}>
         <p style={{ color: C.violet, fontSize: 11, fontWeight: 900, letterSpacing: '0.08em' }}>BONUS · {snapshot.bonusPointsMax} {snapshot.bonusPointsMax === 1 ? 'POINT' : 'POINTS'}</p>
       </div>
       <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 30px', gap: 10, alignItems: 'center' }}>
-        <div className="min-w-0 flex items-center gap-2">
-          <span style={{ color: correct ? C.go : C.ink, fontSize: 16, fontWeight: 800 }} className="truncate">{snapshot.bonusAnswer || 'No answer'}</span>
+        <div className="min-w-0 flex flex-col items-start gap-1">
+          <span style={{ color: correct ? C.go : C.ink, fontSize: 16, fontWeight: 800 }} className="whitespace-pre-wrap [overflow-wrap:anywhere]">{snapshot.bonusAnswer || 'No answer'}</span>
           {!correct && snapshot.bonusCorrectAnswer && (
-            <><span style={{ color: C.sub }}>→</span><span style={{ color: C.go, fontSize: 14, fontWeight: 800 }} className="truncate">{snapshot.bonusCorrectAnswer}</span></>
+            <><span style={{ color: C.sub }}>→</span><span style={{ color: C.go, fontSize: 14, fontWeight: 800 }} className="whitespace-pre-wrap [overflow-wrap:anywhere]">{snapshot.bonusCorrectAnswer}</span></>
           )}
         </div>
         <div style={{ background: correct ? C.goMist : C.stopMist, border: `1px solid ${correct ? C.goBorder : C.stopBorder}`, color: correct ? C.go : C.stop, borderRadius: 999, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900 }}>
-          {correct ? '✓' : '×'}
+          <ResultMark correct={correct} />
         </div>
       </div>
     </div>
@@ -1173,7 +1195,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
     teamName: '', score: 0, answer: '', rawAnswer: null, questionKey: '', hasSubmission: false,
     isCorrect: null, pointsAwarded: 0, pointsMax: 1,
     prompt: '', correctAnswer: '—', roundLabel: '', questionLabel: '', questionType: null,
-    reviewItems: [], missingAnswers: [], prizeAwards: [], bonusAnswer: '', hasBonusSubmission: false, bonusCorrectAnswer: '',
+    reviewItems: [], missingAnswers: [], prizeAwards: [], bonusAnswer: '', hasBonusSubmission: false, bonusIsCorrect: null, bonusCorrectAnswer: '',
     bonusPointsAwarded: 0, bonusPointsMax: 0, correctness: null, correctnessItems: [],
   })
 
@@ -1186,6 +1208,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
     const activeTeamId = teamId
     let active = true
     let loadVersion = 0
+    let resultVisible = false
     let retryTimer: number | null = null
 
     function scheduleRetry() {
@@ -1210,6 +1233,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
       }
       const team = teamResult.data
       const game = gameResult.data
+      resultVisible = game?.answer_phase === 'revealed'
 
       let question: LiveQuestionDefinition | null = null
       let submission: { answer_text: string; is_correct: boolean | null; points_awarded: number; grading_json: unknown } | null = null
@@ -1291,6 +1315,7 @@ function usePlayerSnapshot(): PlayerSnapshot {
         prizeAwards: prizeAwardsFromJson(team?.prize_awards),
         bonusAnswer: bonusSubmission?.answer_text ?? '',
         hasBonusSubmission: Boolean(bonusSubmission),
+        bonusIsCorrect: bonusSubmission?.is_correct ?? null,
         bonusCorrectAnswer: revealedBonus?.correctAnswer ?? '',
         bonusPointsAwarded: bonusSubmission?.points_awarded ?? 0,
         bonusPointsMax: (revealedBonus?.points ?? playerBonusFromJson(question?.bonus)?.points ?? 0) * (speedScoringEnabled(game?.settings) ? 100 : 1),
@@ -1300,6 +1325,13 @@ function usePlayerSnapshot(): PlayerSnapshot {
     }
 
     const reloadOwnAnswer = () => { void loadSnapshot() }
+    let polling = false
+    const resultPoll = window.setInterval(async () => {
+      if (polling || !resultVisible || document.visibilityState !== 'visible') return
+      polling = true
+      try { await loadSnapshot() } finally { polling = false }
+    }, 1500)
+    window.addEventListener('focus', reloadOwnAnswer)
     window.addEventListener('trivia-answer-saved', reloadOwnAnswer)
     void loadSnapshot()
     const channel = supabase
@@ -1312,6 +1344,8 @@ function usePlayerSnapshot(): PlayerSnapshot {
     return () => {
       active = false
       if (retryTimer !== null) window.clearTimeout(retryTimer)
+      window.clearInterval(resultPoll)
+      window.removeEventListener('focus', reloadOwnAnswer)
       window.removeEventListener('trivia-answer-saved', reloadOwnAnswer)
       void supabase.removeChannel(channel)
     }
@@ -2476,8 +2510,10 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   }, [draftKey, storedAnswer])
   useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
+  const answerSaved = snapshot.questionKey === question?.question_key && snapshot.hasSubmission && samePlayerAnswer(answer, snapshot.rawAnswer)
+
   return (
-    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+    <div className={`flex flex-col ${answerSaved ? 'player-answer-saved' : ''}`} style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score}
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
@@ -2487,6 +2523,7 @@ function SingleAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         <textarea rows={3} value={answer} onChange={e => { answerDirtyRef.current = true; setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <AnswerSaveState saved={answerSaved} hasSubmission={snapshot.hasSubmission} />
         <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
@@ -2526,8 +2563,10 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
   }, [draftKey, storedAnswer])
   useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
+  const answerSaved = snapshot.questionKey === question?.question_key && snapshot.hasSubmission && samePlayerAnswer(answer, snapshot.rawAnswer)
+
   return (
-    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+    <div className={`flex flex-col ${answerSaved ? 'player-answer-saved' : ''}`} style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score}
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
@@ -2537,6 +2576,7 @@ function ImageQuestion({ go }: { go: (s: PlayerScreen) => void }) {
         <textarea rows={3} value={answer} onChange={e => { answerDirtyRef.current = true; setAnswer(e.target.value); writePlayerDraft(localStorage, draftKey, e.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <AnswerSaveState saved={answerSaved} hasSubmission={snapshot.hasSubmission} />
         <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
@@ -2577,8 +2617,10 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
   }, [draftKey, question?.question_key, storedSelection])
   useAutoSubmitPlayerDraft(selected ?? '', Boolean(selected) && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
+  const answerSaved = snapshot.questionKey === question?.question_key && snapshot.hasSubmission && samePlayerAnswer(selected, snapshot.rawAnswer)
+
   return (
-    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+    <div className={`flex flex-col ${answerSaved ? 'player-answer-saved' : ''}`} style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score}
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
@@ -2596,6 +2638,7 @@ function MultipleChoice({ go }: { go: (s: PlayerScreen) => void }) {
           })}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <AnswerSaveState saved={answerSaved} hasSubmission={snapshot.hasSubmission} />
         <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => selected && void submit(selected)} disabled={!selected || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answer' : 'Submit Answer'}</Btn></div>
       </div>
@@ -2644,8 +2687,10 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   const anyFilled = answers.some(answer => answer.trim())
   useAutoSubmitPlayerDraft(answers, anyFilled && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
+  const answerSaved = snapshot.questionKey === question?.question_key && snapshot.hasSubmission && samePlayerAnswer(answers, snapshot.rawAnswer)
+
   return (
-    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+    <div className={`flex flex-col ${answerSaved ? 'player-answer-saved' : ''}`} style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score}
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
@@ -2659,6 +2704,7 @@ function MultiAnswer({ go }: { go: (s: PlayerScreen) => void }) {
           </div>)}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <AnswerSaveState saved={answerSaved} hasSubmission={snapshot.hasSubmission} />
         <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => void submit(answers)} disabled={!anyFilled || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></div>
       </div>
@@ -2704,8 +2750,10 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
   const anyFilled = answers.some(answer => answer.trim())
   useAutoSubmitPlayerDraft(answers, anyFilled && Boolean(question?.question_key) && !submitting, submit, question?.question_key)
 
+  const answerSaved = snapshot.questionKey === question?.question_key && snapshot.hasSubmission && samePlayerAnswer(answers, snapshot.rawAnswer)
+
   return (
-    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+    <div className={`flex flex-col ${answerSaved ? 'player-answer-saved' : ''}`} style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score}
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
@@ -2720,6 +2768,7 @@ function MultiPart({ go }: { go: (s: PlayerScreen) => void }) {
           </div>)}
         </div>
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <AnswerSaveState saved={answerSaved} hasSubmission={snapshot.hasSubmission} />
         <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => void submit(answers)} disabled={!anyFilled || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasSubmission ? 'Update Answers' : 'Submit Answers'}</Btn></div>
       </div>
@@ -2812,8 +2861,10 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
     snapshots.current = new Map()
   })
 
+  const answerSaved = snapshot.questionKey === question?.question_key && snapshot.hasSubmission && samePlayerAnswer(items, snapshot.rawAnswer)
+
   return (
-    <div className="flex flex-col" style={{ minHeight: '100%' }} onKeyDown={event => {
+    <div className={`flex flex-col ${answerSaved ? 'player-answer-saved' : ''}`} style={{ minHeight: '100%' }} onKeyDown={event => {
       if ((event.target as HTMLElement).closest('button')) return
       submitPlayerAnswerOnEnter(event, items.length > 0 && Boolean(question?.question_key) && !submitting, () => { void submit(items) })
     }}>
@@ -2921,6 +2972,7 @@ function Ranking({ go }: { go: (s: PlayerScreen) => void }) {
         </div>
 
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <AnswerSaveState saved={answerSaved} hasSubmission={snapshot.hasSubmission} />
         <SubmitNotice message={submitNotice} />
         <div className="mt-4">
           <Btn onClick={() => void submit(items)} disabled={!question?.question_key || items.length === 0 || submitting}>
@@ -2960,8 +3012,10 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
   }, [draftKey, storedBonusAnswer])
   useAutoSubmitPlayerDraft(answer, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, submit, question?.question_key, 'bonus')
 
+  const answerSaved = snapshot.questionKey === question?.question_key && snapshot.hasBonusSubmission && samePlayerAnswer(answer, snapshot.bonusAnswer)
+
   return (
-    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+    <div className={`flex flex-col ${answerSaved ? 'player-answer-saved' : ''}`} style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score}
         round={question ? `Round ${question.round_number}` : ''}
         question={question ? `Question ${question.round_position} of ${question.round_question_count}` : ''} />
@@ -2976,6 +3030,7 @@ function BonusAnswer({ go }: { go: (s: PlayerScreen) => void }) {
         <textarea rows={3} value={answer} onChange={event => { answerDirtyRef.current = true; setAnswer(event.target.value); writePlayerDraft(localStorage, draftKey, event.target.value) }} onKeyDown={event => submitPlayerAnswerOnEnter(event, Boolean(answer.trim()) && Boolean(question?.question_key) && !submitting, () => { void submit(answer) })} placeholder="Type your answer…"
           style={{ border: `2px solid ${answer ? C.violet : C.line}`, borderRadius: 14, background: C.panel, color: C.ink, fontSize: 18, fontWeight: 500, outline: 'none', width: '100%', padding: '14px 16px', resize: 'none', fontFamily: 'inherit' }} />
         {submitError && <p style={{ color: C.stop, fontSize: 13, marginTop: 10 }}>{submitError}</p>}
+        <AnswerSaveState saved={answerSaved} hasSubmission={snapshot.hasBonusSubmission} />
         <SubmitNotice message={submitNotice} />
         <div className="mt-4"><Btn onClick={() => void submit(answer)} disabled={!answer.trim() || !question?.question_key || submitting}>{submitting ? 'Submitting…' : snapshot.hasBonusSubmission || submitNotice ? 'Update Bonus Answer' : 'Submit Bonus Answer'}</Btn></div>
       </div>
@@ -3080,7 +3135,7 @@ function Correct() {
       <div className="flex-1 overflow-y-auto px-5 py-5">
         <PlayerQuestionCard prompt={snapshot.prompt || 'Question result'} />
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-          <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 26, color: C.go }}>✓</span></div>
+          <div style={{ background: C.goMist, borderRadius: 999, border: `2px solid ${C.goBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: C.go }}><ResultMark correct size={26} /></span></div>
           <h1 style={{ color: C.go, fontSize: 38 }} className="font-black">Correct!</h1>
           <PlayerQuestionResultSummary snapshot={snapshot} />
           {scoresVisible && <div style={{ background: C.violetPale, borderRadius: 14, width: '100%', padding: '12px 20px' }}><p style={{ color: C.violet, fontSize: 28, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Updated score</p></div>}
@@ -3102,7 +3157,7 @@ function Incorrect() {
       <div className="flex-1 overflow-y-auto px-5 py-5">
         <PlayerQuestionCard prompt={snapshot.prompt || 'Question result'} />
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-          <div style={{ background: C.stopMist, borderRadius: 999, border: `2px solid ${C.stopBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 28, color: C.stop }}>×</span></div>
+          <div style={{ background: C.stopMist, borderRadius: 999, border: `2px solid ${C.stopBorder}`, width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: C.stop }}><ResultMark correct={false} size={26} /></span></div>
           <h1 style={{ color: C.ink, fontSize: 36 }} className="font-black">Not quite</h1>
           <PlayerQuestionResultSummary snapshot={snapshot} />
           {scoresVisible && <div style={{ background: C.ground, borderRadius: 14, border: `1px solid ${C.line}`, width: '100%', padding: '12px 20px', textAlign: 'center' }}><p style={{ color: C.ink, fontSize: 22, fontWeight: 900 }}>{snapshot.score} points</p><p style={{ color: C.sub, fontSize: 13 }}>Your score</p></div>}
@@ -3216,6 +3271,7 @@ function ShowGame() {
   const [wheelSettled, setWheelSettled] = useState(false)
   const wheelShowGameIdRef = useRef<string | null>(null)
   const currentShowGameKeyRef = useRef<string | null>(null)
+  const cursorUpdateVersionRef = useRef(0)
   const showGameLoadVersionRef = useRef(0)
   const handleWheelSettled = useCallback(() => setWheelSettled(true), [])
   const [hasPressed, setHasPressed] = useState(false)
@@ -3463,16 +3519,21 @@ function ShowGame() {
     const syncCursor = async () => {
       if (syncing) return
       syncing = true
-      const { data } = await supabase.rpc('get_owned_player_show_game', {
+      const version = cursorUpdateVersionRef.current
+      try {
+      const { data, error: cursorError } = await supabase.rpc('get_owned_player_show_game', {
         p_game_id: localStorage.getItem('simple-trivia-game-id') ?? '', p_team_id: localStorage.getItem('simple-trivia-team-id') ?? '',
         p_show_game_key: currentShowGameKeyRef.current ?? '', ...playerAdmissionArgs(),
       }).maybeSingle()
-      if (active && data) {
+      if (cursorError) console.error('Could not refresh cursor:', cursorError)
+      if (active && data && version === cursorUpdateVersionRef.current) {
         setShowGame(current => current?.id === data.id ? data as PlayerShowGame : current)
         setShowGameNow(serverNow())
       }
+      } catch (error) { console.error('Could not refresh cursor:', error) } finally {
       syncing = false
       if (active) timer = window.setTimeout(() => { void syncCursor() }, 400)
+      }
     }
     void syncCursor()
     return () => {
@@ -3509,7 +3570,7 @@ function ShowGame() {
 
   useEffect(() => {
     if (!showGame?.explode_at || showGame.status !== 'open') return
-    const timer = window.setInterval(() => setShowGameNow(serverNow()), 200)
+    const timer = window.setInterval(() => setShowGameNow(serverNow()), 50)
     return () => window.clearInterval(timer)
   }, [showGame?.explode_at, showGame?.status])
 
@@ -3569,11 +3630,12 @@ function ShowGame() {
   }
 
   async function pullCursor() {
+    cursorUpdateVersionRef.current += 1
     if(!showGame||showGame.game_type!=='shared-cursor'||collaborativeBusyRef.current)return
     const requestId=localStorage.getItem('simple-trivia-join-request-id');const requestToken=localStorage.getItem('simple-trivia-join-request-token');if(!requestId||!requestToken)return
     collaborativeBusyRef.current=true;setCollaborativeBusy(true);setError(null)
     const {data,error:pullError}=await supabase.rpc('pull_shared_cursor',{p_game_show_game_id:showGame.id,p_request_id:requestId,p_request_token:requestToken})
-    if(pullError)setError('Connection interrupted. Reconnecting…');else { setError(null); if(data){setShowGame(data as PlayerShowGame);setShowGameNow(serverNow())} }
+    if(pullError)setError('Connection interrupted. Reconnecting…');else { setError(null); if(data){cursorUpdateVersionRef.current += 1;setShowGame(data as PlayerShowGame);setShowGameNow(serverNow())} }
     collaborativeBusyRef.current=false;setCollaborativeBusy(false)
   }
 
@@ -3885,7 +3947,7 @@ function ShowGame() {
               {!exploded && (ownDealCase?.decision||ownDealCase?.locked) && <div className="mt-5"><h2 style={{color:C.ink}} className="text-2xl font-black">{ownDealCase.locked?'Case locked in':ownDealCase.decision==='swap'?'Trading with the bank…':'Keeping this case…'}</h2><WaitMsg msg="Waiting for the next round…" /></div>}
               {exploded&&<div className="mt-5"><h2 style={{color:won?C.go:C.ink}} className="text-4xl font-black">{won?'You won!':'Another case was higher'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}
             </div>
-          : isSharedCursor ? <div className="mt-5 w-full max-w-xl"><SharedCursorGame teams={wheelTeams} settings={showGame.settings} ownTeamId={teamId} />{!exploded&&<><p style={{color:C.ink}} className="mx-auto mt-4 max-w-sm text-lg font-black">TAP the button. Do not drag the cursor.</p><div className="mx-auto mt-3 w-full max-w-sm text-left"><div className="flex items-center justify-between text-xs font-black uppercase tracking-wider" style={{color:cursorStamina.coolingDown?C.stop:C.sub}}><span>Tap stamina</span><span>{cursorStamina.coolingDown?`Recovering · ${cursorStamina.cooldownSeconds}s`:`${cursorStamina.remaining}/${cursorStamina.maximum}`}</span></div><div style={{background:C.line}} className="mt-2 h-3 overflow-hidden rounded-full"><div style={{width:`${cursorStamina.percent}%`,background:cursorStamina.coolingDown?C.stop:C.violet}} className="h-full rounded-full transition-[width] duration-200" /></div><p style={{color:C.sub}} className="mt-1.5 text-xs font-semibold">Use all five taps too quickly and you’ll need to recover for 3 seconds.</p></div><button type="button" aria-label={`Tap to nudge the cursor toward ${snapshot.teamName}`} onClick={()=>void pullCursor()} disabled={collaborativeBusy||!teamIsEligible||cursorStamina.coolingDown} style={{background:C.violet,touchAction:'manipulation'}} className="mx-auto mt-3 w-full max-w-sm select-none rounded-2xl px-6 py-5 text-xl font-black text-white active:scale-95 disabled:opacity-50">{cursorStamina.coolingDown?`RECOVERING · ${cursorStamina.cooldownSeconds}s`:`TAP TOWARD ${snapshot.teamName.toUpperCase()}`}</button></>}{exploded&&<div className="mt-5"><h2 style={{color:won?C.go:C.ink}} className="text-4xl font-black">{won?'You won!':'The cursor landed elsewhere'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}</div>
+          : isSharedCursor ? <div className="mt-2 w-full max-w-xl">{!exploded&&<><p style={{color:C.ink}} className="mx-auto mt-2 max-w-sm text-sm font-black">TAP the button. Do not drag the cursor.</p><div className="mx-auto mt-3 w-full max-w-sm text-left"><div className="flex items-center justify-between text-xs font-black uppercase tracking-wider" style={{color:cursorStamina.coolingDown?C.stop:C.sub}}><span>Tap stamina</span><span>{cursorStamina.coolingDown?`Recovering · ${cursorStamina.cooldownSeconds}s`:`${Math.floor(cursorStamina.remaining)}/${cursorStamina.maximum}`}</span></div><div style={{background:C.line}} className="mt-2 h-3 overflow-hidden rounded-full"><div style={{width:`${cursorStamina.percent}%`,background:cursorStamina.coolingDown?C.stop:C.violet}} className="h-full rounded-full transition-[width] duration-75 ease-linear" /></div><p style={{color:C.sub}} className="mt-1.5 text-xs font-semibold">Use all five taps too quickly and you’ll need to recover for 3 seconds.</p></div><button type="button" aria-label={`Tap to nudge the cursor toward ${snapshot.teamName}`} onClick={()=>void pullCursor()} disabled={collaborativeBusy||!teamIsEligible||cursorStamina.coolingDown||cursorStamina.remaining<1} style={{background:C.violet,touchAction:'manipulation'}} className="mx-auto mt-3 w-full max-w-sm select-none rounded-2xl px-6 py-5 text-xl font-black text-white active:scale-95 disabled:opacity-50">{cursorStamina.coolingDown?`RECOVERING · ${cursorStamina.cooldownSeconds}s`:`TAP TOWARD ${snapshot.teamName.toUpperCase()}`}</button></>}<SharedCursorGame compact teams={wheelTeams} settings={showGame.settings} ownTeamId={teamId} />{exploded&&<div className="mt-5"><h2 style={{color:won?C.go:C.ink}} className="text-4xl font-black">{won?'You won!':'The cursor landed elsewhere'}</h2>{won&&<p style={{color:C.sub}} className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-6"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}</div>
           : isWheel ? <div className="mt-5"><TeamWheel compact teamNames={wheelTeams.map(team => team.name)} spinning={!exploded} winnerName={wheelWinner?.name} landingKey={showGame ? `${showGame.id}:${showGame.started_at ?? ''}:${showGame.winner_team_id ?? ''}` : null} onSettled={handleWheelSettled} /></div>
           : isBigBalloon ? <div className="mt-5 w-full max-w-sm">
               {!exploded && <div aria-hidden={balloonHolding || ownBalloon?.status === 'inflating' || ownBalloon?.status === 'locked' || ownBalloon?.status === 'popped'} style={{ background: eliminationSecondsRemaining <= 5 ? '#FEE2E2' : eliminationSecondsRemaining <= 10 ? '#FFF7ED' : C.violetPale, color: eliminationSecondsRemaining <= 5 ? '#B91C1C' : eliminationSecondsRemaining <= 10 ? '#C2410C' : C.violet }} className={`mb-4 min-h-11 rounded-full px-4 py-2 text-center text-lg font-black tabular-nums ${balloonHolding || ownBalloon?.status === 'inflating' || ownBalloon?.status === 'locked' || ownBalloon?.status === 'popped' ? 'invisible' : ''}`}>
@@ -3917,8 +3979,8 @@ function ShowGame() {
           : <div className={`mt-5 text-6xl ${showGame?.status === 'open' ? 'animate-pulse' : ''}`} aria-label={exploded ? 'The bomb exploded' : 'Bomb with burning fuse'}>{exploded ? '💥' : '💣'}</div>}
         {isBomb && showGame?.status === 'open' && <div className="mt-4 w-full max-w-sm space-y-2">
           <div style={{ background: '#fff1f2', border: '1px solid #fb7185', color: '#9f1239' }} className="rounded-xl px-3 py-2 text-center">
-            <p className="text-lg font-black uppercase tracking-wide">{currentBombPhase.armed?bombOvertime?'OVERTIME · CUT NOW':`DANGER · ${bombDangerSeconds}s MAX`:`ARMING · ${currentBombPhase.seconds}s`}</p>
-            <p className="mt-0.5 text-[11px] font-bold leading-4">{currentBombPhase.armed?bombOvertime?'The bomb is waiting for its first cut. The first cut ends overtime.':'It can explode at any moment over the next 60 seconds—but never before somebody cuts. You are flying blind.':'Get ready. Wire cutting unlocks when the bomb is armed.'}</p>
+            <p className="text-lg font-black uppercase tracking-wide">{currentBombPhase.armed?bombOvertime?'STILL TICKING · CUT NOW':`DANGER · ${bombDangerSeconds}s MAX`:`ARMING · ${currentBombPhase.seconds}s`}</p>
+            <p className="mt-0.5 text-[11px] font-bold leading-4">{currentBombPhase.armed?'The last team to cut before it explodes wins. Wait too long and you’re out!':'Get ready. You can cut once the bomb is armed.'}</p>
           </div>
         </div>}
         {!isAudienceQuestion && !isTreasure && !isLowestBidder && !isDealOrNoDeal && !isSharedCursor && (isElimination && showGame?.game_type !== 'scissors-paper-rock' && !exploded && (showGame?.game_type !== 'heads-or-tails' || eliminationState.roundPhase !== 'reveal' || coinRevealFinishedRound === eliminationState.roundNumber) ? (

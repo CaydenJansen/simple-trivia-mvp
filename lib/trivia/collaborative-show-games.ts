@@ -53,12 +53,13 @@ export function sharedCursorStamina(settings: Json | null | undefined, teamId: s
   const coolingDown = Number.isFinite(cooldownUntil) && cooldownUntil > now
   const cooldownCompleted = Number.isFinite(cooldownUntil) && cooldownUntil <= now
   const cooldownSeconds = coolingDown ? Math.max(1, Math.ceil((cooldownUntil - now) / 1000)) : 0
-  const recovered = coolingDown ? 0 : Math.max(0, Math.floor((now - updatedAt) / 1000))
+  const recovered = Math.max(0, (now - updatedAt) / 1000)
   const remaining = coolingDown ? 0 : cooldownCompleted ? maximum : Math.min(maximum, savedRemaining + recovered)
+  const fill = coolingDown ? maximum * Math.max(0, Math.min(1, 1 - (cooldownUntil - now) / 3000)) : remaining
   return {
     remaining,
     maximum,
-    percent: (remaining / maximum) * 100,
+    percent: (fill / maximum) * 100,
     coolingDown,
     cooldownSeconds,
   }

@@ -28,9 +28,9 @@ describe('collaborative show-game state', () => {
 
   it('recovers shared cursor stamina and enforces the cooldown window', () => {
     const settings = { cursor_stamina: { 'team-a': { remaining: 2, updated_at_ms: 1_000, cooldown_until_ms: null } } }
-    expect(sharedCursorStamina(settings, 'team-a', 3_100)).toMatchObject({ remaining: 4, percent: 80, coolingDown: false })
+    expect(sharedCursorStamina(settings, 'team-a', 3_100)).toMatchObject({ remaining: 4.1, percent: 82, coolingDown: false })
     const cooling = { cursor_stamina: { 'team-a': { remaining: 0, updated_at_ms: 1_000, cooldown_until_ms: 4_000 } } }
-    expect(sharedCursorStamina(cooling, 'team-a', 2_100)).toMatchObject({ remaining: 0, percent: 0, coolingDown: true, cooldownSeconds: 2 })
+    expect(sharedCursorStamina(cooling, 'team-a', 2_500)).toMatchObject({ remaining: 0, percent: 50, coolingDown: true, cooldownSeconds: 2 })
     expect(sharedCursorStamina(cooling, 'team-a', 4_100)).toMatchObject({ remaining: 5, percent: 100, coolingDown: false })
   })
 })

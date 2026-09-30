@@ -11028,6 +11028,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
               </div>
             ) : isDealOrNoDeal ? (
               <div className="mx-auto mt-6 max-w-3xl">
+                <p className="mb-3 text-sm font-bold text-violet-200">Host only · Hidden case ceiling: ${String(showGame?.settings && typeof showGame.settings === 'object' && !Array.isArray(showGame.settings) ? showGame.settings.deal_max_value ?? 93 : 93)}</p>
                 <div className="mb-4 rounded-xl bg-violet-500/10 px-4 py-3 text-lg font-black text-violet-200">Round {dealRound} · {showGame?.status === 'open' ? `${eliminationSecondsRemaining}s to keep or swap` : 'Cases revealed'}</div>
                 <div className="grid gap-2 sm:grid-cols-2">{participatingTeams.map(team => { const entry=showGameDeals.find(item=>item.team_id===team.id); return <div key={team.id} style={{border:`1px solid ${showGame?.winner_team_id===team.id?C.go:C.liveLine}`,background:C.livePanel}} className="flex items-center gap-3 rounded-xl px-4 py-3 text-left"><span className="text-2xl">💼</span><span className="min-w-0 flex-1 truncate font-bold">{team.name}</span><span className="font-black">{showGame?.status==='exploded' ? `$${entry?.assigned_value ?? '—'}` : entry?.locked ? 'Locked' : entry?.decision==='swap' ? 'Trading with bank' : entry?.decision==='keep' ? 'Keeping' : 'Choosing…'}</span></div>})}</div>
               </div>
@@ -11148,12 +11149,12 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
 
   return (
     <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-[100dvh] flex flex-col">
-      <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}`, height: 52 }}
-        className="flex items-center px-6 gap-4 shrink-0 sticky top-0 z-40">
+      <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}` }}
+        className="flex min-h-[52px] flex-wrap items-center gap-2 px-3 py-2 shrink-0 sticky top-0 z-40 md:h-[52px] md:flex-nowrap md:gap-4 md:px-6 md:py-0">
         <div className="flex items-center gap-2 shrink-0">
           <BrandWordmark dark compact className="text-sm" />
         </div>
-        <div className="flex-1 flex items-center justify-center gap-4 text-sm">
+        <div className="order-last flex w-full min-w-0 flex-wrap items-center justify-center gap-2 text-xs md:order-none md:w-auto md:flex-1 md:gap-4 md:text-sm">
           {gameScreen === 'round-start' ? (
             <>
               <span style={{ color: C.liveDim }}>Round {question?.round_number ?? 1} of {totalRounds}</span>
@@ -11172,7 +11173,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
             </>
           )}
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="ml-auto flex items-center gap-2 shrink-0 md:gap-3">
           <JoinCodeButton dark />
           {liveSettingsMenu}
           <span style={{ background: '#DC2626' }} className="w-2 h-2 rounded-full animate-pulse" />

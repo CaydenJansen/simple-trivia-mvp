@@ -166,6 +166,10 @@ export function reviewReasonLabel(reason: ReviewReason) {
 }
 
 export function reviewMatchForPair(submitted: string, expected: string): Pick<ReviewItem, 'status' | 'review_reason'> {
+  // Digits carry meaning: a different quantity/year is not a spelling slip.
+  // Check the original strings so punctuation normalization cannot hide decimals.
+  const numbers = (text: string) => (text.replace(/[−﹣－]/g, '-').replace(/-\s+(?=\d)/g, '-').replace(/(?<=\d),(?=\d{3}(?:\D|$))/g, '').match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number)
+  if (JSON.stringify(numbers(submitted)) !== JSON.stringify(numbers(expected))) return { status: 'incorrect' }
   const normalizedSubmitted = normaliseTriviaAnswer(submitted)
   const normalizedExpected = normaliseTriviaAnswer(expected)
 

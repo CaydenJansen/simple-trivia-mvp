@@ -71,6 +71,7 @@ describe('elimination show games', () => {
     expect(TEAM_DECISION_SHOW_GAME_TYPES).toEqual(['beat-the-bomb', 'lowest-bidder', 'deal-or-no-deal', 'shared-cursor'])
     expect(TEMPLATE_EDITOR_SHOW_GAME_TYPES).toContain('shared-cursor')
     expect(showGameInstructions('beat-the-bomb')).toContain('20 seconds')
+    expect(showGameInstructions('beat-the-bomb')).not.toMatch(/overtime|guarantee|at least one/i)
     expect(showGameTeamRecommendation('lowest-bidder')).toContain('10 or more')
     expect(showGameTeamRecommendation('deal-or-no-deal')).toContain('20 or more')
     expect(showGameTeamRecommendation('shared-cursor')).toContain('10 or fewer')

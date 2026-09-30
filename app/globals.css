@@ -196,3 +196,10 @@ button {
 .rank-badge-changed {
   animation: rank-pop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
+
+/* Acknowledged by the server, not a correctness/marking indicator. */
+.player-answer-saved textarea,
+.player-answer-saved input:not([type="hidden"]) {
+  background: #ecfdf5 !important;
+  border-color: #059669 !important;
+}

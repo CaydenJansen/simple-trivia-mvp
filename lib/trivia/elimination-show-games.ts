@@ -117,7 +117,7 @@ export function showGameEmoji(type: ShowGameType) {
 
 export function showGameInstructions(type: ShowGameType) {
   if (type === 'spin-the-wheel') return 'Every joined team is placed on the wheel. It spins, slows down, and randomly selects one winner.'
-  if (type === 'beat-the-bomb') return 'The bomb takes 20 seconds to arm. Once armed, it can explode at any time in the next 60 seconds—but not until at least one team cuts. The last team to cut safely wins; if nobody cuts, overtime guarantees a winner.'
+  if (type === 'beat-the-bomb') return 'Wait 20 seconds for the bomb to arm, then choose when to cut your wire. The last team to cut before it explodes wins. Wait too long and you’re out!'
   if (type === 'lowest-bidder') return 'Choose a whole number. The lowest number chosen by exactly one team wins. If another team matches your number, neither of you can win with it.'
   if (type === 'deal-or-no-deal') return 'Every team gets a secret case of money. Keep it or trade it with the bank for a new mystery case. You can swap up to three times; the highest final case wins.'
   if (type === 'shared-cursor') return 'Tap your team button to nudge the shared cursor toward your name—do not drag it. Keep tapping strategically; if the cursor stays on your team for one full second, you win.'
@@ -125,9 +125,9 @@ export function showGameInstructions(type: ShowGameType) {
   if (type === 'scissors-paper-rock') return 'You’ll be paired against another team. Pick scissors, paper, or rock before the ten-second timer ends. Win to advance; draws send both teams through.'
   if (type === 'big-balloon') return 'Press and hold to inflate your balloon, then release to lock in its size. Push it too far and it pops. The biggest balloon still intact wins.'
   if (type === 'steal-the-treasure') return 'Hold to steal treasure while the guard is asleep, then release to bank it. If the guard catches you holding, that unbanked haul is lost. The most banked treasure wins.'
-  if (type === 'in-show-tiebreaker') return 'Everyone submits a numerical answer. The closest answer becomes the latest tie-ordering result without changing anyone\'s score.'
+  if (type === 'in-show-tiebreaker') return 'Enter your best numerical guess. The closest answer breaks ties without changing your score.'
   if (type === 'tiebreaker-style-question') return 'Everyone submits a numerical answer. The closest answer wins the configured points or prize.'
-  if (type === 'audience-question') return 'Ask the room something fun, then choose your favourite submitted answer.'
+  if (type === 'audience-question') return 'Send in your answer. The host picks their favourite submitted answer.'
   return 'Move your character between three lanes before positions lock. A rock hits one random lane each round. Survive until your team is the last one standing.'
 }
 

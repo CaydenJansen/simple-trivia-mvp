@@ -119,7 +119,7 @@ export default function EliminationShowGame({
 
     return (
       <div className="mx-auto mt-6 w-full max-w-2xl">
-        {ownTeamId ? (
+        {ownTeamId && (ownIsAlive || (revealed && ownMatchup)) ? (
           <>
             {ownHasBye ? (
               <div style={{ background: panel, border: `1px solid ${line}` }} className="rounded-2xl px-5 py-6 text-center">
@@ -165,7 +165,7 @@ export default function EliminationShowGame({
           </>
         ) : (
           <>
-            <p style={{ color: dim }} className="mb-3 text-center text-sm font-bold">{revealed ? `Round ${state.roundNumber} results` : `Choices lock in ${secondsRemaining}s`}</p>
+            <p style={{ color: dim }} className="mb-3 text-center text-sm font-bold">{ownTeamId ? 'You’re out — spectate the remaining matches' : revealed ? `Round ${state.roundNumber} results` : `Choices lock in ${secondsRemaining}s`}</p>
             <div className="grid gap-3 sm:grid-cols-2">
               {state.matchups.map((matchup, index) => {
                 const teamA = teams.find(team => team.id === matchup.teamAId)
@@ -176,6 +176,9 @@ export default function EliminationShowGame({
                     <span style={{ color: alive.has(matchup.teamAId) ? text : '#F87171' }} className="min-w-0 flex-1 truncate font-black">{teamA?.name ?? 'Team'}</span>
                     <span style={{ color: dim }} className="text-xs font-black">VS</span>
                     <span style={{ color: alive.has(matchup.teamBId) ? text : '#F87171' }} className="min-w-0 flex-1 truncate text-right font-black">{teamB?.name ?? 'Team'}</span>
+                  </div>
+                  <div className="mt-3 flex justify-between gap-3 text-sm font-bold" style={{ color: text }}>
+                    {[matchup.teamAId, matchup.teamBId].map(id => <span key={id} className="flex-1 text-center" aria-label={`${teams.find(team => team.id === id)?.name ?? 'Team'} picked ${choicesByTeam[id] ?? 'nothing yet'}`}>{choiceDisplay(choicesByTeam[id])} {choices.find(choice => choice.value === choicesByTeam[id])?.label ?? 'Choosing…'}</span>)}
                   </div>
                 </div>
               })}
@@ -198,11 +201,11 @@ export default function EliminationShowGame({
         {state.roundPhase === 'choosing' ? `Positions lock in ${secondsRemaining}s` : 'Positions locked—the rock is falling!'}
       </p>
       <div style={{ background: panel, border: `1px solid ${line}` }} className="relative h-56 overflow-hidden rounded-3xl">
-        {[0, 1, 2].map(lane => <button key={lane} type="button" disabled={!ownTeamId || !canChoose || choosing || state.roundPhase !== 'choosing' || !alive.has(ownTeamId)} onClick={() => onChoose?.(String(lane))}
+        {[0, 1, 2].map(lane => <button key={lane} type="button" disabled={!ownTeamId || !canChoose || choosing || state.roundPhase !== 'choosing' || !alive.has(ownTeamId) || (state.aliveTeamIds.length === 2 && state.aliveTeamIds.some(id => id !== ownTeamId && state.positions[id] === lane))} onClick={() => onChoose?.(String(lane))}
           aria-label={`Move to lane ${lane + 1}`}
           style={{ left: `${lane * 33.333}%`, borderRight: lane < 2 ? `1px dashed ${line}` : undefined, background: ownTeamId && (state.positions[ownTeamId] ?? 1) === lane ? 'rgba(124,58,237,.09)' : 'transparent' }}
-          className={`absolute inset-y-0 w-1/3 border-0 transition-colors ${ownTeamId && canChoose ? 'cursor-pointer hover:bg-violet-500/10' : 'cursor-default'}`}>
-          <span style={{ color: dim }} className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-black uppercase">Lane {lane + 1}</span>
+          className={`absolute inset-y-0 w-1/3 border-0 transition-colors disabled:cursor-default disabled:hover:bg-transparent ${ownTeamId && canChoose ? 'cursor-pointer hover:bg-violet-500/10' : 'cursor-default'}`}>
+          <span style={{ color: dim }} className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-black uppercase">Lane {lane + 1}{ownTeamId && state.aliveTeamIds.length === 2 && state.aliveTeamIds.some(id => id !== ownTeamId && state.positions[id] === lane) ? ' · Occupied' : ''}</span>
         </button>)}
         {rockLane >= 0 && <div className="pointer-events-none absolute inset-0 z-20 grid grid-cols-3" aria-label={`Rock falling into lane ${rockLane + 1}`}>
           <div className="flex justify-center" style={{ gridColumn: rockLane + 1 }}><span className="rock-drop block text-6xl">🪨</span></div>
@@ -217,6 +220,7 @@ export default function EliminationShowGame({
           </div>
         })}
       </div>
+      {state.aliveTeamIds.length === 2 && !finished && <p style={{ color: dim }} className="mt-3 text-center text-xs font-bold">Final showdown: choose an empty lane. You can’t share a lane.</p>}
       {ownTeamId && canChoose && state.roundPhase === 'choosing' && alive.has(ownTeamId) && <p style={{ color: dim }} className="mt-3 text-center text-xs font-semibold">Tap a lane to move there. Your position locks when the timer ends.</p>}
     </div>
   )

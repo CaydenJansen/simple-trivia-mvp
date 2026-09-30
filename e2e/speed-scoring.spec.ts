@@ -200,6 +200,7 @@ test('host closes timed answers without Auto-Run and opens a fresh bonus clock w
   await page.goto('/host')
   await expect(page.getByRole('timer')).toContainText('Speed points')
   await expect.poll(() => writes.some(write => write.answer_phase === 'closed'), { timeout: 12000 }).toBe(true)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true)
   await page.getByRole('button', { name: /Open Bonus/i }).click()
   await expect(page.getByRole('timer')).toContainText(/00:2\d|00:30/)
   const closedCount = writes.filter(write => write.answer_phase === 'closed').length

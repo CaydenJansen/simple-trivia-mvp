@@ -3,6 +3,7 @@ import {
   buildSubmissionGrading,
   gradingPoints,
   normaliseTriviaAnswer,
+  reviewMatchForPair,
   type GradingQuestion,
 } from './grading'
 
@@ -17,6 +18,13 @@ function question(overrides: Partial<GradingQuestion>): GradingQuestion {
 }
 
 describe('answer normalization', () => {
+  it.each([['3 minutes', '2 minutes'], ['1998', '1999'], ['2.5 minutes', '25 minutes'], ['Apollo 12', 'Apollo 13'], ['-2 minutes', '2 minutes']])('never treats %s versus %s as a typo', (submitted, expected) => {
+    expect(reviewMatchForPair(submitted, expected)).toEqual({ status: 'incorrect' })
+  })
+  it('still reviews spelling with the same quantity and honours explicit aliases', () => {
+    expect(reviewMatchForPair('2 minites', '2 minutes').status).toBe('review')
+    expect(buildSubmissionGrading(question({ correct_answer: '2 minutes', accepted_answers: ['two minutes'] }), 'two minutes').items[0].status).toBe('correct')
+  })
   it('ignores case, surrounding whitespace, punctuation, and repeated separators', () => {
     expect(normaliseTriviaAnswer('  Sonic: The   Hedgehog! ')).toBe('sonic the hedgehog')
     expect(normaliseTriviaAnswer('CANADA')).toBe(normaliseTriviaAnswer('Canada'))

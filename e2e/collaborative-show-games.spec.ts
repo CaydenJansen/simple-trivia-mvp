@@ -117,6 +117,21 @@ test('Shared Cursor shows every team and sends an authenticated pull', async ({ 
   await expect.poll(() => mock.getLastRpcBody()).toMatchObject({ p_request_id: 'request-a', p_request_token: 'token-a' })
 })
 
+test('Shared Cursor moves and finishes passively, with its tap button initially on screen', async ({ page }) => {
+  const mock = await mockCollaborativeGame(page, 'shared-cursor')
+  await page.goto('/play')
+  const tap = page.getByRole('button', { name: 'Tap to nudge the cursor toward Purple People' })
+  await expect(tap).toBeInViewport({ ratio: 1 })
+  const cursor = page.getByLabel('Shared mouse cursor')
+  await expect(cursor).toHaveCSS('left', /.+/)
+  const previous = await cursor.getAttribute('style')
+  mock.patchShowGame({ settings: { eligible_team_ids: ['team-a', 'team-b'], cursor_x: .7, cursor_y: .2, cursor_positions: { 'team-a': { x: -1, y: 0 }, 'team-b': { x: 1, y: 0 } } } })
+  await expect.poll(() => cursor.getAttribute('style')).not.toBe(previous)
+  expect(mock.getLastRpcBody()).toBeNull()
+  mock.patchShowGame({ status: 'exploded', winner_team_id: 'team-b' })
+  await expect(page.getByRole('heading', { name: 'The cursor landed elsewhere' })).toBeVisible()
+})
+
 test('Beat the Bomb shows the danger timer and uses the secure wire-cut action', async ({ page }) => {
   const mock = await mockCollaborativeGame(page, 'beat-the-bomb')
   await page.goto('/play')

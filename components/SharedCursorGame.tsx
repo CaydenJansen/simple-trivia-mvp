@@ -7,11 +7,12 @@ import type { Json } from '@/lib/supabase/database.types'
 
 type Team = { id: string; name: string }
 
-export default function SharedCursorGame({ teams, settings, ownTeamId, dark = false }: {
+export default function SharedCursorGame({ teams, settings, ownTeamId, dark = false, compact = false }: {
   teams: Team[]
   settings: Json
   ownTeamId?: string | null
   dark?: boolean
+  compact?: boolean
 }) {
   const state = sharedCursorState(settings)
   const candidateName = teams.find(team => team.id === state.candidateTeamId)?.name
@@ -29,7 +30,7 @@ export default function SharedCursorGame({ teams, settings, ownTeamId, dark = fa
   const positions = Object.keys(state.positions).length ? state.positions : fallbackPositions
 
   return <div className="mx-auto w-full max-w-2xl">
-    <div style={{ background: dark ? '#17142b' : '#f5f1ff', border: `1px solid ${dark ? '#393251' : '#ddd2ff'}` }} className="relative mx-auto aspect-square w-full max-w-[430px] overflow-hidden rounded-full">
+    <div style={{ background: dark ? '#17142b' : '#f5f1ff', border: `1px solid ${dark ? '#393251' : '#ddd2ff'}`, maxWidth: compact ? 'min(38svh, 340px)' : 430 }} className="relative mx-auto mt-3 aspect-square w-full overflow-hidden rounded-full">
       <div className="absolute inset-[13%] rounded-full border border-dashed opacity-40" />
       {teams.map(team => {
         const point = positions[team.id] ?? { x: 0, y: 0 }
