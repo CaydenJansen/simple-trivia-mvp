@@ -135,7 +135,7 @@ export function showGameInstructions(type: ShowGameType) {
 }
 
 export function showGameTeamRecommendation(type: ShowGameType) {
-  if (type === 'hot-potato') return 'At least 2 teams. One potato per 5 teams, rounded up. Exploded potatoes are replaced.'
+  if (type === 'hot-potato') return 'At least 2 teams. One potato per 4 teams, rounded up. Exploded potatoes are replaced.'
   if (type === 'lowest-bidder') return 'Works best with 10 or more teams.'
   if (type === 'deal-or-no-deal') return 'Works best with 20 or more teams.'
   if (type === 'shared-cursor') return 'Works best with 10 or fewer teams.'

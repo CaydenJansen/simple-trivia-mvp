@@ -2,7 +2,7 @@
 
 ## Rules
 
-- A 90-second round with at least two active teams. Freeze participants and create one potato per five teams, rounded up, at the start. Late joiners can spectate.
+- A 90-second round with at least two active teams. Freeze participants and create one potato per four teams, rounded up, at the start (2–4 teams: one; 5–8: two; 9–12: three). Late joiners can spectate. Updated by migration `20261001120000_hot_potato_per_four_teams.sql`.
 - Each held potato earns one Hot Potato point per second into a shared pending balance. Passing the last held potato banks the entire balance; passing only some does not.
 - Any held potato exploding wipes that team's pending balance, never its banked score. Remaining potatoes keep accruing. Unbanked points are lost at the final buzzer.
 - A potato lasts a server-random 8–22 seconds from creation. Passing never resets its age. Shaking gets faster with age but does not disclose the secret deadline.

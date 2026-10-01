@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { hotPotatoHeat, hotPotatoPending, hotPotatoState, staleHotPotatoSnapshot } from './hot-potato'
-import { TEAM_DECISION_SHOW_GAME_TYPES, TEMPLATE_EDITOR_SHOW_GAME_TYPES, showGameInstructions, showGameLabel } from './elimination-show-games'
+import { TEAM_DECISION_SHOW_GAME_TYPES, TEMPLATE_EDITOR_SHOW_GAME_TYPES, showGameInstructions, showGameLabel, showGameTeamRecommendation } from './elimination-show-games'
 
 describe('Hot Potato display state', () => {
   const settings = { hot_potato: { sampled_at: '2026-10-01T00:00:00Z', teams: [{ id: 'a', name: 'A', banked: 2, pending: 4, bursts: 1 }], potatoes: [1, 2].map(id => ({ id: String(id), holder_id: 'a', born_at: '2026-10-01T00:00:00Z', received_at: '2026-10-01T00:00:00Z' })) } }
@@ -9,6 +9,7 @@ describe('Hot Potato display state', () => {
     expect(TEMPLATE_EDITOR_SHOW_GAME_TYPES).toContain('hot-potato')
     expect(showGameLabel('hot-potato')).toBe('Hot Potato')
     expect(showGameInstructions('hot-potato')).toContain('last potato banks')
+    expect(showGameTeamRecommendation('hot-potato')).toContain('One potato per 4 teams, rounded up')
   })
   it('projects multiple potatoes continuously but caps disconnected interpolation', () => {
     const state = hotPotatoState(settings), time = state.sampledAt

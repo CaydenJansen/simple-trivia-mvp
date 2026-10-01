@@ -1,7 +1,7 @@
 -- Run with the migration in a transaction ending in ROLLBACK. No real game data.
 do $$
 declare h uuid:=gen_random_uuid(); q uuid; g uuid; sg uuid; ids uuid[]:='{}'; req uuid; token uuid:=gen_random_uuid(); op uuid:=gen_random_uuid();
-  a uuid; b uuid; c uuid; potato uuid; second_potato uuid; r public.game_show_games; response jsonb; banked numeric; points integer; rejected boolean; i integer;
+  a uuid; b uuid; c uuid; potato uuid; second_potato uuid; r public.game_show_games; response jsonb; banked numeric; points integer; rejected boolean; i integer; team_count integer; expected_count integer;
 begin
   insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data) values(h,h||'@hot-potato.invalid','{}','{}');
   perform set_config('request.jwt.claim.sub',h::text,true);
@@ -80,5 +80,22 @@ begin
     r:=public.advance_hot_potato(sg);
     perform public.advance_hot_potato(sg);
     if (select score from public.teams where id=a)<>(case when i=1 then 200 else 0 end) then raise exception 'Speed/custom reward incorrect'; end if;
+  end loop;
+  -- Exercise the real start and refill paths at both sides of each density boundary.
+  foreach team_count in array array[2,4,5,8,9,12,13,40] loop
+    select game_id into g from public.create_game_from_quiz_with_show_games(q,'{}');
+    select id into sg from public.game_show_games where game_id=g and show_game_key='potato';
+    update public.games set status='live',current_screen='show-game',current_show_game_key='potato' where id=g;
+    for i in 1..team_count loop
+      insert into public.teams(game_id,name,last_seen_at) values(g,'Density team '||i,clock_timestamp());
+    end loop;
+    expected_count:=ceil(team_count/4.0)::integer;
+    r:=public.start_hot_potato(sg);
+    if (select count(*) from public.hot_potatoes where game_show_game_id=sg)<>expected_count then raise exception 'Wrong starting potato count for % teams',team_count; end if;
+    perform public.start_hot_potato(sg);
+    if (select count(*) from public.hot_potatoes where game_show_game_id=sg)<>expected_count then raise exception 'Retry changed density'; end if;
+    delete from public.hot_potatoes where id=(select id from public.hot_potatoes where game_show_game_id=sg limit 1);
+    perform public.sync_hot_potato(sg,true);
+    if (select count(*) from public.hot_potatoes where game_show_game_id=sg)<>expected_count then raise exception 'Wrong refill count for % teams',team_count; end if;
   end loop;
 end; $$;
