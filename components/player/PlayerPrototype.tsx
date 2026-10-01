@@ -47,6 +47,8 @@ import LiveReactions from "@/components/LiveReactions";
 import EliminationShowGame from "@/components/EliminationShowGame";
 import BigBalloon, { type BigBalloonEntry } from "@/components/BigBalloon";
 import SharedCursorGame from "@/components/SharedCursorGame";
+import HotPotatoGame from "@/components/HotPotatoGame";
+import { staleHotPotatoSnapshot } from "@/lib/trivia/hot-potato";
 import { TEAM_PRESENCE_HEARTBEAT_MS } from "@/lib/trivia/team-presence";
 import {
   eliminationShowGameState,
@@ -3339,7 +3341,7 @@ function ShowGame() {
       wheelShowGameIdRef.current = activeShowGame?.id ?? null
       setWheelSettled(false)
     }
-    setShowGame(activeShowGame as PlayerShowGame | null)
+    setShowGame(current => staleHotPotatoSnapshot(current, activeShowGame as PlayerShowGame | null) ? current : activeShowGame as PlayerShowGame | null)
     if (activeShowGame?.status === 'exploded') setError(null)
     if (activeShowGame?.game_type === 'beat-the-bomb') {
       const requestId = localStorage.getItem('simple-trivia-join-request-id')
@@ -3629,6 +3631,24 @@ function ShowGame() {
     collaborativeBusyRef.current=false;setCollaborativeBusy(false);void load()
   }
 
+  async function passPotato(potatoId: string, recipientId: string, operationId: string) {
+    if (!showGame || showGame.game_type !== 'hot-potato') throw new Error('Game unavailable')
+    const { data, error: passError } = await supabase.rpc('pass_hot_potato', {
+      p_game_show_game_id: showGame.id,
+      p_request_id: localStorage.getItem('simple-trivia-join-request-id') ?? '',
+      p_request_token: localStorage.getItem('simple-trivia-join-request-token') ?? '',
+      p_potato_id: potatoId, p_recipient_id: recipientId, p_operation_id: operationId,
+    })
+    if (passError || !data || typeof data !== 'object' || Array.isArray(data)) throw passError ?? new Error('Pass not confirmed')
+    const result = data as { game?: PlayerShowGame; outcome?: string }
+    if (!result.game || result.game.id !== showGame.id || typeof result.outcome !== 'string') throw new Error('Pass not confirmed')
+    const savedGame = result.game
+    showGameLoadVersionRef.current += 1
+    setShowGame(current => current?.id === savedGame.id && !staleHotPotatoSnapshot(current, savedGame) ? savedGame : current)
+    setShowGameNow(serverNow())
+    return result.outcome
+  }
+
   async function pullCursor() {
     if(!showGame||showGame.game_type!=='shared-cursor'||collaborativeBusyRef.current)return
     const requestId=localStorage.getItem('simple-trivia-join-request-id');const requestToken=localStorage.getItem('simple-trivia-join-request-token');if(!requestId||!requestToken)return
@@ -3811,6 +3831,7 @@ function ShowGame() {
   const isLowestBidder = showGame?.game_type === 'lowest-bidder'
   const isDealOrNoDeal = showGame?.game_type === 'deal-or-no-deal'
   const isSharedCursor = showGame?.game_type === 'shared-cursor'
+  const isHotPotato = showGame?.game_type === 'hot-potato'
   const currentBombPhase = bombPhase(showGame?.settings, showGameNow)
   const bombDangerSeconds = bombDangerWindowSeconds(showGame?.settings, showGameNow)
   const bombOvertime = bombIsOvertime(showGame?.settings)
@@ -3870,11 +3891,11 @@ function ShowGame() {
     <div className="flex flex-col" style={{ minHeight: '100%' }}>
       <TopBar team={snapshot.teamName || 'Your Team'} score={snapshot.score} round={showGame ? `Round ${showGame.round_number}` : ''} question={isInShowTiebreaker ? 'Tiebreaker' : 'Game'} />
       <div
-        className={`flex flex-1 flex-col items-center justify-center overflow-x-hidden overflow-y-auto px-6 text-center ${isTreasure ? 'py-4' : 'py-8'}`}
+        className={`flex flex-1 flex-col items-center ${isHotPotato ? 'justify-start' : 'justify-center'} overflow-x-hidden overflow-y-auto px-6 text-center ${isTreasure || isHotPotato ? 'py-4' : 'py-8'}`}
         style={{ scrollbarGutter: 'stable' }}
       >
         <h1 style={{ color: C.ink }} className="text-3xl font-black">{showGame?.title ?? (showGame ? showGameLabel(showGame.game_type) : 'Game')}</h1>
-        <p style={{ color: C.sub }} className="mt-3 max-w-sm text-base font-semibold">{isInShowTiebreaker ? 'This result only orders teams who finish on equal scores. It does not add points.' : showGameRewardDescription(reward)}</p>
+        <p style={{ color: C.sub }} className={`${isHotPotato && !showingInstructions ? 'mt-1 text-xs' : 'mt-3 text-base'} max-w-sm font-semibold`}>{isInShowTiebreaker ? 'This result only orders teams who finish on equal scores. It does not add points.' : showGameRewardDescription(reward)}</p>
         {showingInstructions ? (
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="mt-7 w-full max-w-sm rounded-2xl px-5 py-5 text-left">
             <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-widest">How it works</p>
@@ -3882,7 +3903,10 @@ function ShowGame() {
             <div className="mt-5"><WaitMsg msg="The host will start the game…" /></div>
           </div>
         ) : <>
-        {isAudienceQuestion ? <div className="mt-7 w-full max-w-sm">
+        {isHotPotato && showGame ? <div className="w-full max-w-xl">
+          <HotPotatoGame key={showGame.id} settings={showGame.settings} now={showGameNow} endsAt={showGame.explode_at} finished={exploded} ownTeamId={teamId} onPass={passPotato} />
+          {exploded && <div className="mt-4"><h2 className="text-3xl font-black">{won ? 'You won!' : showGame.winner_team_id ? 'Another team banked the win' : 'No points were banked'}</h2>{won && <p className="mt-2">{showGameWinnerDetail(reward)}</p>}<div className="mt-4"><WaitMsg msg="Waiting for the host to continue…" /></div></div>}
+        </div> : isAudienceQuestion ? <div className="mt-7 w-full max-w-sm">
           <div style={{ background: C.panel, border: `1px solid ${C.line}` }} className="rounded-2xl px-5 py-5 text-left">
             <p style={{ color: C.violet }} className="text-xs font-black uppercase tracking-widest">{audienceQuestion.mode === 'favourite' ? 'Favourite Answer' : 'Closest Guess'}</p>
             <p style={{ color: C.ink }} className="mt-3 text-xl font-black leading-7">{audienceQuestion.prompt}</p>
@@ -3985,7 +4009,7 @@ function ShowGame() {
             <p className="mt-0.5 text-[11px] font-bold leading-4">{currentBombPhase.armed?'The last team to cut before it explodes wins. Wait too long and you’re out!':'Get ready. You can cut once the bomb is armed.'}</p>
           </div>
         </div>}
-        {!isAudienceQuestion && !isTreasure && !isLowestBidder && !isDealOrNoDeal && !isSharedCursor && (isElimination && showGame?.game_type !== 'scissors-paper-rock' && !exploded && (showGame?.game_type !== 'heads-or-tails' || eliminationState.roundPhase !== 'reveal' || coinRevealFinishedRound === eliminationState.roundNumber) ? (
+        {!isHotPotato && !isAudienceQuestion && !isTreasure && !isLowestBidder && !isDealOrNoDeal && !isSharedCursor && (isElimination && showGame?.game_type !== 'scissors-paper-rock' && !exploded && (showGame?.game_type !== 'heads-or-tails' || eliminationState.roundPhase !== 'reveal' || coinRevealFinishedRound === eliminationState.roundNumber) ? (
           <div className="mt-5">
             <h2 style={{ color: teamIsAlive ? C.go : C.sub }} className="text-xl font-black">{teamIsAlive ? `You’re still in · Round ${eliminationState.roundNumber}` : 'You’re out—watch the survivors'}</h2>
             {eliminationState.roundPhase === 'reveal' && eliminationState.roundEliminatedTeamIds.length === 0 && <p style={{ color: C.sub }} className="mt-2">Nobody was knocked out. Another round is coming.</p>}

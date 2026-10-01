@@ -68,7 +68,7 @@ describe('elimination show games', () => {
   })
 
   it('registers the collaborative games with clear suitability guidance', () => {
-    expect(TEAM_DECISION_SHOW_GAME_TYPES).toEqual(['beat-the-bomb', 'lowest-bidder', 'deal-or-no-deal', 'shared-cursor'])
+    expect(TEAM_DECISION_SHOW_GAME_TYPES).toEqual(['beat-the-bomb', 'lowest-bidder', 'deal-or-no-deal', 'shared-cursor', 'hot-potato'])
     expect(TEMPLATE_EDITOR_SHOW_GAME_TYPES).toContain('shared-cursor')
     expect(showGameInstructions('beat-the-bomb')).toContain('20 seconds')
     expect(showGameInstructions('beat-the-bomb')).not.toMatch(/overtime|guarantee|at least one/i)

@@ -1,11 +1,11 @@
 import type { Json } from '@/lib/supabase/database.types'
 
-export type ShowGameType = 'beat-the-bomb' | 'lowest-bidder' | 'deal-or-no-deal' | 'shared-cursor' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
+export type ShowGameType = 'hot-potato' | 'beat-the-bomb' | 'lowest-bidder' | 'deal-or-no-deal' | 'shared-cursor' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
 export type EliminationShowGameType = 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock'
 export type EliminationRoundPhase = 'choosing' | 'reveal'
 export const ARCHIVED_SHOW_GAME_TYPES = ['big-balloon', 'steal-the-treasure'] as const satisfies readonly ShowGameType[]
 export const IMMEDIATE_WINNER_SHOW_GAME_TYPES = ['spin-the-wheel'] as const satisfies readonly ShowGameType[]
-export const TEAM_DECISION_SHOW_GAME_TYPES = ['beat-the-bomb', 'lowest-bidder', 'deal-or-no-deal', 'shared-cursor'] as const satisfies readonly ShowGameType[]
+export const TEAM_DECISION_SHOW_GAME_TYPES = ['beat-the-bomb', 'lowest-bidder', 'deal-or-no-deal', 'shared-cursor', 'hot-potato'] as const satisfies readonly ShowGameType[]
 export const ELIMINATION_SHOW_GAME_TYPES = ['heads-or-tails', 'dodge-the-rock', 'scissors-paper-rock'] as const satisfies readonly ShowGameType[]
 export const HOST_PICKED_SHOW_GAME_TYPES = ['audience-question', 'tiebreaker-style-question'] as const satisfies readonly ShowGameType[]
 export const TEMPLATE_EDITOR_SHOW_GAME_TYPES = [...IMMEDIATE_WINNER_SHOW_GAME_TYPES, ...TEAM_DECISION_SHOW_GAME_TYPES, ...ELIMINATION_SHOW_GAME_TYPES] as const satisfies readonly ShowGameType[]
@@ -84,6 +84,7 @@ export function eliminationShowGameState(settings: Json | null | undefined): Eli
 }
 
 export function showGameLabel(type: ShowGameType) {
+  if (type === 'hot-potato') return 'Hot Potato'
   if (type === 'spin-the-wheel') return 'Spin the Wheel'
   if (type === 'beat-the-bomb') return 'Beat the Bomb'
   if (type === 'lowest-bidder') return 'Lowest Bidder'
@@ -100,6 +101,7 @@ export function showGameLabel(type: ShowGameType) {
 }
 
 export function showGameEmoji(type: ShowGameType) {
+  if (type === 'hot-potato') return '🥔'
   if (type === 'spin-the-wheel') return '🎡'
   if (type === 'beat-the-bomb') return '💣'
   if (type === 'lowest-bidder') return '🔢'
@@ -116,6 +118,7 @@ export function showGameEmoji(type: ShowGameType) {
 }
 
 export function showGameInstructions(type: ShowGameType) {
+  if (type === 'hot-potato') return 'Hold potatoes to earn points. Choose a team to pass each one to—passing your last potato banks your points. If any potato explodes, your pending points are lost! Bank the most in 90 seconds to win; pass before the buzzer.'
   if (type === 'spin-the-wheel') return 'Every joined team is placed on the wheel. It spins, slows down, and randomly selects one winner.'
   if (type === 'beat-the-bomb') return 'Wait 20 seconds for the bomb to arm, then choose when to cut your wire. The last team to cut before it explodes wins. Wait too long and you’re out!'
   if (type === 'lowest-bidder') return 'Choose a whole number. The lowest number chosen by exactly one team wins. If another team matches your number, neither of you can win with it.'
@@ -132,6 +135,7 @@ export function showGameInstructions(type: ShowGameType) {
 }
 
 export function showGameTeamRecommendation(type: ShowGameType) {
+  if (type === 'hot-potato') return 'At least 2 teams. One potato per 5 teams, rounded up. Exploded potatoes are replaced.'
   if (type === 'lowest-bidder') return 'Works best with 10 or more teams.'
   if (type === 'deal-or-no-deal') return 'Works best with 20 or more teams.'
   if (type === 'shared-cursor') return 'Works best with 10 or fewer teams.'

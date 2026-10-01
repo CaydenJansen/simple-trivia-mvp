@@ -26,6 +26,8 @@ import LiveReactions from "@/components/LiveReactions";
 import EliminationShowGame from "@/components/EliminationShowGame";
 import BigBalloon, { type BigBalloonEntry } from "@/components/BigBalloon";
 import SharedCursorGame from "@/components/SharedCursorGame";
+import HotPotatoGame from "@/components/HotPotatoGame";
+import { staleHotPotatoSnapshot } from "@/lib/trivia/hot-potato";
 import type { Database, Json, QuestionType } from "@/lib/supabase/database.types";
 import {
   asStringArray,
@@ -9310,7 +9312,7 @@ function LiveQuestion({ go }: { go: Go }) {
       setAllShowGames(showGames)
       setQuestion(currentQuestion)
       setContentScreen(currentContentScreen)
-      setShowGame(currentShowGame)
+      setShowGame(current => staleHotPotatoSnapshot(current, currentShowGame) ? current : currentShowGame)
       setTeams((teamResult.data ?? []) as LiveTeam[])
 
       if (currentShowGame) {
@@ -9522,6 +9524,7 @@ function LiveQuestion({ go }: { go: Go }) {
           : showGame?.game_type === 'lowest-bidder' ? 'resolve_lowest_bidder'
             : showGame?.game_type === 'deal-or-no-deal' ? 'advance_deal_or_no_deal'
               : showGame?.game_type === 'shared-cursor' ? 'advance_shared_cursor'
+                : showGame?.game_type === 'hot-potato' ? 'advance_hot_potato'
           : showGame?.game_type === 'big-balloon' ? 'resolve_big_balloon'
             : showGame?.game_type === 'steal-the-treasure' ? 'resolve_steal_the_treasure' : 'resolve_beat_the_bomb'
       const { data, error } = await supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId })
@@ -9556,13 +9559,18 @@ function LiveQuestion({ go }: { go: Go }) {
   }, [activeShowGameId, activeShowGameStatus, showGame?.game_type])
 
   useEffect(() => {
-    if (!activeShowGameId || activeShowGameStatus !== 'open' || !['deal-or-no-deal', 'shared-cursor'].includes(showGame?.game_type ?? '')) return
-    const rpc = showGame?.game_type === 'shared-cursor' ? 'advance_shared_cursor' : 'advance_deal_or_no_deal'
+    if (!activeShowGameId || activeShowGameStatus !== 'open' || !['deal-or-no-deal', 'shared-cursor', 'hot-potato'].includes(showGame?.game_type ?? '')) return
+    const rpc = showGame?.game_type === 'hot-potato' ? 'advance_hot_potato' : showGame?.game_type === 'shared-cursor' ? 'advance_shared_cursor' : 'advance_deal_or_no_deal'
     let active = true
     let timer: number | null = null
     const tick = async () => {
-      await supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId })
-      if (active) timer = window.setTimeout(() => { void tick() }, showGame?.game_type === 'shared-cursor' ? 250 : 500)
+      try {
+        const { data, error } = await supabase.rpc(rpc, { p_game_show_game_id: activeShowGameId })
+        if (active && !error && data && rpc === 'advance_hot_potato') setShowGame(current => current?.id === data.id && !staleHotPotatoSnapshot(current, data as LiveShowGameDefinition) ? data as LiveShowGameDefinition : current)
+      } catch {
+        // Keep retrying after a transient transport failure. Hot Potato's board
+        // marks its stale snapshot as reconnecting until fresh state arrives.
+      } finally { if (active) timer = window.setTimeout(() => { void tick() }, showGame?.game_type === 'shared-cursor' ? 250 : 500) }
     }
     void tick()
     return () => {
@@ -9712,6 +9720,7 @@ function LiveQuestion({ go }: { go: Go }) {
           : showGame.game_type === 'lowest-bidder' ? 'start_lowest_bidder'
             : showGame.game_type === 'deal-or-no-deal' ? 'start_deal_or_no_deal'
               : showGame.game_type === 'shared-cursor' ? 'start_shared_cursor'
+                : showGame.game_type === 'hot-potato' ? 'start_hot_potato'
           : showGame.game_type === 'big-balloon' ? 'start_big_balloon'
             : showGame.game_type === 'steal-the-treasure' ? 'start_steal_the_treasure' : 'start_beat_the_bomb'
       const { data, error } = await supabase.rpc(rpc, { p_game_show_game_id: showGame.id })
@@ -10905,6 +10914,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
     const isLowestBidder = showGame?.game_type === 'lowest-bidder'
     const isDealOrNoDeal = showGame?.game_type === 'deal-or-no-deal'
     const isSharedCursor = showGame?.game_type === 'shared-cursor'
+    const isHotPotato = showGame?.game_type === 'hot-potato'
     const isBomb = showGame?.game_type === 'beat-the-bomb'
     const isBigBalloon = showGame?.game_type === 'big-balloon'
     const isTreasure = showGame?.game_type === 'steal-the-treasure'
@@ -11032,6 +11042,8 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 <div className="mb-4 rounded-xl bg-violet-500/10 px-4 py-3 text-lg font-black text-violet-200">Round {dealRound} · {showGame?.status === 'open' ? `${eliminationSecondsRemaining}s to keep or swap` : 'Cases revealed'}</div>
                 <div className="grid gap-2 sm:grid-cols-2">{participatingTeams.map(team => { const entry=showGameDeals.find(item=>item.team_id===team.id); return <div key={team.id} style={{border:`1px solid ${showGame?.winner_team_id===team.id?C.go:C.liveLine}`,background:C.livePanel}} className="flex items-center gap-3 rounded-xl px-4 py-3 text-left"><span className="text-2xl">💼</span><span className="min-w-0 flex-1 truncate font-bold">{team.name}</span><span className="font-black">{showGame?.status==='exploded' ? `$${entry?.assigned_value ?? '—'}` : entry?.locked ? 'Locked' : entry?.decision==='swap' ? 'Trading with bank' : entry?.decision==='keep' ? 'Keeping' : 'Choosing…'}</span></div>})}</div>
               </div>
+            ) : isHotPotato && showGame ? (
+              <HotPotatoGame settings={showGame.settings} now={showGameNow} endsAt={showGame.explode_at} finished={showGame.status === 'exploded'} dark />
             ) : isSharedCursor && showGame ? (
               <div className="mt-5"><SharedCursorGame teams={participatingTeams} settings={showGame.settings} dark /></div>
             ) : isWheel ? (
@@ -11054,6 +11066,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
                 : isTreasure ? `${eliminationSecondsRemaining}s left · bank treasure before the guard catches you`
                 : isLowestBidder ? `${showGameBids.length} of ${participatingTeams.length} teams have locked a bid`
                 : isDealOrNoDeal ? `${showGameDeals.filter(item => item.decision || item.locked).length} of ${participatingTeams.length} teams have decided`
+                : isHotPotato ? 'Hold to earn · pass every potato to bank'
                 : isSharedCursor ? `${eliminationSecondsRemaining}s before the cursor is forced to settle`
                 : isWheel ? (showGame?.status === 'exploded' ? 'The wheel is slowing down…' : `Spinning across ${wheelTeams.length} teams…`)
                   : hostBombPhase.armed ? hostBombOvertime ? `Overtime · waiting for the first wire cut` : `Danger window · up to ${hostBombDangerSeconds}s left · ${showGamePresses.length} of ${participatingTeams.length} teams have cut their wire.` : `Arming… ${hostBombPhase.seconds}s`}</p>
@@ -11084,7 +11097,7 @@ async function handleReviewItem(submissionId: string, itemIndex: number, status:
           <div style={{ borderTop: `1px solid ${C.liveLine}` }} className="shrink-0 space-y-3 p-5">
             <button data-host-navigation="back" disabled style={{ border: `1px solid ${C.liveLine}`, color: C.liveText }} className="w-full cursor-not-allowed rounded-xl py-3 text-sm font-bold opacity-35">← Previous</button>
             <button data-host-navigation="forward" onClick={showingShowGameInstructions ? startPreparedShowGame : isAudienceQuestion && showGame?.status === 'open' ? resolveAudienceQuestion : handleAdvanceShowGame} disabled={actionBusy || (!showingShowGameInstructions && !isAudienceQuestion && (showGame?.status !== 'exploded' || (isWheel && !wheelSettled))) || (isAudienceQuestion && showGame?.status === 'open' && (audienceResponses.length === 0 || (audienceQuestion.mode === 'favourite' && selectedAudienceWinnerIds.length === 0)))} style={{ background: C.violet }} className="w-full rounded-2xl px-5 py-5 text-lg font-extrabold text-white disabled:opacity-35">
-              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : isAudienceQuestion ? showGame?.status === 'exploded' ? 'Continue →' : audienceQuestion.mode === 'favourite' ? selectedAudienceWinnerIds.length > 0 ? `Confirm selected winner${selectedAudienceWinnerIds.length === 1 ? '' : 's'} →` : 'Select an answer above' : 'Find closest guess →' : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isBigBalloon ? 'Balloons inflating…' : isLowestBidder ? 'Bidding in progress…' : isDealOrNoDeal ? 'Teams deciding…' : isSharedCursor ? 'Cursor in motion…' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : hostBombPhase.armed ? 'Bomb armed…' : 'Bomb arming…'}
+              {showingShowGameInstructions ? `Start ${showGame ? showGameLabel(showGame.game_type) : 'Game'} →` : isAudienceQuestion ? showGame?.status === 'exploded' ? 'Continue →' : audienceQuestion.mode === 'favourite' ? selectedAudienceWinnerIds.length > 0 ? `Confirm selected winner${selectedAudienceWinnerIds.length === 1 ? '' : 's'} →` : 'Select an answer above' : 'Find closest guess →' : showGameWinner ? 'Continue →' : isElimination ? `Round ${eliminationState.roundNumber} in progress…` : isBigBalloon ? 'Balloons inflating…' : isLowestBidder ? 'Bidding in progress…' : isDealOrNoDeal ? 'Teams deciding…' : isHotPotato ? 'Potatoes in play…' : isSharedCursor ? 'Cursor in motion…' : isWheel ? (showGame?.status === 'exploded' ? 'Wheel slowing down…' : 'Wheel spinning…') : hostBombPhase.armed ? 'Bomb armed…' : 'Bomb arming…'}
             </button>
           </div>
         </aside>

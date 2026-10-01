@@ -1478,6 +1478,9 @@ export type Database = {
       submit_deal_or_no_deal_decision: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_decision: 'keep' | 'swap' }; Returns: Database['public']['Tables']['game_show_game_deals']['Row'] }
       advance_deal_or_no_deal: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
       start_shared_cursor: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
+      start_hot_potato: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
+      advance_hot_potato: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
+      pass_hot_potato: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string; p_potato_id: string; p_recipient_id: string; p_operation_id: string }; Returns: Json }
       pull_shared_cursor: { Args: { p_game_show_game_id: string; p_request_id: string; p_request_token: string }; Returns: LiveShowGameRow }
       advance_shared_cursor: { Args: { p_game_show_game_id: string }; Returns: LiveShowGameRow }
       award_host_bonus_points: { Args: { p_team_id: string; p_points: number }; Returns: Database['public']['Tables']['teams']['Row'] }
@@ -1808,7 +1811,7 @@ type ShowGameRow = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'lowest-bidder' | 'deal-or-no-deal' | 'shared-cursor' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
+  game_type: 'hot-potato' | 'beat-the-bomb' | 'lowest-bidder' | 'deal-or-no-deal' | 'shared-cursor' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
   title: string
   settings: Json
   created_at: string
@@ -1820,7 +1823,7 @@ type ShowGameInsert = {
   item_position: number
   round_number: number
   round_title: string
-  game_type: 'beat-the-bomb' | 'lowest-bidder' | 'deal-or-no-deal' | 'shared-cursor' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
+  game_type: 'hot-potato' | 'beat-the-bomb' | 'lowest-bidder' | 'deal-or-no-deal' | 'shared-cursor' | 'spin-the-wheel' | 'heads-or-tails' | 'dodge-the-rock' | 'scissors-paper-rock' | 'big-balloon' | 'steal-the-treasure' | 'audience-question' | 'tiebreaker-style-question' | 'in-show-tiebreaker'
   title: string
   settings?: Json
   created_at?: string
