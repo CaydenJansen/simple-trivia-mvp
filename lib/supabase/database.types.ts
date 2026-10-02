@@ -534,7 +534,13 @@ export type Database = {
         Row: ShowGameRow & { quiz_id: string; updated_at: string }
         Insert: ShowGameInsert & { quiz_id: string; updated_at?: string }
         Update: Partial<ShowGameInsert> & { quiz_id?: string; updated_at?: string }
-        Relationships: []
+        Relationships: [{
+          foreignKeyName: 'quiz_show_games_quiz_id_fkey'
+          columns: ['quiz_id']
+          isOneToOne: false
+          referencedRelation: 'quizzes'
+          referencedColumns: ['id']
+        }]
       }
       quiz_tiebreakers: {
         Row: TiebreakerRow & { quiz_id: string; updated_at: string }

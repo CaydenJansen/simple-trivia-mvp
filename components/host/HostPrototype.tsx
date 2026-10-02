@@ -1478,7 +1478,10 @@ type QuizSummary = {
   question_count: number
   estimated_minutes: number
   updated_at: string
+  show_games?: { count: number }[]
 }
+
+const QUIZ_CARD_SELECT = 'id, folder_id, title, status, round_count, question_count, estimated_minutes, updated_at, show_games:quiz_show_games(count)' as const
 
 type QuizFolder = Database['public']['Tables']['quiz_folders']['Row']
 
@@ -1583,7 +1586,7 @@ function Dashboard({ go }: { go: Go }) {
       const [quizResult, folderResult, gameCountResult] = await Promise.all([
         supabase
           .from('quizzes')
-          .select('id, folder_id, title, status, round_count, question_count, estimated_minutes, updated_at')
+          .select(QUIZ_CARD_SELECT)
           .order('updated_at', { ascending: false }),
         supabase
           .from('quiz_folders')
@@ -1877,7 +1880,8 @@ function Dashboard({ go }: { go: Go }) {
       const copyTitle = nextQuizCopyTitle(quiz.title, quizzes.map(item => item.title))
       const { data, error } = await supabase.rpc('duplicate_owned_quiz', { p_quiz_id: quiz.id, p_title: copyTitle })
       if (error || !data) throw error ?? new Error('No copied quiz returned')
-      setQuizzes(current => [data as QuizSummary, ...current.filter(item => item.id !== data.id)])
+      const { data: copiedSummary } = await supabase.from('quizzes').select(QUIZ_CARD_SELECT).eq('id', data.id).maybeSingle()
+      setQuizzes(current => [(copiedSummary ?? data) as QuizSummary, ...current.filter(item => item.id !== data.id)])
       setActionNotice(quiz.folder_id && !data.folder_id
         ? `Created “${copyTitle}” in Unfiled because its folder was removed.`
         : `Created “${copyTitle}”.`)
@@ -1975,7 +1979,7 @@ function Dashboard({ go }: { go: Go }) {
 
       const { data: copiedQuiz, error: copiedQuizError } = await supabase
         .from('quizzes')
-        .select('id, folder_id, title, status, round_count, question_count, estimated_minutes, updated_at')
+        .select(QUIZ_CARD_SELECT)
         .eq('id', copiedQuizId)
         .maybeSingle()
 
@@ -2291,6 +2295,27 @@ function QuizCard({ q, go, folders, duplicating, moving, onDragStart, onDragEnd,
 }) {
   const ready = q.status === 'ready'
   const [menuOpen, setMenuOpen] = useState(false)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const menuPanelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const dismissOutside = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return
+      if (!menuButtonRef.current?.contains(event.target) && !menuPanelRef.current?.contains(event.target)) setMenuOpen(false)
+    }
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setMenuOpen(false)
+      menuButtonRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', dismissOutside, true)
+    document.addEventListener('keydown', dismissOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', dismissOutside, true)
+      document.removeEventListener('keydown', dismissOnEscape)
+    }
+  }, [menuOpen])
 
   function selectQuiz(next: Screen) {
     localStorage.setItem('simple-trivia-selected-quiz-id', q.id)
@@ -2319,18 +2344,20 @@ function QuizCard({ q, go, folders, duplicating, moving, onDragStart, onDragEnd,
         </div>
         <Chip color={ready ? 'ready' : 'draft'}>{ready ? 'Ready' : 'Draft'}</Chip>
       </div>
-      <div style={{ color: C.sub }} className="text-sm flex items-center gap-2 mb-1">
+      <div style={{ color: C.sub }} className="text-sm flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
         <span>{q.round_count} rounds</span>
         <span style={{ color: C.line }}>·</span>
         <span>{q.question_count} questions</span>
+        <span style={{ color: C.line }}>·</span>
+        <span>{q.show_games ? `${q.show_games[0]?.count ?? 0} ${(q.show_games[0]?.count ?? 0) === 1 ? 'game' : 'games'}` : 'Games unavailable'}</span>
       </div>
       <p style={{ color: C.sub }} className="text-xs mb-auto pb-4">Edited {formatEditedAt(q.updated_at)}</p>
       <div style={{ borderTop: `1px solid ${C.line}` }} className="relative flex items-center gap-2 pt-3.5 mt-2">
         <Btn v="ghost" sz="sm" onClick={() => selectQuiz('quiz-builder')} cls="flex-1 justify-center">Edit</Btn>
         <Btn sz="sm" onClick={() => selectQuiz('host-setup')} cls="flex-1 justify-center" disabled={!ready}>Host Game</Btn>
-        <button disabled={duplicating || moving} aria-label={`Quiz actions for ${q.title}`} onClick={() => setMenuOpen(open => !open)} style={{ color: C.sub }} className="p-1.5 rounded-lg hover:bg-ground transition-colors disabled:opacity-40"><I.menu /></button>
+        <button ref={menuButtonRef} disabled={duplicating || moving} aria-label={`Quiz actions for ${q.title}`} aria-expanded={menuOpen} onClick={() => setMenuOpen(open => !open)} style={{ color: C.sub }} className="p-1.5 rounded-lg hover:bg-ground transition-colors disabled:opacity-40"><I.menu /></button>
         {menuOpen && (
-          <div className="absolute bottom-10 right-0 z-20 w-52 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl" onPointerDown={event => event.stopPropagation()}>
+          <div ref={menuPanelRef} className="absolute bottom-10 right-0 z-20 w-52 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl" onPointerDown={event => event.stopPropagation()}>
             <button onClick={() => { setMenuOpen(false); onRename() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Rename Quiz</button>
             <button onClick={() => { setMenuOpen(false); onShare() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Share Quiz</button>
             <button onClick={() => { setMenuOpen(false); onDuplicate() }} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-50">{duplicating ? 'Duplicating…' : 'Duplicate Quiz'}</button>

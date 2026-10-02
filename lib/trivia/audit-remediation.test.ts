@@ -39,8 +39,10 @@ const channel = () => ({ on() { return this }, subscribe() { return this } })
 describe('remaining cross-screen audit regressions', () => {
   it('B7 keeps a claimed share recoverable when its follow-up read fails', async () => {
     const dismissIncomingShare = vi.fn(), setIncomingShareError = vi.fn()
+    const QUIZ_CARD_SELECT = readFileSync(host, 'utf8').match(/const QUIZ_CARD_SELECT = '([^']+)'/)?.[1]
+    expect(QUIZ_CARD_SELECT).toContain('quiz_show_games(count)')
     const query = { select() { return this }, eq() { return this }, maybeSingle: async () => ({ data: null, error: { message: 'offline' } }) }
-    const context = handler(host, 'claimIncomingShare', { incomingShareToken: 'token', claimingShareRef: { current: false }, setClaimingShare: vi.fn(), setIncomingShareError, dismissIncomingShare, supabase: { rpc: async () => ({ data: 'copied', error: null }), from: () => query } })
+    const context = handler(host, 'claimIncomingShare', { QUIZ_CARD_SELECT, incomingShareToken: 'token', claimingShareRef: { current: false }, setClaimingShare: vi.fn(), setIncomingShareError, dismissIncomingShare, supabase: { rpc: async () => ({ data: 'copied', error: null }), from: () => query } })
     await context.claimIncomingShare(); expect(dismissIncomingShare).not.toHaveBeenCalled()
     expect(setIncomingShareError).toHaveBeenLastCalledWith(expect.stringContaining('Your copy was saved'))
   })
