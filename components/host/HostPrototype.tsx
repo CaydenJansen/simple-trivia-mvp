@@ -27,6 +27,8 @@ import EliminationShowGame from "@/components/EliminationShowGame";
 import BigBalloon, { type BigBalloonEntry } from "@/components/BigBalloon";
 import SharedCursorGame from "@/components/SharedCursorGame";
 import HotPotatoGame from "@/components/HotPotatoGame";
+import HostSessionTools from "@/components/host/HostSessionTools";
+import FirstShowGuide from "@/components/host/FirstShowGuide";
 import { staleHotPotatoSnapshot } from "@/lib/trivia/hot-potato";
 import type { Database, Json, QuestionType } from "@/lib/supabase/database.types";
 import {
@@ -204,6 +206,7 @@ async function loadHostDefaultGameSettings() {
 }
 
 async function saveHostDefaultGameSettings(settings: Record<string, Json>) {
+  if (settings.practice_mode === true) return
   const { data: authData } = await supabase.auth.getUser()
   if (!authData.user) return
   const { error } = await supabase.from('host_preferences').upsert({
@@ -1306,6 +1309,7 @@ type RecentGameSummary = {
   created_at: string
   quiz_id: string | null
   team_count: number
+  settings?: Json
 }
 
 function formatGameDate(value: string) {
@@ -1316,6 +1320,7 @@ function formatGameDate(value: string) {
 }
 
 function RecentGamesScreen({ go }: { go: Go }) {
+  const [includePractice, setIncludePractice] = useState(false)
   const [games, setGames] = useState<RecentGameSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -1355,12 +1360,14 @@ function RecentGamesScreen({ go }: { go: Go }) {
         return
       }
 
-      const { data: gameRows, error: gameError } = await supabase
+      let historyQuery = supabase
         .from('games')
-        .select('id, code, title, status, current_screen, answer_phase, created_at, quiz_id')
+        .select('id, code, title, status, current_screen, answer_phase, created_at, quiz_id, settings')
         .in('quiz_id', quizIds)
         .order('created_at', { ascending: false })
         .limit(50)
+      if (!includePractice) historyQuery = historyQuery.not('settings', 'cs', '{"practice_mode":true}')
+      const { data: gameRows, error: gameError } = await historyQuery
 
       if (!active) return
       if (gameError) {
@@ -1392,7 +1399,7 @@ function RecentGamesScreen({ go }: { go: Go }) {
 
     void loadRecentGames()
     return () => { active = false }
-  }, [])
+  }, [includePractice])
 
   function openGame(game: RecentGameSummary) {
     localStorage.setItem('simple-trivia-host-game-id', game.id)
@@ -1408,6 +1415,7 @@ function RecentGamesScreen({ go }: { go: Go }) {
         <div className="mb-8">
           <h1 style={{ color: C.ink }} className="text-3xl font-extrabold">Recent Games</h1>
           <p style={{ color: C.sub }} className="mt-2 text-sm">Resume an active session or revisit completed results.</p>
+          <label className="mt-3 flex items-center gap-2 text-sm text-violet-700"><input type="checkbox" checked={includePractice} onChange={event => setIncludePractice(event.target.checked)} />Include practice sessions</label>
         </div>
 
         {loadError && (
@@ -1447,6 +1455,7 @@ function RecentGamesScreen({ go }: { go: Go }) {
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 style={{ color: C.ink }} className="truncate text-base font-bold">{game.title}</h2>
                       <span style={badgeStyle} className="rounded-full px-2.5 py-1 text-[11px] font-extrabold uppercase tracking-wide">{label}</span>
+                      {hostGameSettingsRecord(game.settings).practice_mode === true && <span className="rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-extrabold uppercase text-violet-700">Practice</span>}
                     </div>
                     <p style={{ color: C.sub }} className="mt-2 text-sm">
                       Code {game.code} · {game.team_count} team{game.team_count === 1 ? '' : 's'} · {formatGameDate(game.created_at)}
@@ -2006,6 +2015,14 @@ function Dashboard({ go }: { go: Go }) {
     <div style={{ background: C.ground }} className="min-h-screen">
       <Nav go={go} active="My Quizzes" />
       <main className="max-w-6xl mx-auto px-6 py-10">
+        {!loading && !loadError && <FirstShowGuide firstTime={gamesHosted === 0} hasQuiz={quizzes.some(quiz => quiz.status === 'ready')} onCreate={() => go('create-quiz')} onPractice={() => {
+          const ready = quizzes.find(quiz => quiz.status === 'ready')
+          if (!ready) return
+          localStorage.setItem('simple-trivia-selected-quiz-id', ready.id)
+          localStorage.setItem('simple-trivia-selected-quiz-title', ready.title)
+          sessionStorage.setItem('gtc-start-practice', 'true')
+          go('host-setup')
+        }} />}
         <div className="mb-8 flex flex-wrap items-center gap-3 sm:gap-4">
           {[
             { label: 'Quizzes', value: String(quizzes.length) },
@@ -8018,6 +8035,10 @@ function ReviewQuestion({ item, idx, onEdit }: {
 // ─── SCREEN 7: HOST SETUP ─────────────────────────────────────────────────────
 
 function HostSetup({ go }: { go: Go }) {
+  const [practice, setPractice] = useState(() => typeof window !== 'undefined' && sessionStorage.getItem('gtc-start-practice') === 'true')
+  const [practiceTeams, setPracticeTeams] = useState(8)
+  const practiceOperationRef = useRef<string | null>(null)
+  useEffect(() => { sessionStorage.removeItem('gtc-start-practice') }, [])
   const preferencesEditedRef = useRef(false)
   const [scoringMode, setScoringMode] = useState<ScoringMode>('classic')
   const [reveal, setReveal] = useState<'each' | 'round'>('each')
@@ -8133,7 +8154,10 @@ function HostSetup({ go }: { go: Go }) {
         other_prizes: customPrizes,
         skip_unneeded_in_show_tiebreakers: skipUnneededTiebreakers,
       }
-      const { data: game, error: gameError } = await supabase
+      const { data: game, error: gameError } = practice ? await supabase.rpc('create_practice_game', {
+        p_quiz_id: quiz.id, p_settings: gameSettings, p_team_count: practiceTeams,
+        p_operation_id: practiceOperationRef.current ?? (practiceOperationRef.current = crypto.randomUUID()),
+      }).single() : await supabase
         .rpc('create_game_from_quiz_with_show_games', {
           p_quiz_id: quiz.id,
           p_settings: gameSettings,
@@ -8142,7 +8166,7 @@ function HostSetup({ go }: { go: Go }) {
 
       if (gameError) throw gameError
       try {
-        await saveHostDefaultGameSettings(gameSettings)
+        if (!practice) await saveHostDefaultGameSettings(gameSettings)
       } catch (preferenceError) {
         console.error('Could not save host defaults:', preferenceError)
       }
@@ -8174,6 +8198,11 @@ function HostSetup({ go }: { go: Go }) {
           <I.back /> My Quizzes
         </button>
         <h1 style={{ color: C.ink }} className="text-3xl font-extrabold mb-1">Host a Game</h1>
+        <div className="my-5 rounded-2xl border border-violet-200 bg-white p-5">
+          <p className="mb-3 font-bold text-zinc-900">Live show or practice?</p>
+          <div className="grid grid-cols-2 gap-2">{[false, true].map(value => <button key={String(value)} type="button" aria-pressed={practice === value} disabled={openingLobby} onClick={() => setPractice(value)} className={`rounded-xl border px-4 py-3 text-sm font-bold ${practice === value ? 'border-violet-500 bg-violet-50 text-violet-700' : 'border-zinc-200 text-zinc-600'}`}>{value ? 'Practice with teams' : 'Live show'}</button>)}</div>
+          {practice ? <><p className="mt-3 text-sm text-zinc-600">Rehearse this quiz in the real interface. Simulated teams play automatically while this host tab stays open. Your saved quiz, real-game stats and permanent venue QR stay unchanged.</p><label className="mt-3 block text-sm font-bold text-zinc-900">Simulated teams<select value={practiceTeams} disabled={openingLobby} onChange={event => setPracticeTeams(Number(event.target.value))} className="ml-3 rounded-lg border border-violet-200 bg-white px-3 py-2">{[2, 4, 5, 8, 12].map(count => <option key={count} value={count}>{count}</option>)}</select></label><p className="mt-2 text-xs text-zinc-500">You can also join as a real player to try the controls. Practice settings won’t overwrite your hosting defaults.</p></> : <p className="mt-3 text-sm text-zinc-600">Invite real teams using the lobby QR code. Check your settings below before opening the lobby.</p>}
+        </div>
         <div style={{ color: C.sub }} className="flex items-center gap-2 mb-8 text-sm">
           <span style={{ color: C.ink }} className="font-bold">{loadingQuiz ? 'Loading quiz…' : quiz?.title ?? 'No quiz selected'}</span>
           {quiz && <>
@@ -8442,10 +8471,10 @@ function HostSetup({ go }: { go: Go }) {
           </SCard>
 
           <p style={{ color: C.sub }} className="text-center text-xs leading-5">
-            These settings will be remembered for your next game.
+            {practice ? 'Practice uses these settings without changing your live-show defaults.' : 'These settings will be remembered for your next game.'}
           </p>
           <Btn sz="lg" cls="w-full" onClick={handleOpenLobby} disabled={!quiz || openingLobby}>
-            {openingLobby ? 'Creating Game…' : 'Open Fresh Lobby →'}
+            {openingLobby ? 'Creating Game…' : practice ? 'Open Practice Lobby →' : 'Open Fresh Lobby →'}
           </Btn>
         </div>
       </main>
@@ -8669,7 +8698,7 @@ function Lobby({ go }: { go: Go }) {
   return (
     <div style={{ background: C.liveBg, color: C.liveText }} className="min-h-screen">
       <header style={{ background: C.liveSurface, borderBottom: `1px solid ${C.liveLine}` }}
-        className="h-14 flex items-center px-6 gap-4">
+        className="flex min-h-14 flex-wrap items-center gap-3 px-4 py-3 sm:gap-4 sm:px-6">
         <div className="flex items-center gap-2.5">
           <BrandWordmark dark compact className="text-sm" />
         </div>
@@ -8683,17 +8712,17 @@ function Lobby({ go }: { go: Go }) {
         <CancelGameButton go={go} />
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-10">
+      <main className="max-w-5xl mx-auto px-6 pt-10 pb-24">
         <div className="text-center mb-10">
           <h1 style={{ color: C.liveText }} className="text-3xl font-extrabold mb-1">{lobbyTitle}</h1>
           <p style={{ color: C.liveDim }} className="text-sm">Share the code or QR so teams can join on their phones.</p>
         </div>
 
-        <div className="grid grid-cols-2 gap-8 items-start">
+        <div className="grid grid-cols-1 gap-8 items-start md:grid-cols-2">
           {/* Code + QR */}
-          <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="rounded-2xl p-8 flex flex-col items-center text-center">
+          <div style={{ background: C.liveSurface, border: `1px solid ${C.liveLine}` }} className="min-w-0 rounded-2xl p-5 sm:p-8 flex flex-col items-center text-center">
             <p style={{ color: C.liveDim }} className="text-[11px] font-bold uppercase tracking-widest mb-4">Game Code</p>
-            <div style={{ color: C.liveText, letterSpacing: '0.2em' }} className="text-6xl font-extrabold mb-7 tabular-nums">
+            <div style={{ color: C.liveText, letterSpacing: '0.2em' }} className="text-4xl sm:text-6xl font-extrabold mb-7 tabular-nums">
               {lobbyCode}
             </div>
             <div style={{ background: '#FFFFFF', border: `1px solid ${C.liveLine}` }}
@@ -13399,6 +13428,12 @@ export default function App({
   return (
     <div>
       {screens[screen]}
+      {['lobby', 'live-question', 'end-of-round', 'final-results'].includes(screen) && localStorage.getItem('simple-trivia-host-game-id') && <HostSessionTools key={localStorage.getItem('simple-trivia-host-game-id')} gameId={localStorage.getItem('simple-trivia-host-game-id')!} onExit={() => {
+        localStorage.removeItem('simple-trivia-host-game-id')
+        localStorage.removeItem('simple-trivia-host-game-code')
+        localStorage.removeItem('simple-trivia-host-game-title')
+        setScreen('dashboard')
+      }} />}
       {showDevNavigator && <ScreenNav current={screen} go={setScreen} />}
       {connectionLost && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#18171F]/80 px-6 text-center backdrop-blur-sm">

@@ -36,6 +36,18 @@ export type QuestionType =
 export type Database = {
   public: {
     Tables: {
+      practice_sessions: {
+        Row: { game_id: string; owner_id: string; operation_id: string; paused: boolean; last_tick_at: string | null }
+        Insert: { game_id: string; owner_id: string; operation_id: string; paused?: boolean; last_tick_at?: string | null }
+        Update: { paused?: boolean; last_tick_at?: string | null }
+        Relationships: []
+      }
+      practice_bots: {
+        Row: { team_id: string; game_id: string; request_id: string; request_token: string; next_action_at: string }
+        Insert: { team_id: string; game_id: string; request_id: string; request_token: string; next_action_at?: string }
+        Update: { next_action_at?: string }
+        Relationships: []
+      }
       categories: ControlledCategoryTable
       prompt_patterns: ControlledLookupTable
       answer_types: ControlledLookupTable
@@ -1118,6 +1130,10 @@ export type Database = {
       }
     }
     Functions: {
+      create_practice_game: { Args: { p_quiz_id: string; p_settings: Json; p_team_count: number; p_operation_id: string }; Returns: { game_id: string; game_code: string; game_title: string }[] }
+      tick_practice_game: { Args: { p_game_id: string }; Returns: Json }
+      control_practice_game: { Args: { p_game_id: string; p_action: string }; Returns: undefined }
+      get_host_session_health: { Args: { p_game_id: string }; Returns: Json }
       get_server_epoch_ms: { Args: Record<PropertyKey, never>; Returns: number }
       submit_owned_player_answer: {
         Args: { p_game_id: string; p_team_id: string; p_question_key: string; p_answer_text: string; p_request_id: string; p_request_token: string; p_bonus?: boolean }
