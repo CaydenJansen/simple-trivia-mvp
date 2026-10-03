@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Json } from '@/lib/supabase/database.types'
-import { hotPotatoHeat, hotPotatoPending, hotPotatoState } from '@/lib/trivia/hot-potato'
+import { hotPotatoHeat, hotPotatoPending, hotPotatoPoints, hotPotatoState } from '@/lib/trivia/hot-potato'
+import { serverNow } from '@/lib/trivia/use-server-clock'
 
 type Props = {
   settings: Json; now: number; endsAt: string | null; finished: boolean
@@ -10,7 +11,21 @@ type Props = {
   onPass?: (potatoId: string, recipientId: string, operationId: string) => Promise<string>
 }
 
-export default function HotPotatoGame({ settings, now, endsAt, finished, ownTeamId, dark = false, onPass }: Props) {
+export default function HotPotatoGame({ settings, now: snapshotNow, endsAt, finished, ownTeamId, dark = false, onPass }: Props) {
+  // Animate independently of the parent's slower game clock. Scores retain
+  // single-point precision rather than ticking in batches of 5 or 10.
+  const [animationNow, setAnimationNow] = useState(snapshotNow)
+  useEffect(() => {
+    if (finished) return
+    let frame: number
+    const tick = () => {
+      setAnimationNow(serverNow())
+      frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [finished])
+  const now = finished ? snapshotNow : animationNow
   const state = hotPotatoState(settings)
   const own = state.teams.find(team => team.id === ownTeamId)
   const held = state.potatoes.filter(potato => potato.holder_id === ownTeamId)
@@ -44,14 +59,14 @@ export default function HotPotatoGame({ settings, now, endsAt, finished, ownTeam
     <div className="flex items-center justify-between gap-3 text-sm font-black"><span>{finished ? 'Final Hot Potato scores' : 'Hot Potato scores · not quiz points'}</span><span role="timer" className={seconds <= 10 ? 'text-red-500' : 'text-violet-500'}>{finished ? 'Finished' : `${seconds}s`}</span></div>
     {own && <>
       <div className="mt-3 grid grid-cols-2 gap-2 text-center">
-        <div className={`rounded-xl border p-3 ${panel}`}><p className={`text-xs font-bold ${muted}`}>Banked · safe</p><p className="text-2xl font-black tabular-nums text-emerald-500">{own.banked.toFixed(1)}</p></div>
-        <div className={`rounded-xl border p-3 ${panel}`}><p className={`text-xs font-bold ${muted}`}>Pending · at risk</p><p className="text-2xl font-black tabular-nums text-amber-500">{pending.toFixed(1)}</p></div>
+        <div className={`rounded-xl border p-3 ${panel}`}><p className={`text-xs font-bold ${muted}`}>Banked · safe</p><p className="text-2xl font-black tabular-nums text-emerald-500">{hotPotatoPoints(own.banked)}</p></div>
+        <div className={`rounded-xl border p-3 ${panel}`}><p className={`text-xs font-bold ${muted}`}>Pending · at risk</p><p className="text-2xl font-black tabular-nums text-amber-500">{hotPotatoPoints(pending)}</p></div>
       </div>
       {!closed && <div className="mt-3">
         <div className="flex flex-wrap gap-2">{held.map(item => <button key={item.id} type="button" onClick={() => setSelected(item.id)} aria-label={`Select potato ${held.indexOf(item) + 1}`} aria-pressed={potato?.id === item.id} className={`rounded-xl border-2 px-4 py-2 ${potato?.id === item.id ? 'border-violet-500 bg-violet-500/15' : 'border-transparent'}`}>
           <span className="inline-block text-3xl motion-reduce:!animate-none" style={{ animation: `potato-wobble ${0.65 - hotPotatoHeat(item.born_at, now) * 0.52}s infinite alternate` }}>🥔</span>
         </button>)}</div>
-        <p className={`mt-1 text-sm font-semibold ${muted}`}>{held.length ? `${held.length} potato${held.length === 1 ? '' : 'es'} · +${held.length} point${held.length === 1 ? '' : 's'}/second. Pass them all to bank.` : 'No potatoes right now. Watch who’s holding them!'}</p>
+        <p className={`mt-1 text-sm font-semibold ${muted}`}>{held.length ? `${held.length} potato${held.length === 1 ? '' : 'es'} · +${hotPotatoPoints(held.length)} points/second. Pass them all to bank.` : 'No potatoes right now. Watch who’s holding them!'}</p>
         {own.bursts > 0 && <p className="mt-1 text-xs font-bold text-orange-500">💥 {own.bursts} explosion{own.bursts === 1 ? '' : 's'} · pending points were lost, banked points are safe.</p>}
       </div>}
     </>}
@@ -63,7 +78,7 @@ export default function HotPotatoGame({ settings, now, endsAt, finished, ownTeam
       {[...state.teams].sort((a, b) => Number(a.id === ownTeamId) - Number(b.id === ownTeamId)).filter(team => team.name.toLowerCase().includes(search.toLowerCase())).map(team => {
         const count = state.potatoes.filter(item => item.holder_id === team.id).length
         return <div key={team.id} className={`flex items-center gap-2 rounded-xl border p-3 ${panel}`}>
-          <div className="min-w-0 flex-1"><p className="break-words text-sm font-black">{team.name}{team.id === ownTeamId ? ' (you)' : ''}</p><p className={`text-xs tabular-nums ${muted}`}>{team.banked.toFixed(1)} banked · {hotPotatoPending(team, state, now, deadline, finished).toFixed(1)} pending</p></div>
+          <div className="min-w-0 flex-1"><p className="break-words text-sm font-black">{team.name}{team.id === ownTeamId ? ' (you)' : ''}</p><p className={`text-xs tabular-nums ${muted}`}>{hotPotatoPoints(team.banked)} banked · {hotPotatoPoints(hotPotatoPending(team, state, now, deadline, finished))} pending</p></div>
           <span className="shrink-0 text-sm" aria-label={`${team.name} holds ${count} potatoes`}>{count ? `🥔 ×${count}` : '—'}</span>
           {onPass && own && team.id !== ownTeamId && held.length > 0 && !closed && <button type="button" aria-label={`Pass to ${team.name}`} disabled={busy || !fresh || now - Date.parse(potato.received_at) < 600} onClick={() => void pass(team.id)} className="shrink-0 rounded-xl bg-violet-600 px-3 py-3 text-sm font-black text-white disabled:opacity-40">{busy ? '…' : 'Pass'}</button>}
         </div>

@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { hotPotatoHeat, hotPotatoPending, hotPotatoState, staleHotPotatoSnapshot } from './hot-potato'
+import { hotPotatoHeat, hotPotatoPending, hotPotatoPoints, hotPotatoState, staleHotPotatoSnapshot } from './hot-potato'
 import { TEAM_DECISION_SHOW_GAME_TYPES, TEMPLATE_EDITOR_SHOW_GAME_TYPES, showGameInstructions, showGameLabel, showGameTeamRecommendation } from './elimination-show-games'
 
 describe('Hot Potato display state', () => {
+  it('displays whole-number hundreds without changing stored scores or rewards', () => {
+    expect(hotPotatoPoints(0)).toBe(0)
+    expect(hotPotatoPoints(1)).toBe(100)
+    expect(hotPotatoPoints(3.6)).toBe(360)
+    expect(hotPotatoPoints(3.61)).toBe(361)
+    expect(hotPotatoPoints(3.62)).toBe(362)
+    expect(hotPotatoPoints(8.1234)).toBe(812)
+    expect(hotPotatoPoints(19.9)).toBe(1990)
+    expect(hotPotatoPoints(-1)).toBe(0)
+    expect(hotPotatoPoints(Number.NaN)).toBe(0)
+  })
   const settings = { hot_potato: { sampled_at: '2026-10-01T00:00:00Z', teams: [{ id: 'a', name: 'A', banked: 2, pending: 4, bursts: 1 }], potatoes: [1, 2].map(id => ({ id: String(id), holder_id: 'a', born_at: '2026-10-01T00:00:00Z', received_at: '2026-10-01T00:00:00Z' })) } }
   it('is available in game and template selectors with clear banking rules', () => {
     expect(TEAM_DECISION_SHOW_GAME_TYPES).toContain('hot-potato')

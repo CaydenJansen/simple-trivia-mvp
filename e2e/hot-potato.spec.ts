@@ -56,17 +56,19 @@ test('holding several potatoes only banks after the final pass and survives refr
   await page.goto('/play')
   await expect(page.getByRole('button', { name: 'Pass to Team B' })).toBeInViewport({ ratio: 1 })
   await expect(page.getByRole('button', { name: 'CUT THE WIRE' })).toHaveCount(0)
-  await expect(page.getByText('2 potatoes · +2 points/second. Pass them all to bank.')).toBeVisible()
+  await expect(page.getByText('2 potatoes · +200 points/second. Pass them all to bank.')).toBeVisible()
   await page.screenshot({ path: info.outputPath('hot-potato-mobile.png'), fullPage: true })
   await page.getByRole('button', { name: 'Pass to Team B' }).click()
   expect(mock.game.settings.hot_potato.teams[0].banked).toBe(0)
-  await expect(page.getByText('1 potato · +1 point/second. Pass them all to bank.')).toBeVisible()
+  await expect(page.getByText('1 potato · +100 points/second. Pass them all to bank.')).toBeVisible()
   await page.getByRole('button', { name: 'Pass to Team C' }).click()
   await expect(page.getByText('No potatoes right now. Watch who’s holding them!')).toBeVisible()
   expect(mock.game.settings.hot_potato.teams[0].banked).toBe(8)
+  await expect(page.getByText('800 banked · 0 pending')).toBeVisible()
   expect(mock.passes[0]).toMatchObject({ p_request_id: 'request-a', p_request_token: 'token-a', p_potato_id: 'p1', p_recipient_id: 'b' })
   await page.reload()
   await expect(page.getByText('No potatoes right now. Watch who’s holding them!')).toBeVisible()
+  await expect(page.getByText('800 banked · 0 pending')).toBeVisible()
 })
 
 test('failed pass retries use the same operation id and controls recover', async ({ page }) => {
@@ -78,6 +80,25 @@ test('failed pass retries use the same operation id and controls recover', async
   await expect(page.getByText(/Passed! Your points bank/)).toBeVisible()
   expect(mock.passes).toHaveLength(2)
   expect(mock.passes[0].p_operation_id).toBe(mock.passes[1].p_operation_id)
+})
+
+test('points animate with individual digits and banked scores retain that precision', async ({ page }) => {
+  const mock = await fixture(page)
+  mock.game.settings.hot_potato.teams[0].banked = 3.61
+  await page.goto('/play')
+  await expect(page.getByText('Banked · safe').locator('..').getByText('361', { exact: true })).toBeVisible()
+  const counter = page.getByText('Pending · at risk').locator('..').locator('p').last()
+  const values = await counter.evaluate(element => new Promise<string[]>(resolve => {
+    const samples: string[] = []
+    const observer = new MutationObserver(() => samples.push(element.textContent ?? ''))
+    observer.observe(element, { childList: true, characterData: true, subtree: true })
+    setTimeout(() => { observer.disconnect(); resolve(samples) }, 700)
+  }))
+  expect(values.length).toBeGreaterThan(10)
+  expect(values.every(value => /^\d+$/.test(value))).toBe(true)
+  expect(values.some(value => Number(value) % 10 !== 0)).toBe(true)
+  mock.game.status = 'exploded'; mock.game.winner_team_id = 'a'; mock.game.settings.hot_potato.potatoes = []
+  await expect(page.getByText('361 banked · 0 pending')).toBeVisible()
 })
 
 test('potatoes, explosions and final scores update without player taps', async ({ page }) => {

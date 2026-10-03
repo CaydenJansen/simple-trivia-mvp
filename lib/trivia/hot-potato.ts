@@ -6,6 +6,13 @@ export type PotatoState = { teams: PotatoTeam[]; potatoes: Potato[]; sampledAt: 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const nonnegative = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0
 
+// Keep the authoritative time-based units unchanged (including saved rounds and
+// tie resolution). Only Hot Potato's displayed scores use the 100-point scale;
+// the configured quiz-point reward is deliberately separate.
+export function hotPotatoPoints(score: number) {
+  return Math.round(nonnegative(score) * 100)
+}
+
 export function hotPotatoState(settings: Json | undefined): PotatoState {
   const state = record(record(settings).hot_potato)
   return {
